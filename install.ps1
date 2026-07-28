@@ -31,10 +31,33 @@
 
 $ErrorActionPreference = 'Stop'
 
-$GstRoot = "$env:LOCALAPPDATA\Programs\gstreamer\1.0\msvc_x86_64"
-
 function Test-Command($Name) {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+# Where GStreamer landed is not a constant: winget installs per-user by
+# default, but a machine-scope or elevated install goes somewhere else
+# entirely. The installer records its own prefix in
+# GSTREAMER_1_0_ROOT_MSVC_X86_64, so that is asked first and the known
+# defaults are only a fallback. Read from the registry rather than the
+# current process, because a variable set by an install in this same run
+# won't be in this process's environment yet.
+function Resolve-GstRoot {
+    $candidates = @(
+        [Environment]::GetEnvironmentVariable('GSTREAMER_1_0_ROOT_MSVC_X86_64', 'User')
+        [Environment]::GetEnvironmentVariable('GSTREAMER_1_0_ROOT_MSVC_X86_64', 'Machine')
+        $env:GSTREAMER_1_0_ROOT_MSVC_X86_64
+        "$env:LOCALAPPDATA\Programs\gstreamer\1.0\msvc_x86_64"
+        'C:\gstreamer\1.0\msvc_x86_64'
+    )
+    foreach ($candidate in $candidates) {
+        if (-not $candidate) { continue }
+        # The environment variable carries a trailing backslash; leaving it
+        # in would produce a doubled separator in PKG_CONFIG_PATH.
+        $root = $candidate.TrimEnd('\')
+        if (Test-Path "$root\lib\pkgconfig\gtk4.pc") { return $root }
+    }
+    return $null
 }
 
 # Pull PATH back out of the registry so tools installed by winget earlier
@@ -94,10 +117,15 @@ if ($hasMsvc) {
 }
 
 # --- GStreamer (also supplies GTK 4) ----------------------------------
-if (Test-Path "$GstRoot\lib\pkgconfig\gtk4.pc") {
-    Write-Host 'GStreamer already installed, skipping.' -ForegroundColor DarkGray
+$GstRoot = Resolve-GstRoot
+if ($GstRoot) {
+    Write-Host "GStreamer already installed at $GstRoot, skipping." -ForegroundColor DarkGray
 } else {
     Install-WingetPackage 'gstreamerproject.gstreamer' 'GStreamer (MSVC)'
+    $GstRoot = Resolve-GstRoot
+    if (-not $GstRoot) {
+        throw 'GStreamer was installed but could not be located afterwards. Set GSTREAMER_1_0_ROOT_MSVC_X86_64 to its install directory and re-run.'
+    }
 }
 
 foreach ($pc in 'gstreamer-1.0', 'gtk4', 'glib-2.0') {
