@@ -1,8 +1,8 @@
 //! A short navigation click, synthesized rather than shipped as an asset
 //! so there's no binary file to package or license.
 
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 
 const SAMPLE_RATE: u32 = 48_000;
 const DURATION_MS: u32 = 45;
@@ -73,13 +73,22 @@ pub struct Sounds {
 impl Sounds {
     pub fn new(enabled: bool, device: Option<String>) -> Self {
         if !enabled {
-            return Self { pipeline: None, _watch: None };
+            return Self {
+                pipeline: None,
+                _watch: None,
+            };
         }
         match Self::build(device) {
-            Ok((pipeline, watch)) => Self { pipeline: Some(pipeline), _watch: Some(watch) },
+            Ok((pipeline, watch)) => Self {
+                pipeline: Some(pipeline),
+                _watch: Some(watch),
+            },
             Err(e) => {
                 eprintln!("Navigation sounds unavailable: {e}");
-                Self { pipeline: None, _watch: None }
+                Self {
+                    pipeline: None,
+                    _watch: None,
+                }
             }
         }
     }
@@ -131,10 +140,8 @@ impl Sounds {
                     gst::MessageView::Eos(_) => {
                         if let Some(pipeline) = weak.upgrade() {
                             let _ = pipeline.set_state(gst::State::Paused);
-                            let _ = pipeline.seek_simple(
-                                gst::SeekFlags::FLUSH,
-                                gst::ClockTime::ZERO,
-                            );
+                            let _ =
+                                pipeline.seek_simple(gst::SeekFlags::FLUSH, gst::ClockTime::ZERO);
                         }
                     }
                     MessageView::Error(err) => {
@@ -146,7 +153,9 @@ impl Sounds {
             })
             .map_err(|e| e.to_string())?;
 
-        pipeline.set_state(gst::State::Paused).map_err(|e| e.to_string())?;
+        pipeline
+            .set_state(gst::State::Paused)
+            .map_err(|e| e.to_string())?;
         Ok((pipeline, watch))
     }
 

@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 
 use crate::config::Config;
 use crate::devices::find_audio_output_device;
@@ -103,7 +103,11 @@ pub fn build_pipeline(
 /// name from config) and links it onto `<prefix>_resample`, which must
 /// already exist in `pipeline` (i.e. the caller only calls this when that
 /// branch was actually included in the pipeline description).
-fn attach_sink(pipeline: &gst::Pipeline, prefix: &str, sink_name: Option<&str>) -> Result<(), String> {
+fn attach_sink(
+    pipeline: &gst::Pipeline,
+    prefix: &str,
+    sink_name: Option<&str>,
+) -> Result<(), String> {
     let sink_name = sink_name.ok_or_else(|| format!("{prefix}_sink not set in config"))?;
     let device = find_audio_output_device(sink_name)?;
     let sink = device

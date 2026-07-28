@@ -78,10 +78,7 @@ impl Config {
         // Only primary_sink is required — secondary_sink is optional (a
         // single-output setup is valid), so it's not validated here.
         if config.primary_sink.as_deref().unwrap_or("").is_empty() {
-            return Err(format!(
-                "Missing 'primary_sink' in {}.",
-                path.display()
-            ));
+            return Err(format!("Missing 'primary_sink' in {}.", path.display()));
         }
 
         Ok(config)
@@ -90,7 +87,8 @@ impl Config {
     pub fn save(&self) -> Result<(), String> {
         let path = config_path();
         let text = serde_yaml::to_string(self).map_err(|e| e.to_string())?;
-        std::fs::write(&path, text).map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+        std::fs::write(&path, text)
+            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
         Ok(())
     }
 
@@ -144,7 +142,10 @@ pub fn save_position(path: &Path, position_ns: u64) {
 
 pub fn clear_position(path: &Path) {
     let mut positions = load_positions();
-    if positions.remove(&path.to_string_lossy().to_string()).is_some() {
+    if positions
+        .remove(&path.to_string_lossy().to_string())
+        .is_some()
+    {
         save_positions(&positions);
     }
 }

@@ -101,18 +101,18 @@ pub fn apply_display_env(display: &HashMap<String, String>) {
         unsafe { std::env::set_var("GTK_A11Y", "none") };
     }
 
-    if let Some(v) = display.get("xdg_runtime_dir") {
-        if std::env::var("XDG_RUNTIME_DIR").is_err() {
-            unsafe { std::env::set_var("XDG_RUNTIME_DIR", v) };
-        }
+    if let Some(v) = display.get("xdg_runtime_dir")
+        && std::env::var("XDG_RUNTIME_DIR").is_err()
+    {
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", v) };
     }
     if let Some(v) = display.get("wayland_display") {
         if std::env::var("WAYLAND_DISPLAY").is_err() {
             unsafe { std::env::set_var("WAYLAND_DISPLAY", v) };
         }
-    } else if let Some(v) = display.get("display") {
-        if std::env::var("DISPLAY").is_err() {
-            unsafe { std::env::set_var("DISPLAY", v) };
-        }
+    } else if let Some(v) = display.get("display")
+        && std::env::var("DISPLAY").is_err()
+    {
+        unsafe { std::env::set_var("DISPLAY", v) };
     }
 }

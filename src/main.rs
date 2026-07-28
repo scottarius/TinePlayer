@@ -177,11 +177,11 @@ fn main() -> std::process::ExitCode {
         };
     }
 
-    if let Some(file) = args.file.as_deref() {
-        if !file.exists() {
-            eprintln!("File not found: {}", file.display());
-            return std::process::ExitCode::FAILURE;
-        }
+    if let Some(file) = args.file.as_deref()
+        && !file.exists()
+    {
+        eprintln!("File not found: {}", file.display());
+        return std::process::ExitCode::FAILURE;
     }
 
     // Loading is allowed to fail: an unconfigured install just opens the
@@ -195,7 +195,7 @@ fn main() -> std::process::ExitCode {
     display::apply_display_env(&display::resolve_display(&config));
 
     let preset_tracks = (args.primary.is_some() || args.secondary.is_some())
-        .then(|| (args.primary, args.secondary));
+        .then_some((args.primary, args.secondary));
 
     let gtk_app = gtk::Application::builder()
         .application_id("dev.tineplayer.TinePlayer")

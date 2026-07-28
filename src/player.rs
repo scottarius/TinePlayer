@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 use gtk::{gdk, glib};
 
-use crate::config::{clear_position, load_positions, save_position, Config};
+use crate::config::{Config, clear_position, load_positions, save_position};
 use crate::pipeline::build_pipeline;
 
 /// Applied to the video widget so the letterbox area around the picture
@@ -112,15 +112,17 @@ impl Playback {
             .map_err(|e| format!("Failed to preroll: {e}"))?;
         let _ = pipeline.state(gst::ClockTime::from_seconds(10));
 
-        if !restart {
-            if let Some(ns) = load_positions().get(&path.to_string_lossy().to_string()).copied() {
-                pipeline
-                    .seek_simple(
-                        gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-                        gst::ClockTime::from_nseconds(ns),
-                    )
-                    .map_err(|e| e.to_string())?;
-            }
+        if !restart
+            && let Some(ns) = load_positions()
+                .get(&path.to_string_lossy().to_string())
+                .copied()
+        {
+            pipeline
+                .seek_simple(
+                    gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                    gst::ClockTime::from_nseconds(ns),
+                )
+                .map_err(|e| e.to_string())?;
         }
 
         pipeline
@@ -160,10 +162,10 @@ impl Playback {
 
         if self.reached_eos.get() {
             clear_position(&self.path);
-        } else if let Some(position) = self.pipeline.query_position::<gst::ClockTime>() {
-            if position.nseconds() > 0 {
-                save_position(&self.path, position.nseconds());
-            }
+        } else if let Some(position) = self.pipeline.query_position::<gst::ClockTime>()
+            && position.nseconds() > 0
+        {
+            save_position(&self.path, position.nseconds());
         }
 
         let _ = self.pipeline.set_state(gst::State::Null);

@@ -9,8 +9,8 @@ use gtk::{gdk, glib};
 use crate::config::Config;
 use crate::devices::list_audio_output_devices;
 use crate::player::Playback;
+use crate::probe::{AudioTrack, probe_audio_tracks};
 use crate::sound::Sounds;
-use crate::probe::{probe_audio_tracks, AudioTrack};
 
 /// Which setting a chooser screen is editing. The menu drills into one of
 /// these and returns once a choice is made.
@@ -219,17 +219,27 @@ impl App {
             ),
             (
                 "Primary Audio Device".to_string(),
-                config.primary_sink.clone().unwrap_or_else(|| "Not set".to_string()),
+                config
+                    .primary_sink
+                    .clone()
+                    .unwrap_or_else(|| "Not set".to_string()),
                 true,
             ),
             (
                 "Primary Audio Track".to_string(),
-                if has_file { describe_track(&self.primary_track.borrow()) } else { "—".to_string() },
+                if has_file {
+                    describe_track(&self.primary_track.borrow())
+                } else {
+                    "—".to_string()
+                },
                 has_file,
             ),
             (
                 "Secondary Audio Device".to_string(),
-                config.secondary_sink.clone().unwrap_or_else(|| "None".to_string()),
+                config
+                    .secondary_sink
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string()),
                 true,
             ),
             (
@@ -395,11 +405,11 @@ impl App {
                 let current = list.selected_row().map(|r| r.index());
 
                 if key == gdk::Key::Down && current == Some(last) {
-                    if let Some(button) = footer.as_ref().and_then(|b| b.upgrade()) {
-                        if button.is_sensitive() {
-                            app.sounds.borrow().click();
-                            button.grab_focus();
-                        }
+                    if let Some(button) = footer.as_ref().and_then(|b| b.upgrade())
+                        && button.is_sensitive()
+                    {
+                        app.sounds.borrow().click();
+                        button.grab_focus();
                     }
                     return glib::Propagation::Stop;
                 }
@@ -435,12 +445,16 @@ impl App {
         }
     }
 
-
     fn apply_choice(self: &Rc<Self>, setting: Setting, choice: Option<usize>) {
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
                 let names: Vec<String> = list_audio_output_devices()
-                    .map(|devices| devices.iter().map(|d| d.display_name().to_string()).collect())
+                    .map(|devices| {
+                        devices
+                            .iter()
+                            .map(|d| d.display_name().to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let picked = choice.and_then(|index| names.get(index).cloned());
 
@@ -524,10 +538,10 @@ impl App {
         // dropped FileChooserNative closes before the user can answer.
         let held = RefCell::new(Some(chooser.clone()));
         chooser.connect_response(move |chooser, response| {
-            if response == gtk::ResponseType::Accept {
-                if let Some(path) = chooser.file().and_then(|f| f.path()) {
-                    app.set_file(&path);
-                }
+            if response == gtk::ResponseType::Accept
+                && let Some(path) = chooser.file().and_then(|f| f.path())
+            {
+                app.set_file(&path);
             }
             held.borrow_mut().take();
             app.show_menu();
@@ -583,7 +597,10 @@ impl App {
             Ok(playback) => {
                 self.window.set_child(Some(playback.widget()));
                 self.window.set_title(Some(
-                    &path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                    &path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
                 ));
                 *self.playback.borrow_mut() = Some(playback);
                 *self.screen.borrow_mut() = Screen::Playing;

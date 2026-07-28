@@ -41,7 +41,10 @@ pub fn probe_audio_tracks(path: &Path) -> Result<Vec<AudioTrack>, String> {
             index: index as u32,
             codec,
             channels: stream.channels(),
-            language: stream.language().map(|l| l.to_string()).unwrap_or_else(|| "und".to_string()),
+            language: stream
+                .language()
+                .map(|l| l.to_string())
+                .unwrap_or_else(|| "und".to_string()),
             title,
         });
     }

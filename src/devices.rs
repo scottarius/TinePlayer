@@ -1,5 +1,5 @@
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 
 /// List available audio *output* devices (cross-platform: PipeWire/Pulse
 /// sinks on Linux, WASAPI endpoints on Windows) via GStreamer's own
@@ -12,7 +12,9 @@ pub fn list_audio_output_devices() -> Result<Vec<gst::Device>, String> {
         .add_filter(Some("Audio/Sink"), Some(&caps))
         .ok_or("Failed to add device monitor filter")?;
 
-    monitor.start().map_err(|e| format!("Failed to start device monitor: {e}"))?;
+    monitor
+        .start()
+        .map_err(|e| format!("Failed to start device monitor: {e}"))?;
     let devices = monitor.devices();
     monitor.stop();
 
