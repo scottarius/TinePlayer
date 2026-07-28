@@ -48,6 +48,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.4", features = ["derive"] }
+gilrs = "0.11"
 glib = "0.20"
 gstreamer = "0.23"
 gstreamer-pbutils = "0.23"

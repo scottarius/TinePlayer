@@ -10,6 +10,7 @@ mod appearance;
 mod config;
 mod devices;
 mod display;
+mod gamepad;
 mod pipeline;
 mod player;
 mod probe;

@@ -54,6 +54,13 @@ pub struct App {
     menu_row: RefCell<i32>,
     sounds: RefCell<Sounds>,
     restart: bool,
+    /// The list the current screen is built around, and the button below it.
+    ///
+    /// The keyboard reaches these through GTK's own focus handling, but the
+    /// gamepad has no events to hand to GTK, so it needs to move the
+    /// selection itself and therefore needs to know what it is moving.
+    nav_list: RefCell<Option<gtk::ListBox>>,
+    nav_footer: RefCell<Option<gtk::Button>>,
 }
 
 impl App {
@@ -125,7 +132,20 @@ impl App {
             menu_row: RefCell::new(0),
             sounds: RefCell::new(sounds),
             restart,
+            nav_list: RefCell::new(None),
+            nav_footer: RefCell::new(None),
         });
+
+        // Weak, so the polling closure doesn't keep the application alive
+        // after its window has gone.
+        {
+            let weak = Rc::downgrade(&app);
+            crate::gamepad::install(move |action| {
+                if let Some(app) = weak.upgrade() {
+                    app.handle_action(action);
+                }
+            });
+        }
 
         // Playback has to be torn down before the window goes away, so the
         // resume position is written and the audio devices are released.
@@ -188,34 +208,145 @@ impl App {
                 // Always goes back one level, so it never quits by surprise
                 // from somewhere the user was only browsing.
                 gdk::Key::Escape => {
-                    // Copied out first: the handlers below take the same
-                    // cell mutably, and holding the read borrow across them
-                    // panics.
-                    let screen = *app.screen.borrow();
-                    match screen {
-                        Screen::Playing => {
-                            app.stop_playback();
-                            app.show_menu();
-                        }
-                        Screen::Chooser | Screen::Error | Screen::ConfirmQuit => app.show_menu(),
-                        Screen::Menu => app.show_confirm_quit(),
-                    }
+                    app.go_back();
                     glib::Propagation::Stop
                 }
                 // Available on every screen, not just during playback: on a
                 // television the menus want the whole display too.
                 gdk::Key::f | gdk::Key::F => {
-                    if app.window.is_fullscreen() {
-                        app.window.unfullscreen();
-                    } else {
-                        app.window.fullscreen();
-                    }
+                    app.toggle_fullscreen();
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
             }
         });
         self.window.add_controller(controller);
+    }
+
+    /// One level up: out of playback, out of a chooser, or out of the
+    /// application. Shared by Escape and the gamepad's back button so the two
+    /// can never disagree about what "back" means.
+    fn go_back(self: &Rc<Self>) {
+        // Copied out first: the handlers below take the same cell mutably,
+        // and holding the read borrow across them panics.
+        let screen = *self.screen.borrow();
+        match screen {
+            Screen::Playing => {
+                self.stop_playback();
+                self.show_menu();
+            }
+            Screen::Chooser | Screen::Error | Screen::ConfirmQuit => self.show_menu(),
+            Screen::Menu => self.show_confirm_quit(),
+        }
+    }
+
+    fn toggle_fullscreen(&self) {
+        if self.window.is_fullscreen() {
+            self.window.unfullscreen();
+        } else {
+            self.window.fullscreen();
+        }
+    }
+
+    /// Records what the gamepad should be moving through. Screens built from
+    /// buttons alone pass `None`, and fall back to GTK's directional focus.
+    fn set_nav(&self, list: Option<&gtk::ListBox>, footer: Option<&gtk::Button>) {
+        *self.nav_list.borrow_mut() = list.cloned();
+        *self.nav_footer.borrow_mut() = footer.cloned();
+    }
+
+    fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
+        use crate::gamepad::Action;
+        match action {
+            Action::Up => self.move_selection(-1),
+            Action::Down => self.move_selection(1),
+            Action::Left => {
+                self.window.child_focus(gtk::DirectionType::Left);
+            }
+            Action::Right => {
+                self.window.child_focus(gtk::DirectionType::Right);
+            }
+            // During playback the lower face button is the obvious place for
+            // play/pause, and there is nothing else on screen to activate.
+            Action::Activate | Action::PlayPause if self.playback.borrow().is_some() => {
+                if let Some(playback) = self.playback.borrow().as_ref() {
+                    playback.toggle_pause();
+                }
+            }
+            Action::Activate => self.activate_focused(),
+            Action::PlayPause => {}
+            Action::Back => self.go_back(),
+            Action::Fullscreen => self.toggle_fullscreen(),
+        }
+    }
+
+    /// Moves the selection one row, obeying the same boundary rules the
+    /// keyboard does: the footer button sits below the last row, and the top
+    /// of the list is a hard stop rather than wrapping.
+    fn move_selection(self: &Rc<Self>, delta: i32) {
+        // Cloned out before anything can rebuild the screen underneath us.
+        let list = self.nav_list.borrow().clone();
+        let footer = self.nav_footer.borrow().clone();
+
+        let Some(list) = list else {
+            let direction = if delta < 0 {
+                gtk::DirectionType::Up
+            } else {
+                gtk::DirectionType::Down
+            };
+            self.window.child_focus(direction);
+            return;
+        };
+
+        let last = last_row_index(&list);
+        let select = |index: i32| {
+            if let Some(row) = list.row_at_index(index) {
+                self.sounds.borrow().click();
+                list.select_row(Some(&row));
+                row.grab_focus();
+            }
+        };
+
+        if footer.as_ref().is_some_and(|button| button.has_focus()) {
+            if delta < 0 {
+                select(last);
+            }
+            return;
+        }
+
+        let next = list.selected_row().map(|row| row.index()).unwrap_or(0) + delta;
+        if next < 0 {
+            return;
+        }
+        if next > last {
+            if let Some(button) = footer.filter(|button| button.is_sensitive()) {
+                self.sounds.borrow().click();
+                button.grab_focus();
+            }
+            return;
+        }
+        select(next);
+    }
+
+    /// Activates whatever holds focus. Rows go through the list's
+    /// `row-activated` signal, which is what the screens connect to; anything
+    /// else (the footer, the confirm screen's buttons) activates directly.
+    fn activate_focused(self: &Rc<Self>) {
+        // Disambiguated: GtkWindowExt and RootExt both define `focus`.
+        let Some(widget) = gtk::prelude::GtkWindowExt::focus(&self.window) else {
+            return;
+        };
+        let list = self.nav_list.borrow().clone();
+
+        if let Some(row) = widget.downcast_ref::<gtk::ListBoxRow>().cloned()
+            && let Some(list) = list
+        {
+            self.sounds.borrow().click();
+            list.select_row(Some(&row));
+            list.emit_by_name::<()>("row-activated", &[&row]);
+            return;
+        }
+        widget.activate();
     }
 
     fn stop_playback(&self) {
@@ -426,6 +557,7 @@ impl App {
     /// that would go past either end are swallowed, which also stops GTK
     /// reporting them as failed navigation.
     fn wire_navigation(self: &Rc<Self>, list: &gtk::ListBox, footer: Option<&gtk::Button>) {
+        self.set_nav(Some(list), footer);
         {
             let app = self.clone();
             let list_weak = list.downgrade();
@@ -648,6 +780,8 @@ impl App {
                         .unwrap_or_default(),
                 ));
                 *self.playback.borrow_mut() = Some(playback);
+                // Nothing to move a selection through here.
+                self.set_nav(None, None);
                 *self.screen.borrow_mut() = Screen::Playing;
             }
             Err(e) => self.show_error(&format!("Couldn't play that file.\n\n{e}")),
@@ -693,6 +827,8 @@ impl App {
             quit.connect_clicked(move |_| app.window.close());
         }
 
+        // Nothing to move a selection through here.
+        self.set_nav(None, None);
         *self.screen.borrow_mut() = Screen::ConfirmQuit;
         self.window.set_child(Some(&page));
         // Cancel takes focus so a reflexive second Enter doesn't quit.
@@ -724,6 +860,8 @@ impl App {
         let app = self.clone();
         back.connect_clicked(move |_| app.show_menu());
 
+        // Nothing to move a selection through here.
+        self.set_nav(None, None);
         *self.screen.borrow_mut() = Screen::Error;
         self.window.set_child(Some(&page));
         back.grab_focus();
