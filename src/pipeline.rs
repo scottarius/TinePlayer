@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -6,35 +8,51 @@ use gstreamer as gst;
 use crate::config::Config;
 use crate::devices::find_audio_output_device;
 
-/// Structural description only — no dynamic text (file paths, device
-/// identifiers) is embedded in the pipeline string. GStreamer's pipeline
-/// mini-language treats characters like "(" ")" as real syntax (bin
-/// grouping), and real movie filenames commonly contain them
-/// (e.g. "Movie (2019).mkv"), which breaks naive string interpolation.
-/// The file path is set as a real property below instead, which sidesteps
-/// the parser entirely.
+/// What a stream was selected for, recorded when decodebin3 asks whether to
+/// expose it and read back when its pad actually appears.
+#[derive(Clone, Copy)]
+enum Target {
+    Video,
+    /// Index among the file's audio streams, matching what `--list-tracks`
+    /// prints.
+    Audio(u32),
+}
+
+/// The head element of each branch, i.e. the thing a decoded pad links into.
+struct Targets {
+    video: gst::Element,
+    audio: HashMap<u32, gst::Element>,
+}
+
+/// Builds the playback pipeline for `path`.
 ///
-/// A `queue` immediately after each of matroskademux's branch points is
-/// required, not optional: a single demuxer feeding multiple downstream
-/// branches needs a queue on each branch to give it its own thread,
-/// otherwise a slow/blocked branch (e.g. a decodebin still autoplugging)
-/// can stall the demuxer's single push thread and starve the other
-/// branches indefinitely with no error.
+/// `decodebin3` rather than a named demuxer, which is what makes this
+/// container-agnostic: it typefinds the file and picks the demuxer itself, so
+/// Matroska, MP4, AVI, MPEG-TS and anything else GStreamer can demux all work
+/// through the same code path.
 ///
-/// `primary_track`/`secondary_track` of `None` means no audio track is
-/// assigned to that output at all (e.g. no secondary device configured, or
-/// the user explicitly chose "None") — that branch is simply omitted from
-/// the pipeline entirely, rather than built and left unused.
+/// The reason it is decodebin3 and not plain decodebin is stream selection.
+/// decodebin exposes and decodes *every* stream it finds, which on a
+/// Blu-ray rip means spinning up a decoder for all five audio tracks to use
+/// two of them. decodebin3 decodes only what is selected, via the
+/// `select-stream` signal below.
 ///
-/// Each audio branch stops at a named `audioresample` — the actual sink
-/// element is created via `Device::create_element()` below for genuine
-/// cross-platform device targeting (pulsesink on Linux, wasapi2sink on
-/// Windows) instead of hardcoding a sink factory name plus a
-/// platform-specific device-identifier string.
+/// Because decodebin3 has no pads until it has parsed the file, the branches
+/// are built up front and connected in `pad-added`. Building them up front
+/// also keeps device errors synchronous: a missing or unplugged output
+/// device fails here, with a message naming it, rather than asynchronously
+/// once playback has already been started.
+///
+/// `primary_track`/`secondary_track` of `None` means no audio on that output
+/// (no secondary device configured, or "None" chosen explicitly), and that
+/// branch is not built at all. Both pointing at the *same* track is
+/// supported and gets a `tee`: one decode feeding two devices, which is what
+/// you want when two people are listening to the same language on different
+/// hardware.
 ///
 /// The video branch always ends in `gtk4paintablesink`, on every platform.
 /// It renders into a `GdkPaintable` that the GTK window displays as an
-/// ordinary widget, rather than creating its own OS window — which is what
+/// ordinary widget, rather than creating its own OS window, which is what
 /// lets the application own the window (and therefore its decorations and
 /// keyboard input) instead of relaying input back out of a sink-created
 /// window. Caller reads the sink's `paintable` property to attach it.
@@ -44,54 +62,63 @@ pub fn build_pipeline(
     secondary_track: Option<u32>,
     config: &Config,
 ) -> Result<gst::Pipeline, String> {
-    let mut description = String::from(
-        "filesrc name=src ! matroskademux name=d \
-         d.video_0 ! queue ! decodebin ! videoconvert ! gtk4paintablesink name=vsink",
-    );
+    let pipeline = gst::Pipeline::new();
+
+    // Set as a property rather than parsed from a pipeline string: GStreamer's
+    // pipeline mini-language treats "(" and ")" as bin grouping, and real
+    // filenames commonly contain them (e.g. "Movie (2019).mkv").
+    let src = make("filesrc")?;
+    src.set_property("location", path.to_string_lossy().to_string());
+    let decode = make("decodebin3")?;
+    pipeline
+        .add_many([&src, &decode])
+        .map_err(|e| e.to_string())?;
+    src.link(&decode)
+        .map_err(|_| "Failed to link source to decoder".to_string())?;
+
+    let video_head = build_video_branch(&pipeline)?;
+
+    // Grouped by track so that one decoded stream can feed two outputs
+    // instead of being decoded twice.
+    let mut roles_by_track: HashMap<u32, Vec<&str>> = HashMap::new();
     if let Some(track) = primary_track {
-        description.push_str(&format!(
-            " d.audio_{track} ! queue ! decodebin ! audioconvert ! audioresample name=primary_resample"
-        ));
+        roles_by_track.entry(track).or_default().push("primary");
     }
     if let Some(track) = secondary_track {
-        description.push_str(&format!(
-            " d.audio_{track} ! queue ! decodebin ! audioconvert ! audioresample name=secondary_resample"
-        ));
+        roles_by_track.entry(track).or_default().push("secondary");
     }
 
-    let pipeline = gst::parse::launch(&description)
-        .map_err(|e| format!("Failed to build pipeline: {e}"))?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| "Parsed pipeline was not a gst::Pipeline".to_string())?;
-
-    pipeline
-        .by_name("src")
-        .ok_or("missing src element")?
-        .set_property("location", path.to_string_lossy().to_string());
-
-    if primary_track.is_some() {
-        attach_sink(&pipeline, "primary", config.primary_sink.as_deref())?;
-    }
-    if secondary_track.is_some() {
-        attach_sink(&pipeline, "secondary", config.secondary_sink.as_deref())?;
+    let mut audio_heads = HashMap::new();
+    for (track, roles) in &roles_by_track {
+        audio_heads.insert(*track, build_audio_branch(&pipeline, roles, config)?);
     }
 
-    // With two audio sinks, GStreamer's default clock-election would pick
-    // one of them (whichever it finds last, sink to source) as the master
-    // clock for the whole pipeline. On Linux this caused a real bug: our
-    // two sinks are on genuinely independent hardware clock domains (e.g.
-    // HDMI audio vs. a USB headset), and PipeWire auto-suspends an idle
-    // device after a few seconds — if the elected clock's device got
-    // suspended mid-pause, the whole pipeline stalled on resume, including
-    // the *other* sink. Forcing the system clock fixed that.
+    let wanted: Vec<u32> = roles_by_track.keys().copied().collect();
+    let targets = Arc::new(Targets {
+        video: video_head,
+        audio: audio_heads,
+    });
+    // Written by select-stream on a streaming thread and read by pad-added on
+    // another, hence Mutex rather than RefCell.
+    let selected: Arc<Mutex<HashMap<String, Target>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    connect_stream_selection(&decode, wanted, selected.clone());
+    connect_pad_added(&decode, targets, selected);
+
+    // With two audio sinks, GStreamer's default clock election would pick one
+    // of them (whichever it finds last, sink to source) as the master clock
+    // for the whole pipeline. On Linux this caused a real bug: the two sinks
+    // are on genuinely independent hardware clock domains (e.g. HDMI audio vs.
+    // a USB headset), and PipeWire auto-suspends an idle device after a few
+    // seconds. If the elected clock's device got suspended mid-pause, the
+    // whole pipeline stalled on resume, including the *other* sink. Forcing
+    // the system clock fixed that.
     //
-    // Windows-only note: this is deliberately Linux-only. WASAPI doesn't
-    // have PipeWire's aggressive idle-suspend behavior, so the problem this
-    // works around may not even occur here — and forcing a clock a sink
-    // didn't choose can make it hold or drop buffers instead of writing
-    // them (audio sinks use the pipeline clock to decide *when* to submit
-    // each buffer to the device), which matches an observed symptom on
-    // Windows of video playing fine while audio was completely silent.
+    // Deliberately Linux-only. WASAPI has no equivalent aggressive idle
+    // suspend, and forcing a clock a sink did not choose can make it hold or
+    // drop buffers instead of writing them (audio sinks use the pipeline
+    // clock to decide *when* to submit each buffer), which matched an
+    // observed symptom on Windows of video playing while audio was silent.
     if cfg!(target_os = "linux") {
         pipeline.use_clock(Some(&gst::SystemClock::obtain()));
     }
@@ -99,29 +126,185 @@ pub fn build_pipeline(
     Ok(pipeline)
 }
 
-/// Creates the real audio sink element for `sink_name` (a device display
-/// name from config) and links it onto `<prefix>_resample`, which must
-/// already exist in `pipeline` (i.e. the caller only calls this when that
-/// branch was actually included in the pipeline description).
-fn attach_sink(
+fn make(factory: &str) -> Result<gst::Element, String> {
+    gst::ElementFactory::make(factory)
+        .build()
+        .map_err(|_| format!("Missing GStreamer element \"{factory}\". Check the install."))
+}
+
+/// Returns the element a decoded video pad should link into.
+fn build_video_branch(pipeline: &gst::Pipeline) -> Result<gst::Element, String> {
+    let queue = make("queue")?;
+    let convert = make("videoconvert")?;
+    let sink = gst::ElementFactory::make("gtk4paintablesink")
+        .name("vsink")
+        .build()
+        .map_err(|_| "Missing gtk4paintablesink".to_string())?;
+
+    pipeline
+        .add_many([&queue, &convert, &sink])
+        .map_err(|e| e.to_string())?;
+    gst::Element::link_many([&queue, &convert, &sink])
+        .map_err(|_| "Failed to link video branch".to_string())?;
+
+    Ok(queue)
+}
+
+/// Builds the output chain(s) fed by one audio stream and returns the element
+/// its decoded pad should link into.
+///
+/// With two roles on one track the head is a `tee`, and each branch off it
+/// needs its own `queue`: a tee without queues on its branches deadlocks as
+/// soon as the two sinks consume at even slightly different rates, which two
+/// independent audio devices always do.
+fn build_audio_branch(
     pipeline: &gst::Pipeline,
-    prefix: &str,
-    sink_name: Option<&str>,
-) -> Result<(), String> {
-    let sink_name = sink_name.ok_or_else(|| format!("{prefix}_sink not set in config"))?;
-    let device = find_audio_output_device(sink_name)?;
-    let sink = device
-        .create_element(Some(&format!("{prefix}_out")))
-        .map_err(|e| format!("Failed to create element for {prefix} device: {e}"))?;
+    roles: &[&str],
+    config: &Config,
+) -> Result<gst::Element, String> {
+    let head = if roles.len() > 1 {
+        make("tee")?
+    } else {
+        make("queue")?
+    };
+    pipeline.add(&head).map_err(|e| e.to_string())?;
 
-    pipeline.add(&sink).map_err(|e| e.to_string())?;
+    for role in roles {
+        let queue = make("queue")?;
+        let convert = make("audioconvert")?;
+        let resample = make("audioresample")?;
+        let sink = build_device_sink(role, config)?;
 
-    let resample = pipeline
-        .by_name(&format!("{prefix}_resample"))
-        .ok_or_else(|| format!("missing {prefix}_resample"))?;
-    resample
-        .link(&sink)
-        .map_err(|e| format!("Failed to link {prefix} sink: {e}"))?;
+        pipeline
+            .add_many([&queue, &convert, &resample, &sink])
+            .map_err(|e| e.to_string())?;
+        gst::Element::link_many([&queue, &convert, &resample, &sink])
+            .map_err(|_| format!("Failed to link {role} audio branch"))?;
+        // Requests a src pad from the tee, or uses the queue's static one.
+        head.link(&queue)
+            .map_err(|_| format!("Failed to link {role} output"))?;
+    }
 
-    Ok(())
+    Ok(head)
+}
+
+/// Creates the real sink element for a configured output device.
+///
+/// Via `Device::create_element()` rather than a hardcoded factory name plus a
+/// platform-specific device string, which is what makes device targeting
+/// genuinely cross-platform: pulsesink on Linux, wasapi2sink on Windows,
+/// osxaudiosink on macOS, each already configured for the chosen device.
+fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String> {
+    let configured = match role {
+        "primary" => config.primary_sink.as_deref(),
+        _ => config.secondary_sink.as_deref(),
+    };
+    let name = configured.ok_or_else(|| format!("{role}_sink not set in config"))?;
+
+    find_audio_output_device(name)?
+        .create_element(Some(&format!("{role}_out")))
+        .map_err(|e| format!("Failed to create element for {role} device: {e}"))
+}
+
+/// Answers decodebin3's question of whether to expose each stream, and
+/// records what the ones we accept are for.
+///
+/// Returning 0 for everything unwanted is the point of using decodebin3:
+/// unselected audio tracks and any subtitle streams are never decoded.
+fn connect_stream_selection(
+    decode: &gst::Element,
+    wanted: Vec<u32>,
+    selected: Arc<Mutex<HashMap<String, Target>>>,
+) {
+    decode.connect("select-stream", false, move |values| {
+        let collection = values[1].get::<gst::StreamCollection>().ok();
+        let stream = values[2].get::<gst::Stream>().ok();
+        let (Some(collection), Some(stream)) = (collection, stream) else {
+            // -1 leaves the decision to decodebin3 rather than silently
+            // dropping a stream we failed to inspect.
+            return Some((-1i32).to_value());
+        };
+        let Some(id) = stream.stream_id() else {
+            return Some((-1i32).to_value());
+        };
+
+        let kind = stream.stream_type();
+        let decision = if kind.contains(gst::StreamType::VIDEO) {
+            match ordinal(&collection, &id, gst::StreamType::VIDEO) {
+                Some(0) => {
+                    selected
+                        .lock()
+                        .unwrap()
+                        .insert(id.to_string(), Target::Video);
+                    1
+                }
+                _ => 0,
+            }
+        } else if kind.contains(gst::StreamType::AUDIO) {
+            match ordinal(&collection, &id, gst::StreamType::AUDIO) {
+                Some(track) if wanted.contains(&track) => {
+                    selected
+                        .lock()
+                        .unwrap()
+                        .insert(id.to_string(), Target::Audio(track));
+                    1
+                }
+                _ => 0,
+            }
+        } else {
+            0
+        };
+
+        Some(decision.to_value())
+    });
+}
+
+fn connect_pad_added(
+    decode: &gst::Element,
+    targets: Arc<Targets>,
+    selected: Arc<Mutex<HashMap<String, Target>>>,
+) {
+    decode.connect_pad_added(move |_, pad| {
+        let Some(id) = pad.stream_id() else {
+            eprintln!("Decoded pad has no stream id; ignoring it");
+            return;
+        };
+        let target = selected.lock().unwrap().get(id.as_str()).copied();
+        let Some(target) = target else {
+            // A stream decodebin3 exposed without being asked to. Leaving it
+            // unlinked is correct; it just plays no part.
+            return;
+        };
+
+        let head = match target {
+            Target::Video => Some(&targets.video),
+            Target::Audio(track) => targets.audio.get(&track),
+        };
+        let Some(head) = head else { return };
+        let Some(sink_pad) = head.static_pad("sink") else {
+            return;
+        };
+        if let Err(e) = pad.link(&sink_pad) {
+            eprintln!("Failed to connect decoded stream {id}: {e}");
+        }
+    });
+}
+
+/// Position of `id` among the collection's streams of the given type, which
+/// is the numbering `--list-tracks` prints and the menu offers.
+fn ordinal(collection: &gst::StreamCollection, id: &str, kind: gst::StreamType) -> Option<u32> {
+    let mut position = 0;
+    for index in 0..collection.len() {
+        let Some(stream) = collection.stream(index as u32) else {
+            continue;
+        };
+        if !stream.stream_type().contains(kind) {
+            continue;
+        }
+        if stream.stream_id().as_deref() == Some(id) {
+            return Some(position);
+        }
+        position += 1;
+    }
+    None
 }

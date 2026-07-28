@@ -518,13 +518,20 @@ impl App {
             Some("Cancel"),
         );
 
-        // Matroska only: the pipeline demuxes with matroskademux, so
-        // offering other containers would just produce a failure after the
-        // user had already chosen one.
+        // The pipeline typefinds rather than assuming a container, so this
+        // list is about not cluttering the dialog with non-video files, not
+        // about what will actually play. Anything GStreamer can demux works,
+        // which is why "All files" stays available below.
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Matroska video (.mkv, .webm)"));
-        for pattern in ["*.mkv", "*.webm", "*.MKV", "*.WEBM"] {
-            filter.add_pattern(pattern);
+        filter.set_name(Some("Video files"));
+        for extension in [
+            "mkv", "webm", "mp4", "m4v", "mov", "avi", "ts", "m2ts", "mts", "mpg", "mpeg", "wmv",
+            "flv", "ogv", "3gp",
+        ] {
+            // Case-insensitive by hand: GTK's pattern matching is not, and
+            // ".MKV" off a camera or an old disc is common enough to matter.
+            filter.add_pattern(&format!("*.{extension}"));
+            filter.add_pattern(&format!("*.{}", extension.to_uppercase()));
         }
         chooser.add_filter(&filter);
 

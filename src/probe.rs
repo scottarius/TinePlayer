@@ -7,8 +7,9 @@ use pbutils::prelude::*;
 
 #[derive(Clone)]
 pub struct AudioTrack {
-    /// Matches matroskademux's audio_<N> pad numbering (0-based, in
-    /// container order) — not any other global stream index.
+    /// Position among the file's audio streams (0-based, in container
+    /// order), not any global stream index. The pipeline selects tracks by
+    /// the same counting, over decodebin3's stream collection.
     pub index: u32,
     pub codec: String,
     pub channels: u32,
