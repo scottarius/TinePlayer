@@ -23,11 +23,21 @@
     Everything must be built for MSVC to match Rust's MSVC toolchain, so
     avoid MSYS2/MinGW builds of either library.
 
+.PARAMETER GStreamerVersion
+    Install a specific GStreamer version instead of the current one. Intended
+    for CI, which needs a reproducible build so that a failure means the
+    commit is at fault rather than an upstream release. People installing for
+    themselves should leave this alone and take the current version.
+
 .NOTES
     Run in a normal PowerShell prompt; winget elevates on its own where
     needed. Open a new terminal afterwards so the environment variables
     this sets are picked up.
 #>
+
+param(
+    [string]$GStreamerVersion
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -121,7 +131,8 @@ $GstRoot = Resolve-GstRoot
 if ($GstRoot) {
     Write-Host "GStreamer already installed at $GstRoot, skipping." -ForegroundColor DarkGray
 } else {
-    Install-WingetPackage 'gstreamerproject.gstreamer' 'GStreamer (MSVC)'
+    $versionArgs = if ($GStreamerVersion) { @('--version', $GStreamerVersion) } else { @() }
+    Install-WingetPackage 'gstreamerproject.gstreamer' 'GStreamer (MSVC)' $versionArgs
     $GstRoot = Resolve-GstRoot
     if (-not $GstRoot) {
         throw 'GStreamer was installed but could not be located afterwards. Set GSTREAMER_1_0_ROOT_MSVC_X86_64 to its install directory and re-run.'

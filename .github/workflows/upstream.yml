@@ -1,0 +1,72 @@
+name: Upstream check
+
+# The counterpart to ci.yml. That workflow pins everything so a failure means
+# the commit is broken; this one pins nothing so a failure means the world
+# moved. Deliberately not attached to pushes or pull requests: it must never
+# be able to fail somebody's unrelated change.
+#
+# What it catches, roughly in order of likelihood:
+#   - a GStreamer release that breaks the build or the install scripts
+#   - a packaging change like the 1.28 move from MSI to a single installer
+#   - a Rust release whose new clippy lints fire on existing code
+#   - GitHub moving ubuntu-latest to the next LTS
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Weekly is enough: nothing here is urgent, and a
+    # failure is a heads-up rather than something blocking work.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (current)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          chmod +x install.sh
+          ./install.sh
+
+      # No --locked: this is also where a dependency that no longer resolves
+      # should show up, rather than being frozen out by the lockfile.
+      - name: Build
+        run: cargo build --release
+
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+
+  windows:
+    name: Windows (current)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        shell: pwsh
+        run: .\install.ps1
+
+      - name: Carry the script's environment into the job
+        shell: pwsh
+        run: |
+          $pkgConfig = [Environment]::GetEnvironmentVariable('PKG_CONFIG_PATH', 'User')
+          if (-not $pkgConfig) { throw 'install.ps1 did not set PKG_CONFIG_PATH' }
+          Write-Host "install.ps1 chose $pkgConfig"
+          $root = Split-Path (Split-Path $pkgConfig -Parent) -Parent
+          "PKG_CONFIG_PATH=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # Records what the current versions actually are, so a failure here can
+      # be read against the pins in ci.yml without digging.
+      - name: Versions in play
+        shell: pwsh
+        run: |
+          pkg-config --modversion gtk4 gstreamer-1.0 glib-2.0
+          rustc --version
+
+      - name: Build
+        run: cargo build --release

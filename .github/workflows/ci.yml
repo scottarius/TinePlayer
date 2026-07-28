@@ -9,15 +9,34 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Everything version-like is pinned here on purpose. This workflow gates
+# merges, so a red build has to mean "this commit is broken" and nothing else.
+# Whether the project still works against current upstream is a different
+# question, asked on a schedule by upstream.yml instead.
 env:
   CARGO_TERM_COLOR: always
+  # Floating the toolchain would let a new Rust release fail an unrelated
+  # commit, and with `clippy -D warnings` that is not hypothetical: each
+  # release adds lints that fire on code which was clean the day before.
+  RUST_VERSION: "1.97.1"
+  GSTREAMER_VERSION: "1.28.5"
 
 jobs:
   linux:
+    # Pinned rather than ubuntu-latest, which silently moves to the next LTS
+    # and changes every apt package version underneath install.sh.
+    runs-on: ubuntu-24.04
     name: Linux
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      # Set before install.sh runs, which detects an existing Rust and skips
+      # installing one. rustup is already on the runner, so this needs no
+      # third-party action.
+      - name: Pin Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_VERSION"
 
       # Deliberately runs the same script the README tells people to run, so
       # CI fails if that script is wrong. The runner already has Rust, which
@@ -55,18 +74,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Pin Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal --component clippy,rustfmt
+          rustup default $env:RUST_VERSION
+
       # Runs the same script the README tells people to run, so CI fails if
       # that script is wrong — matching how the Linux job treats install.sh.
       #
-      # A consequence worth knowing: the script installs whatever version
-      # winget offers rather than a pinned one, so CI is not reproducible
-      # across time. That is the intended trade. The question this job answers
-      # is "does the documented setup still work today", and an upstream
-      # release that breaks it should fail here rather than on a user's
-      # machine.
+      # The version is named explicitly because winget always serves the
+      # current release. There is no equivalent on the Linux side: apt on a
+      # released Ubuntu serves a frozen GStreamer, so pinning the runner image
+      # pins the dependency too.
       - name: Install dependencies
         shell: pwsh
-        run: .\install.ps1
+        run: .\install.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
 
       # install.ps1 sets User-scope environment variables, which a later step
       # in the same job does not inherit, so its conclusions are copied into
