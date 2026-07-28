@@ -55,49 +55,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # install.ps1 uses winget, which is unreliable in the non-interactive
-      # session a runner executes in, so GStreamer is fetched directly here
-      # instead. This means CI does NOT exercise install.ps1's own logic; that
-      # script still has to be verified by hand on a real machine.
+      # Runs the same script the README tells people to run, so CI fails if
+      # that script is wrong — matching how the Linux job treats install.sh.
       #
-      # Pinned so a bad upstream release can't turn into a mystery CI failure.
-      # As of 1.28 this is a single Inno Setup installer rather than the older
-      # pair of runtime/devel MSIs, and its default component set includes the
-      # development files. The step after this one proves that.
-      - name: Install GStreamer
+      # A consequence worth knowing: the script installs whatever version
+      # winget offers rather than a pinned one, so CI is not reproducible
+      # across time. That is the intended trade. The question this job answers
+      # is "does the documented setup still work today", and an upstream
+      # release that breaks it should fail here rather than on a user's
+      # machine.
+      - name: Install dependencies
         shell: pwsh
-        run: |
-          $version = '1.28.5'
-          $pkg = "gstreamer-1.0-msvc-x86_64-$version.exe"
-          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc/$pkg"
-          Write-Host "Downloading $pkg"
-          Invoke-WebRequest -Uri $url -OutFile $pkg
-          # Inno Setup silent flags. /SP- suppresses the "this will install..."
-          # prompt that /VERYSILENT alone still shows. /DIR pins the location:
-          # interactively the installer defaults to a per-user directory, but a
-          # runner executes elevated and picks an all-users one instead.
-          $p = Start-Process ".\$pkg" -Wait -PassThru -ArgumentList @(
-            '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
-            '/DIR=C:\gstreamer\1.0\msvc_x86_64'
-          )
-          if ($p.ExitCode -ne 0) { throw "Installer exited $($p.ExitCode)" }
+        run: .\install.ps1
 
-      # Verified rather than assumed, so a layout change upstream fails here
-      # with a clear message instead of a cryptic linker error later.
-      - name: Configure environment
+      # install.ps1 sets User-scope environment variables, which a later step
+      # in the same job does not inherit, so its conclusions are copied into
+      # Actions' own mechanism. Deliberately derived from what the script
+      # wrote rather than recomputed here, so a wrong answer from the script
+      # fails the build instead of being silently corrected.
+      - name: Carry the script's environment into the job
         shell: pwsh
         run: |
-          $root = "C:\gstreamer\1.0\msvc_x86_64"
-          if (-not (Test-Path "$root\lib\pkgconfig\gstreamer-1.0.pc")) {
-            Write-Host "Not at $root. Found gstreamer-1.0.pc at:"
-            foreach ($drive in 'C:\', $env:LOCALAPPDATA, ${env:ProgramFiles}) {
-              Get-ChildItem $drive -Recurse -Filter 'gstreamer-1.0.pc' `
-                -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
-            }
-            throw "GStreamer not found at $root after install"
-          }
+          $pkgConfig = [Environment]::GetEnvironmentVariable('PKG_CONFIG_PATH', 'User')
+          if (-not $pkgConfig) { throw 'install.ps1 did not set PKG_CONFIG_PATH' }
+          Write-Host "install.ps1 chose $pkgConfig"
+          $root = Split-Path (Split-Path $pkgConfig -Parent) -Parent
+          "PKG_CONFIG_PATH=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/cache@v6
         with:
