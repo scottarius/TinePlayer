@@ -201,9 +201,29 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     };
     let name = configured.ok_or_else(|| format!("{role}_sink not set in config"))?;
 
-    find_audio_output_device(name)?
+    let sink = find_audio_output_device(name)?
         .create_element(Some(&format!("{role}_out")))
-        .map_err(|e| format!("Failed to create element for {role} device: {e}"))
+        .map_err(|e| format!("Failed to create element for {role} device: {e}"))?;
+
+    // Every sink gates the pipeline's state changes by default, waiting to
+    // preroll before the change completes. With two audio sinks on separate
+    // devices plus the video sink, a flushing seek left those state changes
+    // permanently ASYNC on Linux: pausing after a seek never completed, and
+    // playback stopped for good. Measured directly — with this set, resuming
+    // returns Success and position advances again; without it, the pipeline
+    // reports Playing while no buffers reach either sink.
+    //
+    // Correct as well as expedient: preroll is the video sink's job here, and
+    // the audio sinks still honour `sync`, so they stay in step.
+    //
+    // Linux-only, matching the forced clock below. Windows is verified
+    // working as it is, and this pipeline has a history of platform-specific
+    // sink behaviour that punishes changing both at once.
+    if cfg!(target_os = "linux") && sink.find_property("async").is_some() {
+        sink.set_property("async", false);
+    }
+
+    Ok(sink)
 }
 
 /// Answers decodebin3's question of whether to expose each stream, and
