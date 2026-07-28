@@ -21,23 +21,24 @@ video file's audio tracks are already separate streams inside the container, so
 the file is demuxed once and each chosen track is piped to its own output
 device from a single pipeline, staying in sync because it is all one clock.
 
-## Status
+## Features
 
-Early, but working. Verified on Raspberry Pi OS (Bookworm, Wayland) and on
-Windows 11:
+- Plays two audio tracks at once, each to its own output device, in sync with
+  the video
+- Reads standard video containers: MKV, MP4, MPEG-TS, and anything else
+  GStreamer supports
+- Standard playback controls, shown over the video
+- Remembers the playback position for each video and resumes there
+- Interface large enough to use from the couch, with gamepad support
+- Remembers your output devices
+- Command-line arguments to launch straight into a video
 
-- Two audio tracks to two independent output devices, in sync
-- Video in a GTK 4 window, with pause/resume, fullscreen and resume-from-position
-- A menu-driven interface intended to be read from across a room
-- Configurable from the interface, from the command line, or both
-- Gamepad control throughout, including during playback
-- A timeline over the video showing position, duration and play state
+## Known issues
 
-There are no packaged downloads yet, so for now it is built from source.
-
-Known issue: on Linux, seeking can leave one or both audio outputs silent for
-the rest of playback. Returning to the menu and playing again clears it.
-Windows is unaffected.
+- On Linux, seeking can leave one or both audio outputs silent for the rest of
+  playback. Returning to the menu and playing again clears it. Windows is
+  unaffected.
+- No packaged downloads yet, so it has to be built from source.
 
 ## Requirements
 
@@ -97,22 +98,17 @@ application is launched.
 
 ### Controls
 
-| Key | Gamepad | Action |
-| --- | --- | --- |
-| Arrow keys | D-pad or left stick | Move through the menu |
-| <kbd>Enter</kbd> | A / Cross | Select |
-| <kbd>Esc</kbd> | B / Circle | Back one level; from playback, return to the menu |
-| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume during playback |
-| <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Skip back / forward 10 seconds |
-| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
+| Key | Gamepad | Action                                |
+| --- | --- |---------------------------------------|
+| Arrow keys | D-pad or left stick | Navigate the menus                    |
+| <kbd>Enter</kbd> | A / Cross | Select                                |
+| <kbd>Esc</kbd> | B / Circle | Back one menu; stop video playback    |
+| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback               |
+| <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
+| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen                     |
 
 Controllers are picked up whenever they are connected, including part-way
-through a session, and no configuration is needed. Gamepad input is read from
-the device rather than through the window, so it works regardless of what has
-keyboard focus.
-
-During playback a timeline appears over the video whenever you press
-something, and hides again a few seconds later. It stays up while paused.
+through a session, and no configuration is needed.
 
 ### Command line
 
