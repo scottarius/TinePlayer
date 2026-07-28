@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -6,6 +6,7 @@ use gstreamer::prelude::DeviceExt;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
+use crate::appearance;
 use crate::config::Config;
 use crate::devices::list_audio_output_devices;
 use crate::player::Playback;
@@ -64,16 +65,53 @@ impl App {
         restart: bool,
         fullscreen: bool,
     ) {
-        apply_styles(config.ui_scale);
+        appearance::apply_theme(config.theme);
         suppress_error_bell();
+
+        // Sized from the tallest monitor to begin with, since no window exists
+        // yet to ask which one it is on. Corrected below once there is.
+        let styles = install_styles();
+        let monitor = appearance::tallest_monitor();
+        let scale = appearance::resolve_scale(config.ui_scale, monitor.as_ref());
+        styles.load_from_data(&style_css(scale));
+        if config.ui_scale.is_none()
+            && scale != 1.0
+            && let Some(monitor) = monitor.as_ref()
+        {
+            eprintln!(
+                "Interface scaled {scale}x for a {}px-tall display. \
+                 Set ui_scale in the config file to override.",
+                monitor.geometry().height()
+            );
+        }
+
         let sounds = Sounds::new(config.sounds, config.primary_sink.clone());
 
+        let (width, height) = default_window_size(scale, monitor.as_ref());
         let window = gtk::ApplicationWindow::builder()
             .application(gtk_app)
             .title("TinePlayer")
-            .default_width(1100)
-            .default_height(700)
+            .default_width(width)
+            .default_height(height)
             .build();
+
+        // Which monitor the window landed on is only knowable once it has
+        // been realized, and on a mixed setup (a television beside a desk
+        // monitor) that is the difference between a readable menu and a tiny
+        // one. Skipped entirely when the size was set by hand.
+        if config.ui_scale.is_none() {
+            let applied = Cell::new(scale);
+            window.connect_realize(move |window| {
+                let Some(monitor) = appearance::monitor_for_window(window) else {
+                    return;
+                };
+                let actual = appearance::scale_for(&monitor);
+                if actual != applied.get() {
+                    applied.set(actual);
+                    styles.load_from_data(&style_css(actual));
+                }
+            });
+        }
 
         let app = Rc::new(App {
             window: window.clone(),
@@ -829,13 +867,46 @@ fn suppress_error_bell() {
 /// Sizes are set here rather than left to the theme because the interface
 /// is meant to be read from across a room. Everything scales from one
 /// factor so it can be dialled down for close-range use.
-fn apply_styles(scale: f64) {
-    let Some(display) = gdk::Display::default() else {
-        return;
-    };
+/// Starting window size, in the same units as the interface inside it.
+///
+/// A fixed size would mean a 2x menu opening into a 1x frame, which is how a
+/// 4K display ends up with a window too small for its own contents. Capped to
+/// most of the monitor so a large scale on a modest screen still opens
+/// something that fits, panels and decoration included.
+fn default_window_size(scale: f64, monitor: Option<&gdk::Monitor>) -> (i32, i32) {
+    const BASE_WIDTH: f64 = 1100.0;
+    const BASE_HEIGHT: f64 = 700.0;
+    const MAX_FRACTION: f64 = 0.9;
+
+    let mut width = BASE_WIDTH * scale;
+    let mut height = BASE_HEIGHT * scale;
+    if let Some(monitor) = monitor {
+        let geometry = monitor.geometry();
+        width = width.min(geometry.width() as f64 * MAX_FRACTION);
+        height = height.min(geometry.height() as f64 * MAX_FRACTION);
+    }
+    (width.round() as i32, height.round() as i32)
+}
+
+/// Registers the provider the interface's sizes are loaded into. Kept so the
+/// sizes can be replaced later without stacking up providers, which is what
+/// makes re-scaling on a different monitor possible.
+fn install_styles() -> gtk::CssProvider {
+    let provider = gtk::CssProvider::new();
+    if let Some(display) = gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+    provider
+}
+
+fn style_css(scale: f64) -> String {
     let px = |base: f64| (base * scale).round() as i32;
 
-    let css = format!(
+    format!(
         "
         .tp-title {{
             font-size: {title}px;
@@ -914,13 +985,5 @@ fn apply_styles(scale: f64) {
         // theme's white selection text on a pale colour.
         highlight = "#3584e4",
         video = crate::player::VIDEO_CSS_CLASS,
-    );
-
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(&css);
-    gtk::style_context_add_provider_for_display(
-        &display,
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    )
 }

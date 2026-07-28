@@ -31,8 +31,8 @@ Windows 11:
 - A menu-driven interface intended to be read from across a room
 - Configurable from the interface, from the command line, or both
 
-Not yet implemented: gamepad control, playback scrubbing, and a dark theme.
-There are no packaged downloads yet either, so for now it is built from source.
+Not yet implemented: gamepad control and playback scrubbing. There are no
+packaged downloads yet either, so for now it is built from source.
 
 ## Requirements
 
@@ -116,9 +116,18 @@ output.
 
 ### Appearance
 
-The interface is sized to be read from across a room. If that is oversized on a
-desktop monitor, lower `ui_scale` in the config file. Navigation sounds can be
-turned off with `sounds: false`.
+The interface is sized to be read from across a room, and scales itself to the
+display it opens on: a 4K screen gets twice the size a 1080p one does, so the
+menu stays the same size to the eye rather than shrinking as resolution grows.
+Displays a compositor is already scaling are left alone, since the scaling has
+happened once already.
+
+Set `ui_scale` in the config file to pin the size instead, and the automatic
+sizing stops. Navigation sounds can be turned off with `sounds: false`.
+
+`theme` chooses `auto`, `light` or `dark`. Auto follows the desktop, and uses
+dark when the desktop has no preference or cannot be asked, which is common on
+the minimal desktops a media machine tends to run.
 
 ## Compatibility
 

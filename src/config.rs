@@ -18,23 +18,37 @@ pub fn config_path() -> PathBuf {
     app_dir(glib::user_config_dir()).join("config.yaml")
 }
 
-/// Multiplies every font size and padding in the interface. The default
-/// suits reading from across a room; lower it for close-range use on a
-/// desktop monitor.
-fn default_ui_scale() -> f64 {
-    1.0
-}
-
 fn default_sounds() -> bool {
     true
+}
+
+/// Which way round to draw the interface. `Auto` follows the desktop, and
+/// falls back to dark when it cannot be asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    Auto,
+    Light,
+    Dark,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub primary_sink: Option<String>,
     pub secondary_sink: Option<String>,
-    #[serde(default = "default_ui_scale")]
-    pub ui_scale: f64,
+    /// Multiplies every font size and padding in the interface.
+    ///
+    /// Absent means "work it out from the display", which is what suits a
+    /// television: a 4K screen the compositor is not already scaling would
+    /// otherwise draw a ten-foot interface at desk-monitor size. Set it to
+    /// pin the size regardless, and it is left out of the file when unset so
+    /// that automatic sizing is not silently frozen the first time settings
+    /// are saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_scale: Option<f64>,
+    #[serde(default)]
+    pub theme: Theme,
     /// Plays a short click when moving through the menus.
     #[serde(default = "default_sounds")]
     pub sounds: bool,
@@ -51,7 +65,8 @@ impl Default for Config {
         Self {
             primary_sink: None,
             secondary_sink: None,
-            ui_scale: default_ui_scale(),
+            ui_scale: None,
+            theme: Theme::default(),
             sounds: default_sounds(),
             xdg_runtime_dir: None,
             wayland_display: None,

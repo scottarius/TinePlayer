@@ -74,7 +74,7 @@ gst-plugin-gtk4 = { version = "0.13.7", features = ["wayland", "x11egl", "x11glx
 [target.'cfg(target_os = "windows")'.dependencies]
 # Only for AttachConsole: release builds are GUI-subsystem, so they need to
 # reattach to the parent terminal's console for CLI output to be visible.
-windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_System_Registry"] }
 # No GL feature here: the `winegl` feature needs gstreamer-gl-egl, and the
 # official GStreamer Windows build ships gstreamer-gl without any EGL
 # variant, so enabling it fails at link time with unresolved
