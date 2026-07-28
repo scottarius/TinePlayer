@@ -24,6 +24,13 @@ use config::Config;
 
 #[derive(Parser)]
 #[command(
+    // Takes the version straight from Cargo.toml, so a built binary can always
+    // be asked what it is. Worth having before packaged downloads exist:
+    // a copy someone has had sitting around is otherwise unidentifiable.
+    version,
+    // Otherwise clap uses the lowercase crate name, so both --version and the
+    // usage line would disagree with the executable people actually run.
+    name = "TinePlayer",
     about = "Play a video with two audio tracks routed to two output devices.",
     long_about = "Play a video with two audio tracks routed to two output devices, \
                   so two people can watch together in different languages.\n\n\
