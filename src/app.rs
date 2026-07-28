@@ -675,7 +675,7 @@ impl App {
 
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        let quit = gtk::Button::with_label("Quit");
+        let quit = gtk::Button::with_label("Close");
         quit.add_css_class("tp-button");
         buttons.append(&cancel);
         buttons.append(&quit);
