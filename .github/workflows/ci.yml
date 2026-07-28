@@ -73,21 +73,27 @@ jobs:
           Write-Host "Downloading $pkg"
           Invoke-WebRequest -Uri $url -OutFile $pkg
           # Inno Setup silent flags. /SP- suppresses the "this will install..."
-          # prompt that /VERYSILENT alone still shows.
+          # prompt that /VERYSILENT alone still shows. /DIR pins the location:
+          # interactively the installer defaults to a per-user directory, but a
+          # runner executes elevated and picks an all-users one instead.
           $p = Start-Process ".\$pkg" -Wait -PassThru -ArgumentList @(
-            '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+            '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
+            '/DIR=C:\gstreamer\1.0\msvc_x86_64'
           )
           if ($p.ExitCode -ne 0) { throw "Installer exited $($p.ExitCode)" }
 
-      # The installer is per-user, landing in the same place install.ps1
-      # expects, but the location is verified rather than assumed so a layout
-      # change upstream fails here with a clear message instead of producing a
-      # cryptic linker error later.
+      # Verified rather than assumed, so a layout change upstream fails here
+      # with a clear message instead of a cryptic linker error later.
       - name: Configure environment
         shell: pwsh
         run: |
-          $root = "$env:LOCALAPPDATA\Programs\gstreamer\1.0\msvc_x86_64"
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
           if (-not (Test-Path "$root\lib\pkgconfig\gstreamer-1.0.pc")) {
+            Write-Host "Not at $root. Found gstreamer-1.0.pc at:"
+            foreach ($drive in 'C:\', $env:LOCALAPPDATA, ${env:ProgramFiles}) {
+              Get-ChildItem $drive -Recurse -Filter 'gstreamer-1.0.pc' `
+                -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+            }
             throw "GStreamer not found at $root after install"
           }
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
