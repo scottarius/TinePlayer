@@ -8,6 +8,7 @@ use gtk::{gdk, glib};
 
 use crate::appearance;
 use crate::config::Config;
+use crate::controls::Controls;
 use crate::devices::list_audio_output_devices;
 use crate::player::Playback;
 use crate::probe::{AudioTrack, probe_audio_tracks};
@@ -26,6 +27,18 @@ enum Setting {
 /// Menu rows that begin a new group: the primary pair and the secondary
 /// pair each get separating space above them.
 const SECTION_STARTS: [i32; 2] = [1, 3];
+
+/// How long scrubbing must be still before the seek is actually performed.
+/// Short enough to feel like it happens on release, long enough to bridge the
+/// gap between auto-repeat steps and the release events X11 interleaves
+/// between them.
+/// Scrub redraw interval. The movement is driven from here rather than from
+/// input repeats, so it stays smooth at every speed.
+const SCRUB_TICK: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// Safety net: if a release is somehow missed, scrubbing still ends rather
+/// than running away.
+const SCRUB_ABANDON: std::time::Duration = std::time::Duration::from_millis(700);
 
 /// Tracked so Escape can mean "go back one level" rather than one fixed
 /// action: out of playback, out of a chooser, or out of the application.
@@ -61,6 +74,13 @@ pub struct App {
     /// selection itself and therefore needs to know what it is moving.
     nav_list: RefCell<Option<gtk::ListBox>>,
     nav_footer: RefCell<Option<gtk::Button>>,
+    controls: RefCell<Option<Rc<Controls>>>,
+    /// Bumped whenever a scrub ends, retiring the ticker that was driving it.
+    scrub_generation: Cell<u64>,
+    /// Last time a scrub key or button was seen held.
+    scrub_seen: Cell<Option<std::time::Instant>>,
+    /// Drives the controls readout while a file is playing.
+    tick: RefCell<Option<glib::SourceId>>,
 }
 
 impl App {
@@ -134,6 +154,10 @@ impl App {
             restart,
             nav_list: RefCell::new(None),
             nav_footer: RefCell::new(None),
+            controls: RefCell::new(None),
+            scrub_generation: Cell::new(0),
+            scrub_seen: Cell::new(None),
+            tick: RefCell::new(None),
         });
 
         // Weak, so the polling closure doesn't keep the application alive
@@ -203,6 +227,17 @@ impl App {
                     if let Some(playback) = app.playback.borrow().as_ref() {
                         playback.toggle_pause();
                     }
+                    app.wake_controls();
+                    glib::Propagation::Stop
+                }
+                // Only during playback: elsewhere the arrows belong to the
+                // menus, where left and right mean nothing.
+                gdk::Key::Left if playing => {
+                    app.scrub(-crate::player::STEP_SECONDS);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::Right if playing => {
+                    app.scrub(crate::player::STEP_SECONDS);
                     glib::Propagation::Stop
                 }
                 // Always goes back one level, so it never quits by surprise
@@ -217,9 +252,24 @@ impl App {
                     app.toggle_fullscreen();
                     glib::Propagation::Stop
                 }
+                // Last, so it can't shadow the keys above: anything else
+                // during playback summons the timeline without claiming the
+                // key.
+                _ if playing => {
+                    app.wake_controls();
+                    glib::Propagation::Proceed
+                }
                 _ => glib::Propagation::Proceed,
             }
         });
+        {
+            let app = self.clone();
+            controller.connect_key_released(move |_, key, _, _| {
+                if matches!(key, gdk::Key::Left | gdk::Key::Right) {
+                    app.end_scrub();
+                }
+            });
+        }
         self.window.add_controller(controller);
     }
 
@@ -240,6 +290,102 @@ impl App {
         }
     }
 
+    /// Refreshes the controls readout twice a second: often enough that the
+    /// clock never looks stuck, rare enough to be free.
+    fn start_tick(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+            let Some(app) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            // Cloned out before touching the controls, which can rebuild the
+            // screen if playback has ended underneath us.
+            let playback = app.playback.borrow().clone();
+            let controls = app.controls.borrow().clone();
+            match (playback, controls) {
+                (Some(playback), Some(controls)) => {
+                    controls.update(&playback);
+                    glib::ControlFlow::Continue
+                }
+                _ => glib::ControlFlow::Break,
+            }
+        });
+        *self.tick.borrow_mut() = Some(source);
+    }
+
+    /// Brings the controls up on any input during playback, so the timeline
+    /// is there whenever someone reaches for a control.
+    fn wake_controls(&self) {
+        let playback = self.playback.borrow().clone();
+        let controls = self.controls.borrow().clone();
+        if let (Some(playback), Some(controls)) = (playback, controls) {
+            controls.update(&playback);
+            controls.flash(!playback.is_playing());
+        }
+    }
+
+    /// Begins or continues a scrub. Nothing moves until the ticker decides
+    /// this is a hold; a tap resolves to a single step when released.
+    fn scrub(self: &Rc<Self>, seconds: f64) {
+        let playback = self.playback.borrow().clone();
+        let Some(playback) = playback else { return };
+
+        let already = playback.is_scrubbing();
+        playback.scrub_input(seconds);
+        self.scrub_seen.set(Some(std::time::Instant::now()));
+        self.wake_controls();
+        if already {
+            return;
+        }
+
+        let generation = self.scrub_generation.get();
+        let weak = Rc::downgrade(self);
+        let mut last = std::time::Instant::now();
+        glib::timeout_add_local(SCRUB_TICK, move || {
+            let Some(app) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if app.scrub_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+            let playback = app.playback.borrow().clone();
+            let Some(playback) = playback else {
+                return glib::ControlFlow::Break;
+            };
+
+            // Auto-repeat is what keeps this alive; long enough without it
+            // and the release must have gone missing.
+            let stale = app
+                .scrub_seen
+                .get()
+                .is_none_or(|seen| seen.elapsed() > SCRUB_ABANDON);
+            if stale {
+                app.end_scrub();
+                return glib::ControlFlow::Break;
+            }
+
+            let now = std::time::Instant::now();
+            playback.scrub_tick(now - last);
+            last = now;
+            app.wake_controls();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// The direction was let go: perform the one seek the gesture asked for.
+    fn end_scrub(&self) {
+        let playback = self.playback.borrow().clone();
+        let Some(playback) = playback else { return };
+        if !playback.is_scrubbing() {
+            return;
+        }
+        self.scrub_generation
+            .set(self.scrub_generation.get().wrapping_add(1));
+        self.scrub_seen.set(None);
+        playback.commit_scrub();
+        self.wake_controls();
+    }
+
     fn toggle_fullscreen(&self) {
         if self.window.is_fullscreen() {
             self.window.unfullscreen();
@@ -258,8 +404,15 @@ impl App {
     fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
         use crate::gamepad::Action;
         match action {
+            Action::Up | Action::Down if self.playback.borrow().is_some() => self.wake_controls(),
             Action::Up => self.move_selection(-1),
             Action::Down => self.move_selection(1),
+            Action::Left if self.playback.borrow().is_some() => {
+                self.scrub(-crate::player::STEP_SECONDS)
+            }
+            Action::Right if self.playback.borrow().is_some() => {
+                self.scrub(crate::player::STEP_SECONDS)
+            }
             Action::Left => {
                 self.window.child_focus(gtk::DirectionType::Left);
             }
@@ -272,9 +425,11 @@ impl App {
                 if let Some(playback) = self.playback.borrow().as_ref() {
                     playback.toggle_pause();
                 }
+                self.wake_controls();
             }
             Action::Activate => self.activate_focused(),
             Action::PlayPause => {}
+            Action::DirectionReleased => self.end_scrub(),
             Action::Back => self.go_back(),
             Action::Fullscreen => self.toggle_fullscreen(),
         }
@@ -350,6 +505,12 @@ impl App {
     }
 
     fn stop_playback(&self) {
+        if let Some(tick) = self.tick.borrow_mut().take() {
+            tick.remove();
+        }
+        if let Some(controls) = self.controls.borrow_mut().take() {
+            controls.cancel();
+        }
         if let Some(playback) = self.playback.borrow_mut().take() {
             playback.stop();
         }
@@ -772,7 +933,12 @@ impl App {
 
         match result {
             Ok(playback) => {
-                self.window.set_child(Some(playback.widget()));
+                let controls = Controls::new(playback.widget());
+                self.window.set_child(Some(controls.widget()));
+                controls.update(&playback);
+                controls.flash(false);
+                *self.controls.borrow_mut() = Some(controls);
+                self.start_tick();
                 self.window.set_title(Some(
                     &path
                         .file_name()
@@ -1105,6 +1271,16 @@ fn style_css(scale: f64) -> String {
             background-color: {highlight};
             opacity: 1;
         }}
+        /* Laid over the picture, so it sets its own colours rather than
+           inheriting theme ones that may be light. */
+        .tp-controls {{
+            background-color: rgba(0, 0, 0, 0.75);
+            padding: {pad_v}px {pad_h}px;
+        }}
+        .tp-time {{ font-size: {hint}px; color: #ffffff; }}
+        .tp-transport {{ -gtk-icon-size: {icon}px; color: #ffffff; }}
+        .tp-progress {{ min-height: {bar}px; }}
+        .tp-progress progress {{ background-color: {highlight}; }}
         .{video} {{ background-color: black; }}
         ",
         title = px(20.0),
@@ -1115,6 +1291,8 @@ fn style_css(scale: f64) -> String {
         pad_h = px(24.0),
         radius = px(8.0),
         section = px(28.0),
+        icon = px(24.0),
+        bar = px(6.0),
         // A literal colour rather than a theme name: GTK's named colours
         // differ between themes and libadwaita, and an undefined one makes
         // the whole declaration fail to parse — which silently leaves the

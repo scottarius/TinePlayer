@@ -30,9 +30,14 @@ Windows 11:
 - Video in a GTK 4 window, with pause/resume, fullscreen and resume-from-position
 - A menu-driven interface intended to be read from across a room
 - Configurable from the interface, from the command line, or both
+- Gamepad control throughout, including during playback
+- A timeline over the video showing position, duration and play state
 
-Not yet implemented: gamepad control and playback scrubbing. There are no
-packaged downloads yet either, so for now it is built from source.
+There are no packaged downloads yet, so for now it is built from source.
+
+Known issue: on Linux, seeking can leave one or both audio outputs silent for
+the rest of playback. Returning to the menu and playing again clears it.
+Windows is unaffected.
 
 ## Requirements
 
@@ -92,13 +97,22 @@ application is launched.
 
 ### Controls
 
-| Key | Action |
-| --- | --- |
-| Arrow keys | Move through the menu |
-| <kbd>Enter</kbd> | Select |
-| <kbd>Esc</kbd> | Back one level; from playback, return to the menu |
-| <kbd>Space</kbd> | Pause / resume during playback |
-| <kbd>F</kbd> | Toggle fullscreen |
+| Key | Gamepad | Action |
+| --- | --- | --- |
+| Arrow keys | D-pad or left stick | Move through the menu |
+| <kbd>Enter</kbd> | A / Cross | Select |
+| <kbd>Esc</kbd> | B / Circle | Back one level; from playback, return to the menu |
+| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume during playback |
+| <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Skip back / forward 10 seconds |
+| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
+
+Controllers are picked up whenever they are connected, including part-way
+through a session, and no configuration is needed. Gamepad input is read from
+the device rather than through the window, so it works regardless of what has
+keyboard focus.
+
+During playback a timeline appears over the video whenever you press
+something, and hides again a few seconds later. It stays up while paused.
 
 ### Command line
 

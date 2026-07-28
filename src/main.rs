@@ -8,6 +8,7 @@
 mod app;
 mod appearance;
 mod config;
+mod controls;
 mod devices;
 mod display;
 mod gamepad;

@@ -23,6 +23,9 @@ pub enum Action {
     Right,
     Activate,
     Back,
+    /// The held direction was let go. Playback uses it to end a scrub; the
+    /// menus ignore it.
+    DirectionReleased,
     PlayPause,
     Fullscreen,
 }
@@ -80,7 +83,11 @@ pub fn install<F: Fn(Action) + 'static>(handler: F) {
                 handler(action);
                 held = Some((action, now + REPEAT_DELAY));
             }
-            (None, _) => held = None,
+            (None, Some(_)) => {
+                held = None;
+                handler(Action::DirectionReleased);
+            }
+            (None, None) => {}
         }
 
         glib::ControlFlow::Continue

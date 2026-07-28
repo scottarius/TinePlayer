@@ -20,6 +20,28 @@ pub const VIDEO_CSS_CLASS: &str = "video-surface";
 /// rapid-fire toggling play/pause.
 const TOGGLE_DEBOUNCE: Duration = Duration::from_millis(300);
 
+/// One press moves this far. Long enough to clear a scene, short enough to
+/// tap repeatedly.
+pub const STEP_SECONDS: f64 = 10.0;
+
+/// How long a direction must be held before it scrubs rather than stepping.
+/// Comfortably longer than a deliberate tap and shorter than any key-repeat
+/// delay, so the two never get confused.
+const HOLD_THRESHOLD: Duration = Duration::from_millis(350);
+
+/// Seconds of film per second of holding, by how long it has been held.
+///
+/// Expressed as a rate rather than a step size on purpose: the movement is
+/// driven by a timer, so it stays smooth regardless of how fast the keyboard
+/// or controller happens to repeat. Raising the step size instead is what
+/// made the fast tiers lurch.
+const SCRUB_RATES: [(Duration, f64); 4] = [
+    (Duration::from_secs(0), 60.0),
+    (Duration::from_secs(2), 150.0),
+    (Duration::from_secs(4), 350.0),
+    (Duration::from_secs(6), 800.0),
+];
+
 /// An in-progress playback: the pipeline, plus the widget its video is
 /// drawn into. Single-threaded — every GTK callback runs on the main
 /// thread — so `Rc`/`Cell` rather than `Arc`/atomics.
@@ -37,6 +59,33 @@ pub struct Playback {
     finished: Cell<bool>,
     /// Dropping this removes the bus watch, so it has to outlive playback.
     bus_watch: RefCell<Option<gst::bus::BusWatchGuard>>,
+    /// Where seeking is heading.
+    ///
+    /// Repeated skips accumulate against this rather than against
+    /// `query_position`, which after a flushing seek still reports the old
+    /// position for a moment — so asking the pipeline each time makes a
+    /// second skip undo the first.
+    seek_target: Cell<Option<gst::ClockTime>>,
+    /// A flushing seek is in flight. Issuing another before the pipeline has
+    /// finished the first is what stalls playback, so they are queued.
+    seeking: Cell<bool>,
+    /// A seek arrived mid-seek and still needs performing.
+    seek_queued: Cell<bool>,
+    /// Where scrubbing has travelled to, before any seek is issued.
+    ///
+    /// Holding a direction moves this and nothing else, so the timeline runs
+    /// ahead while the pipeline carries on playing undisturbed. One seek is
+    /// performed when scrubbing settles. Seeks are the expensive and fragile
+    /// operation here, so the fewer of them a gesture costs, the better.
+    scrub: Cell<Option<gst::ClockTime>>,
+    /// Where scrubbing began, which is where a tap steps from.
+    scrub_origin: Cell<Option<gst::ClockTime>>,
+    scrub_started: Cell<Option<Instant>>,
+    /// Sign of the direction being held.
+    scrub_direction: Cell<f64>,
+    /// Whether the hold lasted long enough to actually travel. A press that
+    /// ends before it does is a tap, and steps instead.
+    scrubbed: Cell<bool>,
 }
 
 impl Playback {
@@ -72,6 +121,14 @@ impl Playback {
             reached_eos: Cell::new(false),
             finished: Cell::new(false),
             bus_watch: RefCell::new(None),
+            seek_target: Cell::new(None),
+            seeking: Cell::new(false),
+            seek_queued: Cell::new(false),
+            scrub: Cell::new(None),
+            scrub_origin: Cell::new(None),
+            scrub_started: Cell::new(None),
+            scrub_direction: Cell::new(0.0),
+            scrubbed: Cell::new(false),
         });
 
         let bus = pipeline.bus().ok_or("pipeline has no bus")?;
@@ -87,6 +144,17 @@ impl Playback {
                     MessageView::Error(err) => {
                         eprintln!("Error: {} ({:?})", err.error(), err.debug());
                         on_ended();
+                    }
+                    // Posted when a flushing seek has finished settling.
+                    // Also fires after the initial preroll, which harmlessly
+                    // finds nothing queued.
+                    MessageView::AsyncDone(_) => {
+                        playback.seeking.set(false);
+                        if playback.seek_queued.replace(false) {
+                            playback.run_seek();
+                        } else {
+                            playback.seek_target.set(None);
+                        }
                     }
                     MessageView::Warning(warn) => {
                         eprintln!(
@@ -134,6 +202,131 @@ impl Playback {
 
     pub fn widget(&self) -> &gtk::Picture {
         &self.picture
+    }
+
+    /// Where playback is, or is about to be. Reporting the seek target while
+    /// one is in flight keeps the timeline moving with each press instead of
+    /// freezing until the pipeline catches up.
+    pub fn position(&self) -> Option<gst::ClockTime> {
+        self.scrub
+            .get()
+            .or_else(|| self.seek_target.get())
+            .or_else(|| self.pipeline.query_position::<gst::ClockTime>())
+    }
+
+    /// Queried on demand rather than cached at startup: a file whose header
+    /// carries no duration only reports one once enough has been parsed.
+    pub fn duration(&self) -> Option<gst::ClockTime> {
+        self.pipeline.query_duration::<gst::ClockTime>()
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.playing.get()
+    }
+
+    /// Notes that a direction is being held. Moves nothing by itself.
+    ///
+    /// Whether this is a tap or a hold is not yet knowable, and guessing is
+    /// what made the old behaviour unpleasant: it jumped ten seconds on press
+    /// and then had to take it back. Nothing moves until either enough time
+    /// passes to call it a hold, or the release arrives and calls it a tap.
+    pub fn scrub_input(&self, seconds: f64) {
+        if self.scrub_started.get().is_none() {
+            self.scrub_started.set(Some(Instant::now()));
+            self.scrub_origin.set(self.position());
+            self.scrubbed.set(false);
+        }
+        self.scrub_direction.set(seconds.signum());
+    }
+
+    /// Advances scrubbing by one frame's worth of travel.
+    pub fn scrub_tick(&self, elapsed: Duration) {
+        let Some(started) = self.scrub_started.get() else {
+            return;
+        };
+        let held = started.elapsed();
+        if held < HOLD_THRESHOLD {
+            return;
+        }
+
+        let rate = SCRUB_RATES
+            .iter()
+            .rev()
+            .find(|(after, _)| held >= *after)
+            .map(|(_, rate)| *rate)
+            .unwrap_or(SCRUB_RATES[0].1);
+
+        let Some(from) = self.scrub.get().or_else(|| self.position()) else {
+            return;
+        };
+        let delta = rate * elapsed.as_secs_f64() * self.scrub_direction.get();
+        self.scrub.set(Some(self.offset(from, delta)));
+        self.scrubbed.set(true);
+    }
+
+    pub fn is_scrubbing(&self) -> bool {
+        self.scrub_started.get().is_some()
+    }
+
+    /// `from` moved by `seconds`, kept inside the file. Landing exactly on
+    /// the end would finish it, which is a surprising outcome for scrubbing
+    /// forward, so it stops just short.
+    fn offset(&self, from: gst::ClockTime, seconds: f64) -> gst::ClockTime {
+        let delta = (seconds * gst::ClockTime::SECOND.nseconds() as f64) as i64;
+        let mut target = (from.nseconds() as i64).saturating_add(delta).max(0) as u64;
+        if let Some(duration) = self.duration() {
+            target = target.min(
+                duration
+                    .nseconds()
+                    .saturating_sub(gst::ClockTime::SECOND.nseconds()),
+            );
+        }
+        gst::ClockTime::from_nseconds(target)
+    }
+
+    /// Performs the one seek the gesture asked for: to wherever scrubbing
+    /// travelled, or one step along if it turned out to be a tap.
+    pub fn commit_scrub(&self) {
+        let scrubbed = self.scrubbed.replace(false);
+        let direction = self.scrub_direction.replace(0.0);
+        let origin = self.scrub_origin.take();
+        let travelled = self.scrub.take();
+        self.scrub_started.set(None);
+
+        let target = if scrubbed {
+            travelled
+        } else {
+            origin.map(|origin| self.offset(origin, STEP_SECONDS * direction))
+        };
+        let Some(target) = target else {
+            return;
+        };
+        self.seek_target.set(Some(target));
+
+        if self.seeking.get() {
+            self.seek_queued.set(true);
+        } else {
+            self.run_seek();
+        }
+    }
+
+    fn run_seek(&self) {
+        let Some(target) = self.seek_target.get() else {
+            return;
+        };
+        // KEY_UNIT rather than ACCURATE: seeking to the nearest keyframe is
+        // near-instant, where an exact seek has to decode forward from one
+        // and stalls noticeably on a Pi.
+        match self
+            .pipeline
+            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT, target)
+        {
+            Ok(()) => self.seeking.set(true),
+            Err(e) => {
+                eprintln!("Seek failed: {e}");
+                self.seek_target.set(None);
+            }
+        }
     }
 
     pub fn toggle_pause(&self) {
