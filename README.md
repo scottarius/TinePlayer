@@ -43,15 +43,12 @@ device from a single pipeline, staying in sync because it is all one clock.
 
 ## Known issues
 
-- On Linux, seeking can leave one or both audio outputs silent for the rest of
-  playback. Returning to the menu and playing again clears it. Windows is
-  unaffected.
-- Blu-ray PGS subtitles cannot be shown. No decoder for them ships with
-  GStreamer, so they are left out of the subtitle list rather than offered and
-  silently drawn as nothing. Subtitle files beside the video are unaffected.
-- On Windows, switching from the dark theme back to light needs the
-  application to restart, which it offers to do. GTK there will change to dark
-  but not back. Linux switches immediately.
+- On Linux, seeking can silence an audio output for the rest of playback.
+  Returning to the menu and playing again clears it.
+- Blu-ray PGS subtitles cannot be shown: GStreamer ships no decoder for them,
+  so they are left out of the list rather than drawn as nothing.
+- On Windows, switching from dark back to light needs a restart, which the
+  application offers to do. GTK there changes to dark but not back.
 - No packaged downloads yet, so it has to be built from source.
 
 ## Requirements
@@ -102,21 +99,13 @@ Run it with no arguments, or by double-clicking the executable:
 ./target/release/TinePlayer
 ```
 
-Everything is chosen from one menu: the video, which output devices to use,
-which audio track goes to each, and the subtitles. Output devices are
-remembered, as are each video's own track and subtitle choices and where you
-stopped watching it.
-
-Choosing a video opens a built-in file browser, which works from a controller
-like the rest of the interface. A button in its top corner opens the system
-file dialog instead, for when a pointer is to hand and typing a path is
-quicker.
-
-Settings live in the per-user config directory (`~/.config/tineplayer/` on
-Linux, `%LOCALAPPDATA%\tineplayer\` on Windows), so they apply however the
-application is launched.
+Everything is chosen from one menu: the video, the output devices, the audio
+track for each, and the subtitles. Choosing a video opens a built-in browser;
+a button in its top corner opens the system dialog instead.
 
 ### Controls
+
+Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse.
 
 | Key | Gamepad | Action |
 | --- | --- | --- |
@@ -128,51 +117,55 @@ application is launched.
 | <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
 | <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
 
-Controllers are picked up whenever they are connected, including part-way
-through a session, and no configuration is needed.
-
-During playback a strip appears over the video whenever you press or move
-something, and hides again a few seconds later. It stays up while paused. Its
-controls can be clicked as well: play and pause, the position bar to seek, and
-a fullscreen toggle. Double-clicking the picture toggles fullscreen too, and a
-video file can be dropped onto the window at any time to load it.
-
 ### Command line
 
 Any of the menu choices can be given up front, which skips straight to
-playback:
+playback. Track numbers are those `--list-tracks` prints.
+
+| Option            | Meaning                                                        |
+|-------------------|----------------------------------------------------------------|
+| `FILE`            | Path to the video to play. Omit it to choose one in the window |
+| `--primary <N>`   | Audio track for the primary output. `0` for no audio there     |
+| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there   |
+| `--list-tracks`   | Print the file's audio tracks with their numbers, then exit    |
+| `--restart`       | Start video from the beginning, ignoring any saved position    |
+| `--fullscreen`    | Start fullscreen                                               |
+| `-V`, `--version` | Print the version                                              |
+| `-h`, `--help`    | Print help                                                     |
 
 ```sh
-TinePlayer --list-tracks video.mkv          # show track numbers
-TinePlayer video.mkv --primary 5 --secondary 1
-TinePlayer video.mkv --fullscreen --restart
+TinePlayer --list-tracks video.mkv
+TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
 ```
 
-Track numbers match what `--list-tracks` prints; `0` means no audio on that
-output.
+### Configuration
 
-### Appearance
+Everything in the settings menu is stored in `config.yaml`, which can also be
+edited directly. It lives in the per-user config directory
+(`~/.config/tineplayer/` on Linux, `%LOCALAPPDATA%\tineplayer\` on Windows).
 
-The interface is sized to be read from across a room, and scales itself to the
-display it opens on: a 4K screen gets twice the size a 1080p one does, so the
-menu stays the same size to the eye rather than shrinking as resolution grows.
-Displays a compositor is already scaling are left alone, since the scaling has
-happened once already.
+| Setting                       | Key                  | Default     | Meaning                                                                                            |
+|-------------------------------|----------------------|-------------|----------------------------------------------------------------------------------------------------|
+| Theme                         | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                          |
+| Interface Size                | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>Unset scales automatically to the display resolution           |
+| Navigation Sounds             | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                               |
+| Primary Audio Device          | `primary_sink`       | Unset       | Primary output device name. Required                                                               |
+| Primary Language Preference   | `primary_language`   | Unset       | Preferred primary language, such as `en` <br/>Unset defaults to the first track, see list below    |
+| Secondary Audio Device        | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                 |
+| Secondary Language Preference | `secondary_language` | Unset       | Preferred secondary language, such as `en` <br/>Unset defaults to the second track, see list below |
+| Subtitle Language             | `subtitle_language`  | Unset       | Preferred subtitle language, such as `en` <br/>Unset shows no subtitles, see list below            |
+| Subtitle Size                 | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's                                        |
+| Subtitle Font                 | `subtitle_font`      | `Sans Bold` | Font Family and style name                                                                         |
 
-Set `ui_scale` in the config file to pin the size instead, and the automatic
-sizing stops. Navigation sounds can be turned off with `sounds: false`.
+Languages are `en`, `ru`, `es`, `fr`, `de`, `it`, `pt`, `nl`, `pl`, `uk`,
+`cs`, `sv`, `no`, `da`, `fi`, `hu`, `tr`, `el`, `he`, `ar`, `hi`, `ja`, `ko`
+and `zh`.
 
-`theme` chooses `auto`, `light` or `dark`. Auto follows the desktop, and uses
-dark when the desktop has no preference or cannot be asked, which is common on
-the minimal desktops a media machine tends to run.
+Only the leading letters are compared, so `en` matches a track tagged `eng` or
+`en-US`, and a subtitle file named `film.en.hi.srt`.
 
-All of this is also reachable from the gear at the bottom of the menu, along
-with preferred languages, subtitle size and font, and a way to forget every
-saved playback position.
-
-`subtitle_size` is in points against the video's own resolution rather than
-the screen's, so one value holds on any display. `subtitle_font` takes a font
-family and style, such as `Sans Bold`.
+Each video's position, track and subtitle choices are kept separately, in
+`positions.json`.
 
 ## Compatibility
 
