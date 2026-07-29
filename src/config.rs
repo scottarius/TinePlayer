@@ -49,6 +49,14 @@ pub struct Config {
     pub ui_scale: Option<f64>,
     #[serde(default)]
     pub theme: Theme,
+    /// Pango description for rendered subtitles, e.g. "Sans Bold 28".
+    ///
+    /// Set because the default resolves to a serif face, which is a poor
+    /// choice over moving pictures. The size is in points against the video's
+    /// own resolution, not the screen's: subtitles are drawn into the frame
+    /// and then scaled up with it, so this stays right on any display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_font: Option<String>,
     /// Reopened on the next run, so the menu comes back where you left it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_video: Option<PathBuf>,
@@ -74,6 +82,7 @@ impl Default for Config {
             secondary_sink: None,
             ui_scale: None,
             theme: Theme::default(),
+            subtitle_font: None,
             last_video: None,
             fullscreen: false,
             sounds: default_sounds(),
@@ -150,7 +159,7 @@ const RESUME_THRESHOLD_NS: u64 = 10_000_000_000;
 /// the file, not of the machine. Picking up a film you were halfway through
 /// should restore the languages you had chosen for it, not the ones you last
 /// used on something else.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Resume {
     #[serde(default)]
     pub position_ns: u64,
@@ -164,10 +173,14 @@ pub struct Resume {
     pub tracks: Option<TrackChoice>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TrackChoice {
     pub primary: Option<u32>,
     pub secondary: Option<u32>,
+    /// Independent of the audio pair: subtitles may be a third language
+    /// again, or the same as one of them.
+    #[serde(default)]
+    pub subtitle: Option<crate::subtitles::SubtitleChoice>,
 }
 
 impl Resume {
@@ -211,7 +224,7 @@ fn save_all(entries: &std::collections::HashMap<String, Resume>) {
 }
 
 pub fn load_resume(path: &Path) -> Option<Resume> {
-    load_all().get(&path.to_string_lossy().to_string()).copied()
+    load_all().get(&path.to_string_lossy().to_string()).cloned()
 }
 
 /// Applies `edit` to a file's entry, creating it if there isn't one.
@@ -236,8 +249,17 @@ pub fn clear_position(path: &Path) {
     update(path, |entry| entry.position_ns = 0);
 }
 
-pub fn save_tracks(path: &Path, primary: Option<u32>, secondary: Option<u32>) {
+pub fn save_tracks(
+    path: &Path,
+    primary: Option<u32>,
+    secondary: Option<u32>,
+    subtitle: Option<crate::subtitles::SubtitleChoice>,
+) {
     update(path, |entry| {
-        entry.tracks = Some(TrackChoice { primary, secondary });
+        entry.tracks = Some(TrackChoice {
+            primary,
+            secondary,
+            subtitle,
+        });
     });
 }

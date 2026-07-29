@@ -95,11 +95,12 @@ impl Playback {
         path: &Path,
         primary_track: Option<u32>,
         secondary_track: Option<u32>,
+        subtitle: Option<&crate::subtitles::SubtitleChoice>,
         config: &Config,
         restart: bool,
         on_ended: impl Fn() + 'static,
     ) -> Result<Rc<Self>, String> {
-        let pipeline = build_pipeline(path, primary_track, secondary_track, config)?;
+        let pipeline = build_pipeline(path, primary_track, secondary_track, subtitle, config)?;
 
         // gtk4paintablesink renders into a GdkPaintable rather than creating
         // its own window; handing that to a gtk::Picture is what embeds the

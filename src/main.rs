@@ -16,6 +16,7 @@ mod pipeline;
 mod player;
 mod probe;
 mod sound;
+mod subtitles;
 
 use std::path::PathBuf;
 

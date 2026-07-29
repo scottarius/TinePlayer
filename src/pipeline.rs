@@ -7,12 +7,26 @@ use gstreamer as gst;
 
 use crate::config::Config;
 use crate::devices::find_audio_output_device;
+use crate::subtitles::SubtitleChoice;
+
+/// Pango leaves the family unspecified by default, which resolves to a serif
+/// face. Bold with the renderer's black outline is what stays legible against
+/// a moving picture.
+///
+/// The number is smaller than it looks: the renderer scales the font by the
+/// video's width, so on a 1080p frame this size draws text 46 pixels tall,
+/// about 4.3% of the frame height. Measured, because the same description at
+/// 24 came out at 93 pixels and dominated the picture.
+const DEFAULT_SUBTITLE_FONT: &str = "Sans Bold 12";
 
 /// What a stream was selected for, recorded when decodebin3 asks whether to
 /// expose it and read back when its pad actually appears.
 #[derive(Clone, Copy)]
 enum Target {
     Video,
+    /// A subtitle stream inside the file. Only one is ever selected, so
+    /// unlike audio there is no index to route by.
+    Subtitle,
     /// Index among the file's audio streams, matching what `--list-tracks`
     /// prints.
     Audio(u32),
@@ -22,6 +36,8 @@ enum Target {
 struct Targets {
     video: gst::Element,
     audio: HashMap<u32, gst::Element>,
+    /// The overlay subtitles are drawn by, when there are any.
+    subtitle: Option<gst::Element>,
 }
 
 /// Builds the playback pipeline for `path`.
@@ -60,6 +76,7 @@ pub fn build_pipeline(
     path: &Path,
     primary_track: Option<u32>,
     secondary_track: Option<u32>,
+    subtitle: Option<&SubtitleChoice>,
     config: &Config,
 ) -> Result<gst::Pipeline, String> {
     let pipeline = gst::Pipeline::new();
@@ -76,7 +93,17 @@ pub fn build_pipeline(
     src.link(&decode)
         .map_err(|_| "Failed to link source to decoder".to_string())?;
 
-    let video_head = build_video_branch(&pipeline)?;
+    let font = config
+        .subtitle_font
+        .as_deref()
+        .unwrap_or(DEFAULT_SUBTITLE_FONT);
+    let (video_head, overlay) = build_video_branch(&pipeline, subtitle.is_some(), font)?;
+
+    // A subtitle file beside the video is its own small source chain, fed
+    // into the same overlay an embedded stream would use.
+    if let (Some(SubtitleChoice::External(file)), Some(overlay)) = (subtitle, overlay.as_ref()) {
+        attach_external_subtitle(&pipeline, overlay, file)?;
+    }
 
     // Grouped by track so that one decoded stream can feed two outputs
     // instead of being decoded twice.
@@ -94,15 +121,20 @@ pub fn build_pipeline(
     }
 
     let wanted: Vec<u32> = roles_by_track.keys().copied().collect();
+    let wanted_subtitle = match subtitle {
+        Some(SubtitleChoice::Embedded(index)) => Some(*index),
+        _ => None,
+    };
     let targets = Arc::new(Targets {
         video: video_head,
         audio: audio_heads,
+        subtitle: overlay,
     });
     // Written by select-stream on a streaming thread and read by pad-added on
     // another, hence Mutex rather than RefCell.
     let selected: Arc<Mutex<HashMap<String, Target>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    connect_stream_selection(&decode, wanted, selected.clone());
+    connect_stream_selection(&decode, wanted, wanted_subtitle, selected.clone());
     connect_pad_added(&decode, targets, selected);
 
     // With two audio sinks, GStreamer's default clock election would pick one
@@ -133,7 +165,18 @@ fn make(factory: &str) -> Result<gst::Element, String> {
 }
 
 /// Returns the element a decoded video pad should link into.
-fn build_video_branch(pipeline: &gst::Pipeline) -> Result<gst::Element, String> {
+/// Returns the element a decoded video pad links into, and the overlay
+/// subtitles are drawn by when there are any.
+///
+/// `subtitleoverlay` chooses its own parser and renderer from whatever
+/// arrives on its subtitle pad, so text, ASS and DVD subtitles all reach it
+/// through the same wiring. It sits on the video branch, so it runs off the
+/// same clock as the picture and adds no separate timing to keep in step.
+fn build_video_branch(
+    pipeline: &gst::Pipeline,
+    with_subtitles: bool,
+    font: &str,
+) -> Result<(gst::Element, Option<gst::Element>), String> {
     let queue = make("queue")?;
     let convert = make("videoconvert")?;
     let sink = gst::ElementFactory::make("gtk4paintablesink")
@@ -144,10 +187,54 @@ fn build_video_branch(pipeline: &gst::Pipeline) -> Result<gst::Element, String> 
     pipeline
         .add_many([&queue, &convert, &sink])
         .map_err(|e| e.to_string())?;
-    gst::Element::link_many([&queue, &convert, &sink])
+
+    if !with_subtitles {
+        gst::Element::link_many([&queue, &convert, &sink])
+            .map_err(|_| "Failed to link video branch".to_string())?;
+        return Ok((queue, None));
+    }
+
+    let overlay = make("subtitleoverlay")?;
+    overlay.set_property("font-desc", font);
+    // Converted again afterwards: the overlay may hand on a different format
+    // from the one it was given.
+    let after = make("videoconvert")?;
+    pipeline
+        .add_many([&overlay, &after])
+        .map_err(|e| e.to_string())?;
+    gst::Element::link_many([&queue, &convert, &overlay, &after, &sink])
         .map_err(|_| "Failed to link video branch".to_string())?;
 
-    Ok(queue)
+    Ok((queue, Some(overlay)))
+}
+
+/// `filesrc ! subparse` rather than handing the file straight to the overlay:
+/// established by experiment that the overlay cannot preroll from an unparsed
+/// file, having no way to tell what format it has been given.
+fn attach_external_subtitle(
+    pipeline: &gst::Pipeline,
+    overlay: &gst::Element,
+    file: &Path,
+) -> Result<(), String> {
+    let src = make("filesrc")?;
+    src.set_property("location", file.to_string_lossy().to_string());
+    let parse = make("subparse")?;
+
+    pipeline
+        .add_many([&src, &parse])
+        .map_err(|e| e.to_string())?;
+    src.link(&parse)
+        .map_err(|_| "Failed to link subtitle file".to_string())?;
+
+    let sink_pad = overlay
+        .static_pad("subtitle_sink")
+        .ok_or("subtitleoverlay has no subtitle pad")?;
+    parse
+        .static_pad("src")
+        .ok_or("subparse has no src pad")?
+        .link(&sink_pad)
+        .map_err(|e| format!("Failed to attach subtitles: {e}"))?;
+    Ok(())
 }
 
 /// Builds the output chain(s) fed by one audio stream and returns the element
@@ -234,6 +321,7 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
 fn connect_stream_selection(
     decode: &gst::Element,
     wanted: Vec<u32>,
+    wanted_subtitle: Option<u32>,
     selected: Arc<Mutex<HashMap<String, Target>>>,
 ) {
     decode.connect("select-stream", false, move |values| {
@@ -271,6 +359,17 @@ fn connect_stream_selection(
                 }
                 _ => 0,
             }
+        } else if kind.contains(gst::StreamType::TEXT) {
+            match ordinal(&collection, &id, gst::StreamType::TEXT) {
+                Some(index) if Some(index) == wanted_subtitle => {
+                    selected
+                        .lock()
+                        .unwrap()
+                        .insert(id.to_string(), Target::Subtitle);
+                    1
+                }
+                _ => 0,
+            }
         } else {
             0
         };
@@ -296,12 +395,13 @@ fn connect_pad_added(
             return;
         };
 
-        let head = match target {
-            Target::Video => Some(&targets.video),
-            Target::Audio(track) => targets.audio.get(&track),
+        let (head, pad_name) = match target {
+            Target::Video => (Some(&targets.video), "sink"),
+            Target::Audio(track) => (targets.audio.get(&track), "sink"),
+            Target::Subtitle => (targets.subtitle.as_ref(), "subtitle_sink"),
         };
         let Some(head) = head else { return };
-        let Some(sink_pad) = head.static_pad("sink") else {
+        let Some(sink_pad) = head.static_pad(pad_name) else {
             return;
         };
         if let Err(e) = pad.link(&sink_pad) {

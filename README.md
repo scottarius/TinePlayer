@@ -30,6 +30,8 @@ device from a single pipeline, staying in sync because it is all one clock.
 - Standard playback controls, shown over the video
 - Remembers the playback position for each video and resumes there
 - Interface large enough to use from the couch, with gamepad support
+- Subtitles, either embedded in the video or from a subtitle file beside it,
+  chosen separately from the two audio tracks
 - Remembers your output devices
 - Command-line arguments to launch straight into a video
 
@@ -38,6 +40,9 @@ device from a single pipeline, staying in sync because it is all one clock.
 - On Linux, seeking can leave one or both audio outputs silent for the rest of
   playback. Returning to the menu and playing again clears it. Windows is
   unaffected.
+- Blu-ray PGS subtitles cannot be shown. No decoder for them ships with
+  GStreamer, so they are left out of the subtitle list rather than offered and
+  silently drawn as nothing. Subtitle files beside the video are unaffected.
 - No packaged downloads yet, so it has to be built from source.
 
 ## Requirements

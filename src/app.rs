@@ -11,8 +11,9 @@ use crate::config::Config;
 use crate::controls::Controls;
 use crate::devices::list_audio_output_devices;
 use crate::player::Playback;
-use crate::probe::{AudioTrack, probe_audio_tracks};
+use crate::probe::AudioTrack;
 use crate::sound::Sounds;
+use crate::subtitles::{Subtitle, SubtitleChoice};
 
 /// Which setting a chooser screen is editing. The menu drills into one of
 /// these and returns once a choice is made.
@@ -22,11 +23,12 @@ enum Setting {
     PrimaryTrack,
     SecondaryDevice,
     SecondaryTrack,
+    Subtitles,
 }
 
 /// Menu rows that begin a new group: the primary pair and the secondary
 /// pair each get separating space above them.
-const SECTION_STARTS: [i32; 2] = [1, 3];
+const SECTION_STARTS: [i32; 3] = [1, 3, 5];
 
 /// How long scrubbing must be still before the seek is actually performed.
 /// Short enough to feel like it happens on release, long enough to bridge the
@@ -60,6 +62,10 @@ pub struct App {
     tracks: RefCell<Vec<AudioTrack>>,
     primary_track: RefCell<Option<u32>>,
     secondary_track: RefCell<Option<u32>>,
+    /// Everything on offer for the current file: streams inside it, then
+    /// subtitle files sitting beside it.
+    subtitle_options: RefCell<Vec<Subtitle>>,
+    subtitle: RefCell<Option<SubtitleChoice>>,
     playback: RefCell<Option<Rc<Playback>>>,
     screen: RefCell<Screen>,
     /// Restored when returning from a chooser, so the menu comes back with
@@ -147,6 +153,8 @@ impl App {
             tracks: RefCell::new(Vec::new()),
             primary_track: RefCell::new(None),
             secondary_track: RefCell::new(None),
+            subtitle_options: RefCell::new(Vec::new()),
+            subtitle: RefCell::new(None),
             playback: RefCell::new(None),
             screen: RefCell::new(Screen::Menu),
             menu_row: RefCell::new(0),
@@ -544,7 +552,7 @@ impl App {
 
         let has_file = file.is_some();
         let has_secondary = config.secondary_sink.is_some();
-        let rows: Vec<(String, String, bool)> = vec![
+        let mut rows: Vec<(String, String, bool)> = vec![
             (
                 "Video".to_string(),
                 file.as_ref()
@@ -587,6 +595,11 @@ impl App {
                 has_file && has_secondary,
             ),
         ];
+        // Its own section rather than sitting with the audio pair: the
+        // subtitle language is an independent choice, and may be a third
+        // language again or a repeat of either soundtrack.
+        rows.push(("Subtitles".to_string(), self.describe_subtitle(), has_file));
+
         let can_play = has_file && config.primary_sink.is_some();
         drop(tracks);
         drop(config);
@@ -655,6 +668,7 @@ impl App {
                     2 => app.show_chooser(Setting::PrimaryTrack),
                     3 => app.show_chooser(Setting::SecondaryDevice),
                     4 => app.show_chooser(Setting::SecondaryTrack),
+                    5 => app.show_chooser(Setting::Subtitles),
                     _ => {}
                 }
             });
@@ -692,6 +706,7 @@ impl App {
             Setting::PrimaryTrack => "Primary Audio Track",
             Setting::SecondaryDevice => "Secondary Audio Device",
             Setting::SecondaryTrack => "Secondary Audio Track",
+            Setting::Subtitles => "Subtitles",
         };
         let (page, list, back) = list_page(title, true);
 
@@ -711,6 +726,12 @@ impl App {
                         }
                     }
                     Err(e) => entries.push((format!("Error: {e}"), None)),
+                }
+            }
+            Setting::Subtitles => {
+                entries.push(("None".to_string(), None));
+                for (position, option) in self.subtitle_options.borrow().iter().enumerate() {
+                    entries.push((option.label().to_string(), Some(position)));
                 }
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
@@ -830,7 +851,21 @@ impl App {
             &path,
             *self.primary_track.borrow(),
             *self.secondary_track.borrow(),
+            self.subtitle.borrow().clone(),
         );
+    }
+
+    /// What the menu shows against the Subtitles row.
+    fn describe_subtitle(&self) -> String {
+        let Some(chosen) = self.subtitle.borrow().clone() else {
+            return "None".to_string();
+        };
+        self.subtitle_options
+            .borrow()
+            .iter()
+            .find(|option| option.choice() == chosen)
+            .map(|option| option.label().to_string())
+            .unwrap_or_else(|| "None".to_string())
     }
 
     fn apply_choice(self: &Rc<Self>, setting: Setting, choice: Option<usize>) {
@@ -884,6 +919,15 @@ impl App {
                     };
                     *self.sounds.borrow_mut() = Sounds::new(enabled, device);
                 }
+            }
+            Setting::Subtitles => {
+                let options = self.subtitle_options.borrow();
+                let picked = choice
+                    .and_then(|index| options.get(index))
+                    .map(|o| o.choice());
+                drop(options);
+                *self.subtitle.borrow_mut() = picked;
+                self.remember_tracks();
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
                 let tracks = self.tracks.borrow();
@@ -957,20 +1001,24 @@ impl App {
     /// otherwise the first track goes to the primary output and a different
     /// one to the secondary, which is the whole point of the application.
     fn set_file(self: &Rc<Self>, path: &std::path::Path) {
-        let tracks = match probe_audio_tracks(path) {
-            Ok(tracks) => tracks,
+        let media = match crate::probe::probe_media(path) {
+            Ok(media) => media,
             Err(e) => {
                 eprintln!("Couldn't read {}: {e}", path.display());
                 *self.tracks.borrow_mut() = Vec::new();
+                *self.subtitle_options.borrow_mut() = Vec::new();
                 *self.primary_track.borrow_mut() = None;
                 *self.secondary_track.borrow_mut() = None;
+                *self.subtitle.borrow_mut() = None;
                 *self.file.borrow_mut() = None;
                 return;
             }
         };
+        let tracks = media.audio;
+        let options = crate::subtitles::options(path, &media.subtitles);
 
         let saved = crate::config::load_resume(path).and_then(|resume| resume.tracks);
-        let (primary, secondary) = match saved {
+        let (primary, secondary) = match saved.clone() {
             // A saved None is a real choice ("no audio on that output"), so a
             // saved pair is taken as it stands rather than filled in.
             Some(choice) => (choice.primary, choice.secondary),
@@ -990,6 +1038,13 @@ impl App {
             // produces a pipeline that fails to build.
             None
         };
+        // Only kept if it still resolves: an embedded stream the file no
+        // longer has, or a subtitle file since deleted, quietly reverts to
+        // none rather than failing when play is pressed.
+        *self.subtitle.borrow_mut() = saved
+            .and_then(|choice| choice.subtitle)
+            .filter(|choice| options.iter().any(|option| option.choice() == *choice));
+        *self.subtitle_options.borrow_mut() = options;
         *self.tracks.borrow_mut() = tracks;
         *self.file.borrow_mut() = Some(path.to_path_buf());
 
@@ -1014,7 +1069,8 @@ impl App {
         } else {
             None
         };
-        crate::config::save_tracks(&path, primary, secondary);
+        let subtitle = self.subtitle.borrow().clone();
+        crate::config::save_tracks(&path, primary, secondary, subtitle.clone());
 
         let app = self.clone();
         let on_ended = move || {
@@ -1026,6 +1082,7 @@ impl App {
             &path,
             primary,
             secondary,
+            subtitle.as_ref(),
             &self.config.borrow(),
             restart,
             on_ended,
