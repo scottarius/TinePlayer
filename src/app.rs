@@ -207,7 +207,7 @@ impl App {
                 };
                 *app.primary_track.borrow_mut() = resolve(primary);
                 *app.secondary_track.borrow_mut() = resolve(secondary);
-                app.start_playback();
+                app.start_playback(app.restart);
             }
             _ => app.show_menu(),
         }
@@ -387,11 +387,16 @@ impl App {
     }
 
     fn toggle_fullscreen(&self) {
-        if self.window.is_fullscreen() {
-            self.window.unfullscreen();
-        } else {
+        let wanted = !self.window.is_fullscreen();
+        if wanted {
             self.window.fullscreen();
+        } else {
+            self.window.unfullscreen();
         }
+
+        let mut config = self.config.borrow_mut();
+        config.fullscreen = wanted;
+        let _ = config.save();
     }
 
     /// Records what the gamepad should be moving through. Screens built from
@@ -602,10 +607,42 @@ impl App {
 
         // Pinned below the scrolling list so it stays reachable however
         // long the list gets.
-        let play = gtk::Button::with_label("▶  Play");
-        play.add_css_class("tp-play");
-        play.set_sensitive(can_play);
-        page.append(&play);
+        let resume_at = file
+            .as_deref()
+            .and_then(crate::config::load_resume)
+            .and_then(|resume| resume.resume_position());
+        let resumable = resume_at.is_some();
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(16)
+            .homogeneous(true)
+            .build();
+        let mut footer = Vec::new();
+
+        // Resuming is the common case for a part-watched film, so it takes
+        // the first position and the focus. Starting over is deliberate
+        // enough to be worth its own button rather than a hidden modifier.
+        if let Some(position) = resume_at {
+            let resume = format!(
+                "▶  Resume {}",
+                crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
+            );
+            for label in [resume.as_str(), "↻  Restart"] {
+                let button = gtk::Button::with_label(label);
+                button.add_css_class("tp-play");
+                button.set_sensitive(can_play);
+                buttons.append(&button);
+                footer.push(button);
+            }
+        } else {
+            let play = gtk::Button::with_label("▶  Play");
+            play.add_css_class("tp-play");
+            play.set_sensitive(can_play);
+            buttons.append(&play);
+            footer.push(play);
+        }
+        page.append(&buttons);
 
         {
             let app = self.clone();
@@ -622,15 +659,18 @@ impl App {
                 }
             });
         }
-        {
+        for (index, button) in footer.iter().enumerate() {
+            // With two buttons the second one restarts; with one it plays
+            // from wherever it left off, which for a fresh file is the start.
+            let restart = resumable && index == 1;
             let app = self.clone();
-            play.connect_clicked(move |_| {
+            button.connect_clicked(move |_| {
                 app.sounds.borrow().click();
-                app.start_playback();
+                app.start_playback(restart);
             });
         }
 
-        self.wire_navigation(&list, Some(&play));
+        self.wire_navigation(&list, &footer);
 
         *self.screen.borrow_mut() = Screen::Menu;
         self.window.set_child(Some(&page));
@@ -702,7 +742,7 @@ impl App {
             back.connect_clicked(move |_| app.show_menu());
         }
 
-        self.wire_navigation(&list, None);
+        self.wire_navigation(&list, &[]);
 
         *self.screen.borrow_mut() = Screen::Chooser;
         self.window.set_child(Some(&page));
@@ -717,12 +757,14 @@ impl App {
     /// otherwise the button is unreachable without a pointer. Movements
     /// that would go past either end are swallowed, which also stops GTK
     /// reporting them as failed navigation.
-    fn wire_navigation(self: &Rc<Self>, list: &gtk::ListBox, footer: Option<&gtk::Button>) {
-        self.set_nav(Some(list), footer);
+    fn wire_navigation(self: &Rc<Self>, list: &gtk::ListBox, footer: &[gtk::Button]) {
+        // Only the first is recorded: it is what Down from the last row lands
+        // on, and left and right move between them from there.
+        self.set_nav(Some(list), footer.first());
         {
             let app = self.clone();
             let list_weak = list.downgrade();
-            let footer = footer.map(|b| b.downgrade());
+            let footer = footer.first().map(|b| b.downgrade());
             let controller = gtk::EventControllerKey::new();
             controller.connect_key_pressed(move |_, key, _, _| {
                 let Some(list) = list_weak.upgrade() else {
@@ -754,7 +796,9 @@ impl App {
             list.add_controller(controller);
         }
 
-        if let Some(button) = footer {
+        // Wired on every button, so Up returns to the list from whichever
+        // one happens to hold focus.
+        for button in footer {
             let app = self.clone();
             let list_weak = list.downgrade();
             let controller = gtk::EventControllerKey::new();
@@ -776,6 +820,19 @@ impl App {
         }
     }
 
+    /// Writes the current track pair against the current file, so a choice
+    /// survives even if the file is never played.
+    fn remember_tracks(&self) {
+        let Some(path) = self.file.borrow().clone() else {
+            return;
+        };
+        crate::config::save_tracks(
+            &path,
+            *self.primary_track.borrow(),
+            *self.secondary_track.borrow(),
+        );
+    }
+
     fn apply_choice(self: &Rc<Self>, setting: Setting, choice: Option<usize>) {
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
@@ -789,6 +846,7 @@ impl App {
                     .unwrap_or_default();
                 let picked = choice.and_then(|index| names.get(index).cloned());
 
+                let mut cleared_secondary = false;
                 {
                     let mut config = self.config.borrow_mut();
                     if setting == Setting::PrimaryDevice {
@@ -802,6 +860,7 @@ impl App {
                         // is meaningless, so clear it alongside.
                         if config.secondary_sink.is_none() {
                             *self.secondary_track.borrow_mut() = None;
+                            cleared_secondary = true;
                         }
                     }
                     config.capture_display_session();
@@ -814,6 +873,10 @@ impl App {
                 // where the user is listening. Rebuilt on change rather
                 // than only at startup, which previously meant a restart
                 // before a newly chosen device took effect.
+                if cleared_secondary {
+                    self.remember_tracks();
+                }
+
                 if setting == Setting::PrimaryDevice {
                     let (enabled, device) = {
                         let config = self.config.borrow();
@@ -831,6 +894,7 @@ impl App {
                 } else {
                     *self.secondary_track.borrow_mut() = picked;
                 }
+                self.remember_tracks();
             }
         }
     }
@@ -887,34 +951,70 @@ impl App {
         chooser.show();
     }
 
-    /// Probes the file and preselects sensible tracks: the first for the
-    /// primary output, and a different one for the secondary where the file
-    /// offers a choice — which is the whole point of the application.
+    /// Probes the file and chooses tracks for it.
+    ///
+    /// A file played before comes back with the tracks it was played with;
+    /// otherwise the first track goes to the primary output and a different
+    /// one to the secondary, which is the whole point of the application.
     fn set_file(self: &Rc<Self>, path: &std::path::Path) {
-        match probe_audio_tracks(path) {
-            Ok(tracks) => {
-                *self.primary_track.borrow_mut() = tracks.first().map(|t| t.index);
-                *self.secondary_track.borrow_mut() = tracks.get(1).map(|t| t.index);
-                *self.tracks.borrow_mut() = tracks;
-                *self.file.borrow_mut() = Some(path.to_path_buf());
-            }
+        let tracks = match probe_audio_tracks(path) {
+            Ok(tracks) => tracks,
             Err(e) => {
                 eprintln!("Couldn't read {}: {e}", path.display());
                 *self.tracks.borrow_mut() = Vec::new();
                 *self.primary_track.borrow_mut() = None;
                 *self.secondary_track.borrow_mut() = None;
                 *self.file.borrow_mut() = None;
+                return;
             }
-        }
+        };
+
+        let saved = crate::config::load_resume(path).and_then(|resume| resume.tracks);
+        let (primary, secondary) = match saved {
+            // A saved None is a real choice ("no audio on that output"), so a
+            // saved pair is taken as it stands rather than filled in.
+            Some(choice) => (choice.primary, choice.secondary),
+            None => (
+                tracks.first().map(|t| t.index),
+                tracks.get(1).map(|t| t.index),
+            ),
+        };
+        // The file may have been re-encoded since it was last played.
+        let known = |choice: Option<u32>| choice.filter(|i| tracks.iter().any(|t| t.index == *i));
+
+        *self.primary_track.borrow_mut() = known(primary);
+        *self.secondary_track.borrow_mut() = if self.config.borrow().secondary_sink.is_some() {
+            known(secondary)
+        } else {
+            // Without a device to play it on, holding a secondary track only
+            // produces a pipeline that fails to build.
+            None
+        };
+        *self.tracks.borrow_mut() = tracks;
+        *self.file.borrow_mut() = Some(path.to_path_buf());
+
+        let mut config = self.config.borrow_mut();
+        config.last_video = Some(path.to_path_buf());
+        let _ = config.save();
     }
 
     // --- Playback ------------------------------------------------------
 
-    fn start_playback(self: &Rc<Self>) {
+    fn start_playback(self: &Rc<Self>, restart: bool) {
         let Some(path) = self.file.borrow().clone() else {
             return;
         };
         self.stop_playback();
+
+        // Belt and braces against the pipeline being asked for an output that
+        // was never configured, whatever left the track set.
+        let primary = *self.primary_track.borrow();
+        let secondary = if self.config.borrow().secondary_sink.is_some() {
+            *self.secondary_track.borrow()
+        } else {
+            None
+        };
+        crate::config::save_tracks(&path, primary, secondary);
 
         let app = self.clone();
         let on_ended = move || {
@@ -924,10 +1024,10 @@ impl App {
 
         let result = Playback::start(
             &path,
-            *self.primary_track.borrow(),
-            *self.secondary_track.borrow(),
+            primary,
+            secondary,
             &self.config.borrow(),
-            self.restart,
+            restart,
             on_ended,
         );
 

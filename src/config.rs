@@ -49,6 +49,13 @@ pub struct Config {
     pub ui_scale: Option<f64>,
     #[serde(default)]
     pub theme: Theme,
+    /// Reopened on the next run, so the menu comes back where you left it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_video: Option<PathBuf>,
+    /// Remembered rather than reset each run: a machine wired to a television
+    /// wants fullscreen every time, and saying so once should be enough.
+    #[serde(default)]
+    pub fullscreen: bool,
     /// Plays a short click when moving through the menus.
     #[serde(default = "default_sounds")]
     pub sounds: bool,
@@ -67,6 +74,8 @@ impl Default for Config {
             secondary_sink: None,
             ui_scale: None,
             theme: Theme::default(),
+            last_video: None,
+            fullscreen: false,
             sounds: default_sounds(),
             xdg_runtime_dir: None,
             wayland_display: None,
@@ -129,38 +138,106 @@ pub fn positions_path() -> PathBuf {
     app_dir(glib::user_data_dir()).join("positions.json")
 }
 
-pub fn load_positions() -> std::collections::HashMap<String, u64> {
-    let path = positions_path();
-    if !path.exists() {
-        return Default::default();
-    }
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(_) => return Default::default(),
-    };
-    serde_json::from_str(&text).unwrap_or_default()
+/// Below this, a stored position is treated as no position at all. Stopping
+/// a few seconds in is a false start rather than a place you left off, and
+/// offering to resume from it is noise.
+const RESUME_THRESHOLD_NS: u64 = 10_000_000_000;
+
+/// What is remembered about a video between runs: where you stopped, and
+/// which track was going to which output.
+///
+/// Tracks live here rather than in the config because they are a property of
+/// the file, not of the machine. Picking up a film you were halfway through
+/// should restore the languages you had chosen for it, not the ones you last
+/// used on something else.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct Resume {
+    #[serde(default)]
+    pub position_ns: u64,
+    /// Absent when no selection has ever been saved for this file.
+    ///
+    /// Nested rather than two bare fields so that "never chosen" and "chosen
+    /// as no audio" stay distinguishable. Flattened, an entry carried over
+    /// from an older version looked exactly like a deliberate choice of no
+    /// tracks at all, and silently overwrote the real one.
+    #[serde(default)]
+    pub tracks: Option<TrackChoice>,
 }
 
-fn save_positions(positions: &std::collections::HashMap<String, u64>) {
-    let path = positions_path();
-    if let Ok(text) = serde_json::to_string(positions) {
-        let _ = std::fs::write(&path, text);
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct TrackChoice {
+    pub primary: Option<u32>,
+    pub secondary: Option<u32>,
+}
+
+impl Resume {
+    /// Where playback should pick up, if anywhere.
+    pub fn resume_position(&self) -> Option<u64> {
+        (self.position_ns >= RESUME_THRESHOLD_NS).then_some(self.position_ns)
     }
+}
+
+fn load_all() -> std::collections::HashMap<String, Resume> {
+    let path = positions_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Default::default();
+    };
+    if let Ok(entries) = serde_json::from_str(&text) {
+        return entries;
+    }
+    // Earlier versions stored a bare position per file. Read those rather
+    // than discarding them, so upgrading doesn't lose everyone's place.
+    serde_json::from_str::<std::collections::HashMap<String, u64>>(&text)
+        .map(|old| {
+            old.into_iter()
+                .map(|(file, position_ns)| {
+                    (
+                        file,
+                        Resume {
+                            position_ns,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn save_all(entries: &std::collections::HashMap<String, Resume>) {
+    if let Ok(text) = serde_json::to_string(entries) {
+        let _ = std::fs::write(positions_path(), text);
+    }
+}
+
+pub fn load_resume(path: &Path) -> Option<Resume> {
+    load_all().get(&path.to_string_lossy().to_string()).copied()
+}
+
+/// Applies `edit` to a file's entry, creating it if there isn't one.
+fn update(path: &Path, edit: impl FnOnce(&mut Resume)) {
+    let mut entries = load_all();
+    edit(
+        entries
+            .entry(path.to_string_lossy().to_string())
+            .or_default(),
+    );
+    save_all(&entries);
 }
 
 /// Position stored in nanoseconds, keyed by absolute file path string.
 pub fn save_position(path: &Path, position_ns: u64) {
-    let mut positions = load_positions();
-    positions.insert(path.to_string_lossy().to_string(), position_ns);
-    save_positions(&positions);
+    update(path, |entry| entry.position_ns = position_ns);
 }
 
+/// Called when a file plays to the end. Only the position is forgotten: the
+/// track choices are still the right ones next time you watch it.
 pub fn clear_position(path: &Path) {
-    let mut positions = load_positions();
-    if positions
-        .remove(&path.to_string_lossy().to_string())
-        .is_some()
-    {
-        save_positions(&positions);
-    }
+    update(path, |entry| entry.position_ns = 0);
+}
+
+pub fn save_tracks(path: &Path, primary: Option<u32>, secondary: Option<u32>) {
+    update(path, |entry| {
+        entry.tracks = Some(TrackChoice { primary, secondary });
+    });
 }

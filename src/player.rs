@@ -7,7 +7,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use gtk::{gdk, glib};
 
-use crate::config::{Config, clear_position, load_positions, save_position};
+use crate::config::{Config, clear_position, load_resume, save_position};
 use crate::pipeline::build_pipeline;
 
 /// Applied to the video widget so the letterbox area around the picture
@@ -181,9 +181,9 @@ impl Playback {
         let _ = pipeline.state(gst::ClockTime::from_seconds(10));
 
         if !restart
-            && let Some(ns) = load_positions()
-                .get(&path.to_string_lossy().to_string())
-                .copied()
+            && let Some(ns) = load_resume(path)
+                .map(|resume| resume.position_ns)
+                .filter(|ns| *ns > 0)
         {
             pipeline
                 .seek_simple(

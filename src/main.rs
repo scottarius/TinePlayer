@@ -212,9 +212,17 @@ fn main() -> std::process::ExitCode {
         .build();
 
     {
-        let file = args.file.clone();
+        // Falls back to whatever was open last time, so relaunching lands on
+        // the film you were watching. Skipped if it has since been moved or
+        // deleted, which would otherwise open onto an error.
+        let file = args
+            .file
+            .clone()
+            .or_else(|| config.last_video.clone().filter(|path| path.exists()));
         let restart = args.restart;
-        let fullscreen = args.fullscreen;
+        // The flag turns it on; it can't turn a remembered preference off,
+        // which is what --windowed would be for if it is ever wanted.
+        let fullscreen = args.fullscreen || config.fullscreen;
         gtk_app.connect_activate(move |gtk_app| {
             App::build(
                 gtk_app,

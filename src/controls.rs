@@ -150,7 +150,7 @@ impl Controls {
 
 /// `M:SS` under an hour, `H:MM:SS` beyond it, so a typical film reads at a
 /// glance without a leading zero hour.
-fn format_time(time: gst::ClockTime) -> String {
+pub fn format_time(time: gst::ClockTime) -> String {
     let total = time.seconds();
     let (hours, minutes, seconds) = (total / 3600, (total % 3600) / 60, total % 60);
     if hours > 0 {
