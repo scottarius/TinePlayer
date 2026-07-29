@@ -804,15 +804,31 @@ impl App {
         // option, which every list offers except the primary device — an
         // output has to exist for anything to play.
         let mut entries: Vec<(String, Option<usize>)> = Vec::new();
+        // The choice already in force, so the list opens on it rather than
+        // at the top. Left as None when nothing is set, which lands on the
+        // "None" row every list that has one begins with.
+        let mut current: Option<usize> = None;
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
                 if setting == Setting::SecondaryDevice {
                     entries.push(("None".to_string(), None));
                 }
+                let configured = {
+                    let config = self.config.borrow();
+                    if setting == Setting::PrimaryDevice {
+                        config.primary_sink.clone()
+                    } else {
+                        config.secondary_sink.clone()
+                    }
+                };
                 match list_audio_output_devices() {
                     Ok(devices) => {
                         for (position, device) in devices.iter().enumerate() {
-                            entries.push((device.display_name().to_string(), Some(position)));
+                            let name = device.display_name().to_string();
+                            if configured.as_deref() == Some(name.as_str()) {
+                                current = Some(position);
+                            }
+                            entries.push((name, Some(position)));
                         }
                     }
                     Err(e) => entries.push((format!("Error: {e}"), None)),
@@ -820,17 +836,34 @@ impl App {
             }
             Setting::Subtitles => {
                 entries.push(("None".to_string(), None));
+                let chosen = self.subtitle.borrow().clone();
                 for (position, option) in self.subtitle_options.borrow().iter().enumerate() {
+                    if chosen.as_ref() == Some(&option.choice()) {
+                        current = Some(position);
+                    }
                     entries.push((option.label().to_string(), Some(position)));
                 }
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
                 entries.push(("None".to_string(), None));
+                let chosen = if setting == Setting::PrimaryTrack {
+                    *self.primary_track.borrow()
+                } else {
+                    *self.secondary_track.borrow()
+                };
                 for (position, track) in self.tracks.borrow().iter().enumerate() {
+                    if chosen == Some(track.index) {
+                        current = Some(position);
+                    }
                     entries.push((describe_audio_track(track), Some(position)));
                 }
             }
             Setting::Theme => {
+                current = Some(match self.config.borrow().theme {
+                    crate::config::Theme::Auto => 0,
+                    crate::config::Theme::Light => 1,
+                    crate::config::Theme::Dark => 2,
+                });
                 for (position, name) in ["Follow the desktop", "Light", "Dark"]
                     .into_iter()
                     .enumerate()
@@ -839,12 +872,26 @@ impl App {
                 }
             }
             Setting::InterfaceScale => {
+                current = self
+                    .config
+                    .borrow()
+                    .ui_scale
+                    .and_then(|scale| UI_SCALES.iter().position(|offered| *offered == scale));
                 entries.push(("Automatic".to_string(), None));
                 for (position, scale) in UI_SCALES.iter().enumerate() {
                     entries.push((format!("{scale}x"), Some(position)));
                 }
             }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
+                let configured = {
+                    let config = self.config.borrow();
+                    if setting == Setting::PrimaryLanguage {
+                        config.primary_language.clone()
+                    } else {
+                        config.secondary_language.clone()
+                    }
+                };
+                current = language_position(configured.as_deref());
                 // Not "None": an output with no preference still plays
                 // something, it just takes whatever comes first.
                 entries.push(("No preference".to_string(), None));
@@ -853,12 +900,19 @@ impl App {
                 }
             }
             Setting::SubtitleLanguage => {
+                current = language_position(self.config.borrow().subtitle_language.as_deref());
                 entries.push(("None".to_string(), None));
                 for (position, (_, name, _)) in crate::languages::LANGUAGES.iter().enumerate() {
                     entries.push((name.to_string(), Some(position)));
                 }
             }
             Setting::SubtitleSize => {
+                let chosen = self
+                    .config
+                    .borrow()
+                    .subtitle_size
+                    .unwrap_or(crate::pipeline::DEFAULT_SUBTITLE_SIZE);
+                current = SUBTITLE_SIZES.iter().position(|size| *size == chosen);
                 for (position, size) in SUBTITLE_SIZES.iter().enumerate() {
                     let note = if *size == crate::pipeline::DEFAULT_SUBTITLE_SIZE {
                         "  (default)"
@@ -869,6 +923,13 @@ impl App {
                 }
             }
             Setting::SubtitleFont => {
+                let chosen = self
+                    .config
+                    .borrow()
+                    .subtitle_font
+                    .clone()
+                    .unwrap_or_else(|| crate::pipeline::DEFAULT_SUBTITLE_FONT.to_string());
+                current = SUBTITLE_FONTS.iter().position(|font| *font == chosen);
                 for (position, font) in SUBTITLE_FONTS.iter().enumerate() {
                     entries.push((font.to_string(), Some(position)));
                 }
@@ -900,7 +961,13 @@ impl App {
 
         *self.screen.borrow_mut() = Screen::Chooser;
         self.window.set_child(Some(&page));
-        if let Some(row) = list.row_at_index(0) {
+        // Opens on whatever is already selected, and grabbing focus scrolls
+        // it into view, which matters for the language list.
+        let opening = entries
+            .iter()
+            .position(|(_, choice)| *choice == current)
+            .unwrap_or(0) as i32;
+        if let Some(row) = list.row_at_index(opening) {
             list.select_row(Some(&row));
             row.grab_focus();
         }
@@ -1721,6 +1788,14 @@ fn back_button() -> gtk::Button {
     button.add_css_class("tp-back");
     button.set_valign(gtk::Align::Center);
     button
+}
+
+/// Where a stored language code sits in the offered list.
+fn language_position(code: Option<&str>) -> Option<usize> {
+    let code = code?;
+    crate::languages::LANGUAGES
+        .iter()
+        .position(|(stored, _, _)| *stored == code)
 }
 
 fn last_row_index(list: &gtk::ListBox) -> i32 {
