@@ -13,6 +13,7 @@ mod controls;
 mod devices;
 mod display;
 mod gamepad;
+mod kodi;
 mod languages;
 mod pipeline;
 mod player;
@@ -77,6 +78,15 @@ struct Args {
     /// Start windowed, overriding a remembered fullscreen preference
     #[arg(long, conflicts_with = "fullscreen")]
     windowed: bool,
+
+    /// Launched by Kodi: take the resume position from its library and hand
+    /// it back, and leave choosing the video to Kodi
+    ///
+    /// Set by the entry Kodi's playercorefactory.xml adds. It is never
+    /// inferred, because being launched by Kodi and being on a television are
+    /// separate facts.
+    #[arg(long)]
+    kodi: bool,
 }
 
 /// `dtsdec` (wraps libdca) produces silent output on this platform's
@@ -245,12 +255,16 @@ fn main() -> std::process::ExitCode {
         // Falls back to whatever was open last time, so relaunching lands on
         // the film you were watching. Skipped if it has since been moved or
         // deleted, which would otherwise open onto an error.
-        let file = args
-            .file
-            .clone()
-            .or_else(|| config.last_video.clone().filter(|path| path.exists()));
+        // Kodi always passes the file it wants played, so falling back to the
+        // last one would be wrong there as well as pointless.
+        let file = args.file.clone().or_else(|| {
+            (!args.kodi)
+                .then(|| config.last_video.clone().filter(|path| path.exists()))
+                .flatten()
+        });
         let restart = args.restart;
         let fullscreen = (args.fullscreen || config.fullscreen) && !args.windowed;
+        let kodi = args.kodi;
         gtk_app.connect_activate(move |gtk_app| {
             App::build(
                 gtk_app,
@@ -259,6 +273,7 @@ fn main() -> std::process::ExitCode {
                 preset,
                 restart,
                 fullscreen,
+                kodi,
             );
         });
     }

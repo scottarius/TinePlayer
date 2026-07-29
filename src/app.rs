@@ -145,6 +145,17 @@ pub struct App {
     scrub_seen: Cell<Option<std::time::Instant>>,
     /// Drives the controls readout while a file is playing.
     tick: RefCell<Option<glib::SourceId>>,
+    /// Launched by Kodi, which owns the choice of video and is waiting for
+    /// this process to exit. Set from `--kodi` alone and never inferred.
+    ///
+    /// True even when Kodi cannot be reached: the interface changes because
+    /// of who started us, which stays true whether or not its JSON-RPC socket
+    /// answers.
+    kodi: bool,
+    /// The library title Kodi holds for the current file, which reads far
+    /// better than the file name. Empty when Kodi has not been asked, did not
+    /// answer, or does not have the file.
+    kodi_title: RefCell<Option<String>>,
 }
 
 impl App {
@@ -155,6 +166,7 @@ impl App {
         preset: Option<Preset>,
         restart: bool,
         fullscreen: bool,
+        kodi: bool,
     ) {
         let dark = appearance::apply_theme(config.theme);
         suppress_error_bell();
@@ -217,6 +229,8 @@ impl App {
             scrub_generation: Cell::new(0),
             scrub_seen: Cell::new(None),
             tick: RefCell::new(None),
+            kodi,
+            kodi_title: RefCell::new(None),
         });
 
         // Weak, so the polling closure doesn't keep the application alive
@@ -368,7 +382,10 @@ impl App {
         // Dropping a file on the window loads it, from any screen including
         // mid-playback. Quicker than any picker when the file is already in
         // front of you in a file manager.
-        {
+        //
+        // Left out under Kodi for the same reason the browser is: Kodi chose
+        // the video and is waiting for this playback of it to end.
+        if !self.kodi {
             let app = self.clone();
             let drop = gtk::DropTarget::new(gtk::gio::File::static_type(), gdk::DragAction::COPY);
             drop.connect_drop(move |_, value, _, _| {
@@ -416,6 +433,10 @@ impl App {
     /// clock never looks stuck, rare enough to be free.
     fn start_tick(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
+        // Ticks since Kodi was last told where playback had reached. Counted
+        // here rather than given a timer of its own so that it stops when
+        // playback does, without anything extra to tear down.
+        let mut since_report = 0u32;
         let source = glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
             let Some(app) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
@@ -427,6 +448,13 @@ impl App {
             match (playback, controls) {
                 (Some(playback), Some(controls)) => {
                     controls.update(&playback);
+                    since_report += 1;
+                    // Every 30 seconds, so that a player killed outright still
+                    // leaves Kodi's library close to where you actually got to.
+                    if since_report >= 60 {
+                        since_report = 0;
+                        playback.report_to_kodi();
+                    }
                     glib::ControlFlow::Continue
                 }
                 _ => glib::ControlFlow::Break,
@@ -681,6 +709,40 @@ impl App {
         self.window.set_title(Some("TinePlayer"));
     }
 
+    /// Where playback should pick up, and the title to show for the file.
+    ///
+    /// Under Kodi its library is the authority, so playback starts from the
+    /// position Kodi's own interface was just showing and the two never
+    /// visibly disagree. Its answer stands even when it holds no resume point
+    /// — a film Kodi considers unwatched starts at the beginning rather than
+    /// wherever our own file happens to remember. Only a Kodi that does not
+    /// answer at all falls back to `positions.json`.
+    ///
+    /// The title comes from the same call, so it is refreshed here rather
+    /// than costing a second round trip.
+    fn resume_position(&self) -> Option<u64> {
+        let file = self.file.borrow().clone()?;
+        if self.kodi
+            && let Some(details) = crate::kodi::details(&file)
+        {
+            *self.kodi_title.borrow_mut() = (!details.title.is_empty()).then_some(details.title);
+            return details.resume_ns;
+        }
+        crate::config::load_resume(&file).and_then(|resume| resume.resume_position())
+    }
+
+    /// What to call the current file on screen: Kodi's library title when it
+    /// has one, otherwise the file name.
+    fn file_label(&self) -> Option<String> {
+        if let Some(title) = self.kodi_title.borrow().clone() {
+            return Some(title);
+        }
+        self.file
+            .borrow()
+            .as_ref()
+            .and_then(|path| path.file_name().map(|n| n.to_string_lossy().to_string()))
+    }
+
     // --- Menu ----------------------------------------------------------
 
     fn show_menu(self: &Rc<Self>) {
@@ -705,15 +767,22 @@ impl App {
             }
         };
 
+        // Asked before the rows are built, not after: this is what fetches
+        // Kodi's title as well as its resume point, and a row built ahead of
+        // it would show the file name until something rebuilt the screen.
+        let resume_at = self.resume_position();
+
         let has_file = file.is_some();
         let has_secondary = config.secondary_sink.is_some();
         let mut rows: Vec<(String, String, bool)> = vec![
             (
                 "Video".to_string(),
-                file.as_ref()
-                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                self.file_label()
                     .unwrap_or_else(|| "Choose a video…".to_string()),
-                true,
+                // Kodi chose the video and is waiting on this playback, so
+                // there is nothing to pick here. The row stays, to name what
+                // is about to play.
+                !self.kodi,
             ),
             (
                 "Primary Audio Device".to_string(),
@@ -775,10 +844,6 @@ impl App {
 
         // Pinned below the scrolling list so it stays reachable however
         // long the list gets.
-        let resume_at = file
-            .as_deref()
-            .and_then(crate::config::load_resume)
-            .and_then(|resume| resume.resume_position());
         let resumable = resume_at.is_some();
 
         let buttons = gtk::Box::builder()
@@ -878,6 +943,18 @@ impl App {
         {
             let app = self.clone();
             list.connect_row_activated(move |_, row| {
+                // A row drawn insensitive is stating something rather than
+                // offering it — the video row under Kodi, or a track row with
+                // no file yet. Only the row's contents carry that; the
+                // ListBoxRow that GTK wraps them in stays sensitive, and would
+                // otherwise still take a click or Enter.
+                //
+                // Left focusable deliberately: the gamepad moves the selection
+                // by grabbing focus, which fails on an insensitive widget and
+                // would strand it here.
+                if row.child().is_some_and(|child| !child.is_sensitive()) {
+                    return;
+                }
                 app.sounds.borrow().click();
                 *app.menu_row.borrow_mut() = row.index();
                 match row.index() {
@@ -2092,7 +2169,10 @@ impl App {
             secondary,
             subtitle.as_ref(),
             &self.config.borrow(),
-            restart,
+            // "Restart" means start from the beginning whoever is asking, so
+            // it beats both our saved position and Kodi's.
+            (!restart).then(|| self.resume_position()).flatten(),
+            self.kodi,
             on_ended,
         );
 
@@ -2173,7 +2253,17 @@ impl App {
     /// Centred rather than top-aligned, and a full screen rather than a
     /// modal dialog: it has to be readable at the same distance as
     /// everything else and navigable without a pointer.
+    ///
+    /// Skipped entirely under Kodi, which closes straight away. The question
+    /// guards against losing your place by accident, and under Kodi there is
+    /// nothing to lose — the position has already gone back to its library —
+    /// while Kodi itself is sitting hidden waiting for this process to end.
     fn show_confirm_quit(self: &Rc<Self>) {
+        if self.kodi {
+            self.window.close();
+            return;
+        }
+
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(32)

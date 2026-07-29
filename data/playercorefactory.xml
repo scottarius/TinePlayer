@@ -18,7 +18,7 @@
   <players>
     <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
       <filename>TINEPLAYER_BINARY</filename>
-      <args>"{1}" --fullscreen</args>
+      <args>"{1}" --fullscreen --kodi</args>
       <!-- Gets Kodi out of the way while the film plays, which matters on a
            television where both are fullscreen. -->
       <hidexbmc>true</hidexbmc>
@@ -26,6 +26,14 @@
            otherwise sit on screen as a console window for the whole film.
            Ignored on Linux, where the player is started directly. -->
       <hideconsole>true</hideconsole>
+      <!-- Stops Kodi writing its own progress when the player exits, which it
+           does knowing only how long the player ran, not where it got to. Past
+           this many seconds it marks the video fully watched and drops the
+           resume point; the default of 10 threw away the real position after
+           any real viewing. Below it Kodi saves nothing at all, which is what
+           we want, because TinePlayer reports the actual position and watched
+           state itself while playing. Set beyond any possible running time. -->
+      <playcountminimumtime>2147483647</playcountminimumtime>
     </player>
   </players>
 <!-- RULES START -->

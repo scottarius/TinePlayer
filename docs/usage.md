@@ -61,6 +61,7 @@ Track numbers are those `--list-tracks` prints.
 | `--restart`       | Start video from the beginning, ignoring any saved position               |
 | `--fullscreen`    | Start fullscreen                                                          |
 | `--windowed`      | Start windowed, overriding a remembered fullscreen preference             |
+| `--kodi`          | Launched by Kodi: sync the resume position with its library, and leave choosing the video to Kodi. Set for you by [the Kodi setup](integrations.md#kodi) |
 | `-V`, `--version` | Print the version                                                         |
 | `-h`, `--help`    | Print help                                                                |
 

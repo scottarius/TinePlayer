@@ -31,14 +31,25 @@ Paste in the following snippit, replacing `<filename>` with the TinePlayer execu
   <players>
     <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
       <filename>/path/to/TinePlayer</filename>
-      <args>"{1}" --fullscreen</args>
+      <args>"{1}" --fullscreen --kodi</args>
       <hidexbmc>true</hidexbmc>
       <hideconsole>true</hideconsole>
+      <playcountminimumtime>2147483647</playcountminimumtime>
     </player>
   </players>
   <!-- Rules here -->
 </playercorefactory>
 ```
+
+`--kodi` is what tells TinePlayer it was launched by Kodi, so it takes the
+resume position from Kodi's library, hands progress back as you watch, and
+leaves choosing the video to Kodi.
+
+The large `playcountminimumtime` stops Kodi writing its own progress when the
+player exits. Kodi only knows how long the player ran, not where you got to, so
+by default anything played for more than ten seconds is marked fully watched
+and loses its resume point. Set out of reach, Kodi leaves the real position —
+which TinePlayer reports while playing — alone.
 
 This will add an option to the **Play Using...** menu.<br/> 
 To force TinePlayer to act as the default player, insert the following under `<!-- Rules here -->`:
