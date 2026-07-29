@@ -224,13 +224,15 @@ fn main() -> std::process::ExitCode {
         };
     }
 
-    // Only a local file can be checked here. A URL is taken on trust and left
-    // to playback to report, since finding out means a network round trip.
+    // Deliberately not fatal. A missing file used to end the process here,
+    // which is invisible when something else launched the player: the window
+    // never appears and there is no terminal to read the reason from. The
+    // window opens and says so instead. Still printed, for anyone who did run
+    // it from a terminal.
     if let Some(source) = source.as_ref()
         && !source.is_available()
     {
         eprintln!("File not found: {}", source.label());
-        return std::process::ExitCode::FAILURE;
     }
 
     // Loading is allowed to fail: an unconfigured install just opens the

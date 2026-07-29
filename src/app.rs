@@ -290,9 +290,10 @@ impl App {
             *app.kodi_item.borrow_mut() = crate::kodi::current_item();
         }
 
-        if let Some(path) = file {
-            app.set_file(&path);
-        }
+        let unopenable = match &file {
+            Some(source) if !app.set_file(source) => Some(source.clone()),
+            _ => None,
+        };
 
         // Command-line track choices go straight to playback, but only when
         // there's actually somewhere to play them.
@@ -320,7 +321,12 @@ impl App {
                 }
                 app.start_playback(app.restart);
             }
-            _ => app.show_menu(),
+            // Nothing to choose from if the video could not be read, so the
+            // reason is shown instead of an empty menu.
+            _ => match &unopenable {
+                Some(source) => app.show_source_error(source),
+                None => app.show_menu(),
+            },
         }
 
         window.present();
@@ -408,8 +414,12 @@ impl App {
                     return false;
                 };
                 app.stop_playback();
-                app.set_file(&Source::File(path));
-                app.show_menu();
+                let source = Source::File(path);
+                if app.set_file(&source) {
+                    app.show_menu();
+                } else {
+                    app.show_source_error(&source);
+                }
                 true
             });
             self.window.add_controller(drop);
@@ -432,6 +442,9 @@ impl App {
             }
             Screen::Chooser => self.leave_chooser(),
             Screen::Confirm => self.show_settings(),
+            // Under Kodi an error is the end of the road: it chose the video,
+            // so there is nothing to go back to and pick instead.
+            Screen::Error if self.kodi => self.window.close(),
             Screen::Browser | Screen::Settings | Screen::Error | Screen::ConfirmQuit => {
                 self.show_menu()
             }
@@ -1573,8 +1586,12 @@ impl App {
                 // A file was picked, so the menu is where to go next either
                 // way.
                 Some(path) => {
-                    app.set_file(&Source::File(path));
-                    app.show_menu();
+                    let source = Source::File(path);
+                    if app.set_file(&source) {
+                        app.show_menu();
+                    } else {
+                        app.show_source_error(&source);
+                    }
                 }
                 None => match folder.as_deref().filter(|_| from_browser) {
                     Some(folder) => app.show_browser(folder, None),
@@ -1590,7 +1607,7 @@ impl App {
     /// A file played before comes back with the tracks it was played with;
     /// otherwise the first track goes to the primary output and a different
     /// one to the secondary, which is the whole point of the application.
-    fn set_file(self: &Rc<Self>, source: &Source) {
+    fn set_file(self: &Rc<Self>, source: &Source) -> bool {
         let media = match crate::probe::probe_media(source) {
             Ok(media) => media,
             Err(e) => {
@@ -1601,7 +1618,7 @@ impl App {
                 *self.secondary_track.borrow_mut() = None;
                 *self.subtitle.borrow_mut() = None;
                 *self.file.borrow_mut() = None;
-                return;
+                return false;
             }
         };
         // Kodi's one video player slot is necessarily this playback while it
@@ -1697,6 +1714,44 @@ impl App {
             config.last_video = Some(path.to_path_buf());
             let _ = config.save();
         }
+        true
+    }
+
+    /// Says, on screen, that a video could not be opened.
+    ///
+    /// Worth a screen rather than a line on stderr: when something else
+    /// launched the player there is no terminal to read, and the window
+    /// closing again immediately is all anyone sees. That is exactly the case
+    /// most likely to fail, because a media centre can hand over a path to a
+    /// machine other than this one.
+    fn show_source_error(self: &Rc<Self>, source: &Source) {
+        let mut message = format!(
+            "Couldn't open:
+{}
+
+",
+            source.uri()
+        );
+        match source {
+            Source::File(_) => message.push_str(
+                "The file isn't there, or this computer can't reach it.
+
+                 If a media centre started playback, its media may be on                  another machine, and the path it handed over has to be one                  this computer can reach too.",
+            ),
+            Source::Remote(_) => message.push_str(
+                "The server didn't answer, or sent something that couldn't be                  played.
+
+                 If a media centre started playback, check that its server is                  running and that it is set to play the original file rather                  than converting it.",
+            ),
+        }
+        if self.kodi {
+            message.push_str(
+                "
+
+See docs/integrations.md for setting up Kodi.",
+            );
+        }
+        self.show_error(&message);
     }
 
     // --- Browsing ------------------------------------------------------
@@ -1774,8 +1829,12 @@ impl App {
                 match target {
                     Some(path) if path.is_dir() => app.show_browser(path, None),
                     Some(path) => {
-                        app.set_file(&Source::File(path.to_path_buf()));
-                        app.show_menu();
+                        let source = Source::File(path.to_path_buf());
+                        if app.set_file(&source) {
+                            app.show_menu();
+                        } else {
+                            app.show_source_error(&source);
+                        }
                     }
                     // Up: to the parent, or to the drive list when there is
                     // nothing above this.
@@ -2377,13 +2436,21 @@ impl App {
         label.set_max_width_chars(48);
         page.append(&label);
 
-        let back = gtk::Button::with_label("Back");
+        // Under Kodi there is no menu worth returning to — it chose the video
+        // and is waiting for this process to end — so the way out is out.
+        let back = gtk::Button::with_label(if self.kodi { "Close" } else { "Back" });
         back.add_css_class("tp-button");
         back.set_halign(gtk::Align::Center);
         page.append(&back);
 
         let app = self.clone();
-        back.connect_clicked(move |_| app.show_menu());
+        back.connect_clicked(move |_| {
+            if app.kodi {
+                app.window.close();
+            } else {
+                app.show_menu();
+            }
+        });
 
         // Nothing to move a selection through here.
         self.set_nav(None, &[], &[]);

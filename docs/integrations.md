@@ -56,3 +56,46 @@ complete, commented copy to start from. Two things to change:
 Refer to the comments in the file for further explanation.
 
 Restart Kodi to see changes.
+
+### Media servers through Kodi
+
+Kodi add-ons can bring a Jellyfin or Plex library into Kodi, and TinePlayer
+plays those the same way it plays anything else — it asks Kodi what is playing
+and never learns which server the video came from. Install each add-on by its
+own instructions; only the settings below matter for TinePlayer.
+
+**[Jellyfin for Kodi](https://jellyfin.org/docs/general/clients/kodi/)**
+
+Works with either playback mode, and needs nothing special. What matters is
+that Jellyfin **direct plays** rather than transcodes: a transcode collapses
+the file to a single audio track, which leaves nothing to route to a second
+output. Playing the original is the default for a client that can handle the
+file, and TinePlayer can handle anything GStreamer can.
+
+**[PlexKodiConnect](https://github.com/croneter/PlexKodiConnect/wiki)**
+
+Set **playback mode to Direct Paths**. In the other mode PlexKodiConnect plays
+videos itself, so Kodi never offers **Play Using...** and TinePlayer is never
+reached.
+
+Direct Paths hands over the path *the Plex server* uses. If Plex runs on
+another machine, that path means nothing locally, and playback fails with a
+"couldn't open" error naming a path you may not recognise. Fix it under
+**Customize Paths**:
+
+* Enable *Replace Plex paths with custom SMB paths*
+* Set the original path to what Plex reports, e.g. `/mnt/media/Movies`
+* Set the replacement to a share this machine can reach, e.g.
+  `smb://server/media/Movies`
+
+Those apply while syncing, so run **Repair local database** afterwards —
+restarting Kodi alone leaves the old paths in place. On Windows, Kodi converts
+`smb://` to a `\\server\share` path before handing it over.
+
+Note that PlexKodiConnect rebuilds Kodi's video library and removes entries
+other library add-ons created, so running it alongside Jellyfin for Kodi means
+each resync clears the other's videos.
+
+*Plex for Kodi* (`script.plex`) cannot work at all: it replaces Kodi's
+interface instead of filling its library, so there is no library item to hand
+over and no player to choose.
