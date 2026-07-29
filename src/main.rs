@@ -12,6 +12,7 @@ mod controls;
 mod devices;
 mod display;
 mod gamepad;
+mod languages;
 mod pipeline;
 mod player;
 mod probe;

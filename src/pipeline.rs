@@ -12,12 +12,13 @@ use crate::subtitles::SubtitleChoice;
 /// Pango leaves the family unspecified by default, which resolves to a serif
 /// face. Bold with the renderer's black outline is what stays legible against
 /// a moving picture.
-///
-/// The number is smaller than it looks: the renderer scales the font by the
-/// video's width, so on a 1080p frame this size draws text 46 pixels tall,
-/// about 4.3% of the frame height. Measured, because the same description at
-/// 24 came out at 93 pixels and dominated the picture.
-const DEFAULT_SUBTITLE_FONT: &str = "Sans Bold 12";
+pub const DEFAULT_SUBTITLE_FONT: &str = "Sans Bold";
+
+/// Smaller than it looks: the renderer scales the font by the video's width,
+/// so on a 1080p frame this draws text 46 pixels tall, about 4.3% of the
+/// frame height. Measured, because the same description at 24 came out at 93
+/// pixels and dominated the picture.
+pub const DEFAULT_SUBTITLE_SIZE: u32 = 12;
 
 /// What a stream was selected for, recorded when decodebin3 asks whether to
 /// expose it and read back when its pad actually appears.
@@ -93,11 +94,17 @@ pub fn build_pipeline(
     src.link(&decode)
         .map_err(|_| "Failed to link source to decoder".to_string())?;
 
-    let font = config
-        .subtitle_font
-        .as_deref()
-        .unwrap_or(DEFAULT_SUBTITLE_FONT);
-    let (video_head, overlay) = build_video_branch(&pipeline, subtitle.is_some(), font)?;
+    // Family and size are stored apart so each can be a menu of its own, and
+    // joined here into the single description Pango expects.
+    let font = format!(
+        "{} {}",
+        config
+            .subtitle_font
+            .as_deref()
+            .unwrap_or(DEFAULT_SUBTITLE_FONT),
+        config.subtitle_size.unwrap_or(DEFAULT_SUBTITLE_SIZE)
+    );
+    let (video_head, overlay) = build_video_branch(&pipeline, subtitle.is_some(), &font)?;
 
     // A subtitle file beside the video is its own small source chain, fed
     // into the same overlay an embedded stream would use.

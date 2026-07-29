@@ -32,6 +32,10 @@ device from a single pipeline, staying in sync because it is all one clock.
 - Interface large enough to use from the couch, with gamepad support
 - Subtitles, either embedded in the video or from a subtitle file beside it,
   chosen separately from the two audio tracks
+- Preferred languages per output and for subtitles, used to pick tracks
+  automatically for a video you have not watched before
+- A settings screen for theme, interface size, devices, languages and
+  subtitle appearance
 - Remembers your output devices
 - Command-line arguments to launch straight into a video
 
@@ -143,6 +147,11 @@ sizing stops. Navigation sounds can be turned off with `sounds: false`.
 `theme` chooses `auto`, `light` or `dark`. Auto follows the desktop, and uses
 dark when the desktop has no preference or cannot be asked, which is common on
 the minimal desktops a media machine tends to run.
+
+All of this is also reachable from the gear at the bottom of the menu, along
+with preferred languages, subtitle size and font, and a way to forget every
+saved playback position. `subtitle_size` is in points against the video's own
+resolution rather than the screen's, so one value holds on any display.
 
 ## Compatibility
 

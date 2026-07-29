@@ -49,14 +49,26 @@ pub struct Config {
     pub ui_scale: Option<f64>,
     #[serde(default)]
     pub theme: Theme,
-    /// Pango description for rendered subtitles, e.g. "Sans Bold 28".
+    /// Font family and style for subtitles, without a size, e.g. "Sans Bold".
     ///
-    /// Set because the default resolves to a serif face, which is a poor
-    /// choice over moving pictures. The size is in points against the video's
-    /// own resolution, not the screen's: subtitles are drawn into the frame
-    /// and then scaled up with it, so this stays right on any display.
+    /// Set because Pango's default resolves to a serif face, which is a poor
+    /// choice over moving pictures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_font: Option<String>,
+    /// Subtitle size, in points against the video's own resolution rather
+    /// than the screen's: subtitles are drawn into the frame and scaled up
+    /// with it, so one number holds on any display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_size: Option<u32>,
+    /// Preferred language for each output, used to choose tracks for a file
+    /// that has not been played before. Unset means "take the first track".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_language: Option<String>,
+    /// Unset means no subtitles unless chosen for the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_language: Option<String>,
     /// Reopened on the next run, so the menu comes back where you left it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_video: Option<PathBuf>,
@@ -83,6 +95,10 @@ impl Default for Config {
             ui_scale: None,
             theme: Theme::default(),
             subtitle_font: None,
+            subtitle_size: None,
+            primary_language: None,
+            secondary_language: None,
+            subtitle_language: None,
             last_video: None,
             fullscreen: false,
             sounds: default_sounds(),
@@ -247,6 +263,15 @@ pub fn save_position(path: &Path, position_ns: u64) {
 /// track choices are still the right ones next time you watch it.
 pub fn clear_position(path: &Path) {
     update(path, |entry| entry.position_ns = 0);
+}
+
+/// Forgets every remembered position and track choice.
+pub fn clear_all_resume() -> Result<(), String> {
+    let path = positions_path();
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("Failed to clear {}: {e}", path.display()))
 }
 
 pub fn save_tracks(

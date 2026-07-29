@@ -24,7 +24,33 @@ enum Setting {
     SecondaryDevice,
     SecondaryTrack,
     Subtitles,
+    Theme,
+    InterfaceScale,
+    PrimaryLanguage,
+    SecondaryLanguage,
+    SubtitleLanguage,
+    SubtitleSize,
+    SubtitleFont,
 }
+
+/// Rows of the settings screen, in the order they appear.
+const SETTINGS_ROWS: usize = 13;
+/// Rows that begin a group: audio, subtitles, then the housekeeping at the
+/// bottom.
+const SETTINGS_SECTIONS: [i32; 3] = [3, 7, 10];
+
+/// Sizes offered for subtitles. The middle of the range is the default; the
+/// ends are deliberately wide, since what reads well from a sofa and what
+/// reads well at a desk are genuinely different.
+const SUBTITLE_SIZES: [u32; 8] = [8, 10, 12, 14, 16, 18, 20, 24];
+
+/// Font families offered in the menu. Generic names Pango always resolves
+/// rather than an enumeration of everything installed, which would run to
+/// hundreds of rows. `subtitle_font` in the config takes any description.
+const SUBTITLE_FONTS: [&str; 5] = ["Sans Bold", "Sans", "Serif Bold", "Serif", "Monospace Bold"];
+
+/// Fixed interface scales offered alongside automatic detection.
+const UI_SCALES: [f64; 6] = [1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
 
 /// Menu rows that begin a new group: the primary pair and the secondary
 /// pair each get separating space above them.
@@ -47,7 +73,9 @@ const SCRUB_ABANDON: std::time::Duration = std::time::Duration::from_millis(700)
 #[derive(Clone, Copy, PartialEq)]
 enum Screen {
     Menu,
+    Settings,
     Chooser,
+    Confirm,
     ConfirmQuit,
     Error,
     Playing,
@@ -71,6 +99,7 @@ pub struct App {
     /// Restored when returning from a chooser, so the menu comes back with
     /// the row you left from still highlighted.
     menu_row: RefCell<i32>,
+    settings_row: RefCell<i32>,
     sounds: RefCell<Sounds>,
     restart: bool,
     /// The list the current screen is built around, and the button below it.
@@ -79,8 +108,16 @@ pub struct App {
     /// gamepad has no events to hand to GTK, so it needs to move the
     /// selection itself and therefore needs to know what it is moving.
     nav_list: RefCell<Option<gtk::ListBox>>,
-    nav_footer: RefCell<Option<gtk::Button>>,
+    nav_footer: RefCell<Vec<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
+    /// Whether the open chooser was reached from the settings screen, so
+    /// that finishing with it returns where it came from.
+    from_settings: Cell<bool>,
+    /// Kept so the interface can be re-scaled after the fact.
+    styles: gtk::CssProvider,
+    /// The scale in force, which the settings screen reports and the
+    /// monitor check below may revise.
+    scale: Cell<f64>,
     /// Bumped whenever a scrub ends, retiring the ticker that was driving it.
     scrub_generation: Cell<u64>,
     /// Last time a scrub key or button was seen held.
@@ -132,19 +169,6 @@ impl App {
         // been realized, and on a mixed setup (a television beside a desk
         // monitor) that is the difference between a readable menu and a tiny
         // one. Skipped entirely when the size was set by hand.
-        if config.ui_scale.is_none() {
-            let applied = Cell::new(scale);
-            window.connect_realize(move |window| {
-                let Some(monitor) = appearance::monitor_for_window(window) else {
-                    return;
-                };
-                let actual = appearance::scale_for(&monitor);
-                if actual != applied.get() {
-                    applied.set(actual);
-                    styles.load_from_data(&style_css(actual));
-                }
-            });
-        }
 
         let app = Rc::new(App {
             window: window.clone(),
@@ -158,11 +182,15 @@ impl App {
             playback: RefCell::new(None),
             screen: RefCell::new(Screen::Menu),
             menu_row: RefCell::new(0),
+            settings_row: RefCell::new(0),
             sounds: RefCell::new(sounds),
             restart,
             nav_list: RefCell::new(None),
-            nav_footer: RefCell::new(None),
+            nav_footer: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
+            from_settings: Cell::new(false),
+            styles: styles.clone(),
+            scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
             scrub_seen: Cell::new(None),
             tick: RefCell::new(None),
@@ -186,6 +214,24 @@ impl App {
             window.connect_close_request(move |_| {
                 app.stop_playback();
                 glib::Propagation::Proceed
+            });
+        }
+
+        // Which monitor the window landed on is only knowable once it has
+        // been realized, and on a mixed setup (a television beside a desk
+        // monitor) that is the difference between a readable menu and a tiny
+        // one. Skipped entirely when the size was set by hand.
+        if app.config.borrow().ui_scale.is_none() {
+            let weak = Rc::downgrade(&app);
+            window.connect_realize(move |window| {
+                let Some(app) = weak.upgrade() else { return };
+                let Some(monitor) = appearance::monitor_for_window(window) else {
+                    return;
+                };
+                let actual = appearance::scale_for(&monitor);
+                if actual != app.scale.get() {
+                    app.restyle(actual);
+                }
             });
         }
 
@@ -293,7 +339,9 @@ impl App {
                 self.stop_playback();
                 self.show_menu();
             }
-            Screen::Chooser | Screen::Error | Screen::ConfirmQuit => self.show_menu(),
+            Screen::Chooser => self.leave_chooser(),
+            Screen::Confirm => self.show_settings(),
+            Screen::Settings | Screen::Error | Screen::ConfirmQuit => self.show_menu(),
             Screen::Menu => self.show_confirm_quit(),
         }
     }
@@ -409,9 +457,18 @@ impl App {
 
     /// Records what the gamepad should be moving through. Screens built from
     /// buttons alone pass `None`, and fall back to GTK's directional focus.
-    fn set_nav(&self, list: Option<&gtk::ListBox>, footer: Option<&gtk::Button>) {
+    fn set_nav(&self, list: Option<&gtk::ListBox>, footer: &[gtk::Button]) {
         *self.nav_list.borrow_mut() = list.cloned();
-        *self.nav_footer.borrow_mut() = footer.cloned();
+        *self.nav_footer.borrow_mut() = footer.to_vec();
+    }
+
+    /// The button Down from the list should land on.
+    ///
+    /// The first *usable* one rather than simply the first: with no video
+    /// chosen the play button is insensitive, and stopping there would leave
+    /// the gear beside it unreachable without a pointer.
+    fn first_footer(footer: &[gtk::Button]) -> Option<&gtk::Button> {
+        footer.iter().find(|button| button.is_sensitive())
     }
 
     fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
@@ -475,7 +532,7 @@ impl App {
             }
         };
 
-        if footer.as_ref().is_some_and(|button| button.has_focus()) {
+        if footer.iter().any(|button| button.has_focus()) {
             if delta < 0 {
                 select(last);
             }
@@ -487,7 +544,7 @@ impl App {
             return;
         }
         if next > last {
-            if let Some(button) = footer.filter(|button| button.is_sensitive()) {
+            if let Some(button) = App::first_footer(&footer) {
                 self.sounds.borrow().click();
                 button.grab_focus();
             }
@@ -629,9 +686,16 @@ impl App {
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(16)
-            .homogeneous(true)
             .build();
-        let mut footer = Vec::new();
+        // The play buttons share the space between them; the gear keeps to
+        // its own width at the end.
+        let plays = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(16)
+            .homogeneous(true)
+            .hexpand(true)
+            .build();
+        let mut play_buttons: Vec<gtk::Button> = Vec::new();
 
         // Resuming is the common case for a part-watched film, so it takes
         // the first position and the focus. Starting over is deliberate
@@ -645,17 +709,36 @@ impl App {
                 let button = gtk::Button::with_label(label);
                 button.add_css_class("tp-play");
                 button.set_sensitive(can_play);
-                buttons.append(&button);
-                footer.push(button);
+                plays.append(&button);
+                play_buttons.push(button);
             }
         } else {
             let play = gtk::Button::with_label("▶  Play");
             play.add_css_class("tp-play");
             play.set_sensitive(can_play);
-            buttons.append(&play);
-            footer.push(play);
+            plays.append(&play);
+            play_buttons.push(play);
         }
+        buttons.append(&plays);
+
+        let gear = gtk::Button::from_icon_name("emblem-system-symbolic");
+        gear.add_css_class("tp-gear");
+        gear.set_tooltip_text(Some("Settings"));
+        buttons.append(&gear);
         page.append(&buttons);
+
+        {
+            let app = self.clone();
+            gear.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_settings();
+            });
+        }
+
+        // Ordered as they sit on screen, so left and right walk along the
+        // row and Down from the list lands on the first.
+        let mut footer = play_buttons.clone();
+        footer.push(gear);
 
         {
             let app = self.clone();
@@ -673,7 +756,7 @@ impl App {
                 }
             });
         }
-        for (index, button) in footer.iter().enumerate() {
+        for (index, button) in play_buttons.iter().enumerate() {
             // With two buttons the second one restarts; with one it plays
             // from wherever it left off, which for a fresh file is the start.
             let restart = resumable && index == 1;
@@ -707,6 +790,13 @@ impl App {
             Setting::SecondaryDevice => "Secondary Audio Device",
             Setting::SecondaryTrack => "Secondary Audio Track",
             Setting::Subtitles => "Subtitles",
+            Setting::Theme => "Theme",
+            Setting::InterfaceScale => "Interface Size",
+            Setting::PrimaryLanguage => "Primary Language",
+            Setting::SecondaryLanguage => "Secondary Language",
+            Setting::SubtitleLanguage => "Subtitle Language",
+            Setting::SubtitleSize => "Subtitle Size",
+            Setting::SubtitleFont => "Subtitle Font",
         };
         let (page, list, back) = list_page(title, true);
 
@@ -740,6 +830,49 @@ impl App {
                     entries.push((describe_audio_track(track), Some(position)));
                 }
             }
+            Setting::Theme => {
+                for (position, name) in ["Follow the desktop", "Light", "Dark"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    entries.push((name.to_string(), Some(position)));
+                }
+            }
+            Setting::InterfaceScale => {
+                entries.push(("Automatic".to_string(), None));
+                for (position, scale) in UI_SCALES.iter().enumerate() {
+                    entries.push((format!("{scale}x"), Some(position)));
+                }
+            }
+            Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
+                // Not "None": an output with no preference still plays
+                // something, it just takes whatever comes first.
+                entries.push(("No preference".to_string(), None));
+                for (position, (_, name, _)) in crate::languages::LANGUAGES.iter().enumerate() {
+                    entries.push((name.to_string(), Some(position)));
+                }
+            }
+            Setting::SubtitleLanguage => {
+                entries.push(("None".to_string(), None));
+                for (position, (_, name, _)) in crate::languages::LANGUAGES.iter().enumerate() {
+                    entries.push((name.to_string(), Some(position)));
+                }
+            }
+            Setting::SubtitleSize => {
+                for (position, size) in SUBTITLE_SIZES.iter().enumerate() {
+                    let note = if *size == crate::pipeline::DEFAULT_SUBTITLE_SIZE {
+                        "  (default)"
+                    } else {
+                        ""
+                    };
+                    entries.push((format!("{size}{note}"), Some(position)));
+                }
+            }
+            Setting::SubtitleFont => {
+                for (position, font) in SUBTITLE_FONTS.iter().enumerate() {
+                    entries.push((font.to_string(), Some(position)));
+                }
+            }
         }
 
         for (text, _) in &entries {
@@ -755,12 +888,12 @@ impl App {
                     return;
                 };
                 app.apply_choice(setting, *choice);
-                app.show_menu();
+                app.leave_chooser();
             });
         }
         {
             let app = self.clone();
-            back.connect_clicked(move |_| app.show_menu());
+            back.connect_clicked(move |_| app.leave_chooser());
         }
 
         self.wire_navigation(&list, &[]);
@@ -779,13 +912,12 @@ impl App {
     /// that would go past either end are swallowed, which also stops GTK
     /// reporting them as failed navigation.
     fn wire_navigation(self: &Rc<Self>, list: &gtk::ListBox, footer: &[gtk::Button]) {
-        // Only the first is recorded: it is what Down from the last row lands
-        // on, and left and right move between them from there.
-        self.set_nav(Some(list), footer.first());
+        self.set_nav(Some(list), footer);
         {
             let app = self.clone();
             let list_weak = list.downgrade();
-            let footer = footer.first().map(|b| b.downgrade());
+            let footer: Vec<glib::WeakRef<gtk::Button>> =
+                footer.iter().map(|b| b.downgrade()).collect();
             let controller = gtk::EventControllerKey::new();
             controller.connect_key_pressed(move |_, key, _, _| {
                 let Some(list) = list_weak.upgrade() else {
@@ -799,9 +931,9 @@ impl App {
                 let current = list.selected_row().map(|r| r.index());
 
                 if key == gdk::Key::Down && current == Some(last) {
-                    if let Some(button) = footer.as_ref().and_then(|b| b.upgrade())
-                        && button.is_sensitive()
-                    {
+                    let buttons: Vec<gtk::Button> =
+                        footer.iter().filter_map(|b| b.upgrade()).collect();
+                    if let Some(button) = App::first_footer(&buttons) {
                         app.sounds.borrow().click();
                         button.grab_focus();
                     }
@@ -853,6 +985,15 @@ impl App {
             *self.secondary_track.borrow(),
             self.subtitle.borrow().clone(),
         );
+    }
+
+    /// Returns to whichever screen the chooser was opened from.
+    fn leave_chooser(self: &Rc<Self>) {
+        if self.from_settings.replace(false) {
+            self.show_settings();
+        } else {
+            self.show_menu();
+        }
     }
 
     /// What the menu shows against the Subtitles row.
@@ -919,6 +1060,60 @@ impl App {
                     };
                     *self.sounds.borrow_mut() = Sounds::new(enabled, device);
                 }
+            }
+            Setting::Theme => {
+                let theme = match choice {
+                    Some(1) => crate::config::Theme::Light,
+                    Some(2) => crate::config::Theme::Dark,
+                    _ => crate::config::Theme::Auto,
+                };
+                {
+                    let mut config = self.config.borrow_mut();
+                    config.theme = theme;
+                    let _ = config.save();
+                }
+                appearance::apply_theme(theme);
+            }
+            Setting::InterfaceScale => {
+                let picked = choice.and_then(|index| UI_SCALES.get(index).copied());
+                {
+                    let mut config = self.config.borrow_mut();
+                    config.ui_scale = picked;
+                    let _ = config.save();
+                }
+                // Automatic means measuring the display again rather than
+                // keeping whatever was last in force.
+                let scale = picked.unwrap_or_else(|| {
+                    appearance::monitor_for_window(&self.window)
+                        .as_ref()
+                        .map(appearance::scale_for)
+                        .unwrap_or(1.0)
+                });
+                self.restyle(scale);
+            }
+            Setting::PrimaryLanguage | Setting::SecondaryLanguage | Setting::SubtitleLanguage => {
+                let picked = choice
+                    .and_then(|index| crate::languages::LANGUAGES.get(index))
+                    .map(|(code, _, _)| code.to_string());
+                let mut config = self.config.borrow_mut();
+                match setting {
+                    Setting::PrimaryLanguage => config.primary_language = picked,
+                    Setting::SecondaryLanguage => config.secondary_language = picked,
+                    _ => config.subtitle_language = picked,
+                }
+                let _ = config.save();
+            }
+            Setting::SubtitleSize => {
+                let mut config = self.config.borrow_mut();
+                config.subtitle_size = choice.and_then(|index| SUBTITLE_SIZES.get(index).copied());
+                let _ = config.save();
+            }
+            Setting::SubtitleFont => {
+                let mut config = self.config.borrow_mut();
+                config.subtitle_font = choice
+                    .and_then(|index| SUBTITLE_FONTS.get(index))
+                    .map(|font| font.to_string());
+                let _ = config.save();
             }
             Setting::Subtitles => {
                 let options = self.subtitle_options.borrow();
@@ -1017,14 +1212,33 @@ impl App {
         let tracks = media.audio;
         let options = crate::subtitles::options(path, &media.subtitles);
 
+        let (primary_language, secondary_language, subtitle_language) = {
+            let config = self.config.borrow();
+            (
+                config.primary_language.clone(),
+                config.secondary_language.clone(),
+                config.subtitle_language.clone(),
+            )
+        };
+        // First track in the preferred language, if one was named.
+        let by_language = |preferred: &Option<String>| -> Option<u32> {
+            let code = preferred.as_deref()?;
+            tracks
+                .iter()
+                .find(|track| crate::languages::matches(&track.language, code))
+                .map(|track| track.index)
+        };
+
         let saved = crate::config::load_resume(path).and_then(|resume| resume.tracks);
         let (primary, secondary) = match saved.clone() {
             // A saved None is a real choice ("no audio on that output"), so a
             // saved pair is taken as it stands rather than filled in.
             Some(choice) => (choice.primary, choice.secondary),
+            // Otherwise the preferred languages decide, falling back to the
+            // old behaviour of the first track and a different one.
             None => (
-                tracks.first().map(|t| t.index),
-                tracks.get(1).map(|t| t.index),
+                by_language(&primary_language).or_else(|| tracks.first().map(|t| t.index)),
+                by_language(&secondary_language).or_else(|| tracks.get(1).map(|t| t.index)),
             ),
         };
         // The file may have been re-encoded since it was last played.
@@ -1041,9 +1255,17 @@ impl App {
         // Only kept if it still resolves: an embedded stream the file no
         // longer has, or a subtitle file since deleted, quietly reverts to
         // none rather than failing when play is pressed.
-        *self.subtitle.borrow_mut() = saved
-            .and_then(|choice| choice.subtitle)
-            .filter(|choice| options.iter().any(|option| option.choice() == *choice));
+        let subtitle = match saved {
+            Some(choice) => choice.subtitle,
+            None => subtitle_language.as_deref().and_then(|code| {
+                options
+                    .iter()
+                    .find(|option| crate::languages::matches(option.label(), code))
+                    .map(|option| option.choice())
+            }),
+        };
+        *self.subtitle.borrow_mut() =
+            subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
         *self.subtitle_options.borrow_mut() = options;
         *self.tracks.borrow_mut() = tracks;
         *self.file.borrow_mut() = Some(path.to_path_buf());
@@ -1051,6 +1273,243 @@ impl App {
         let mut config = self.config.borrow_mut();
         config.last_video = Some(path.to_path_buf());
         let _ = config.save();
+    }
+
+    // --- Settings ------------------------------------------------------
+
+    /// Everything that applies to the application rather than to the video
+    /// currently loaded. Reached from the gear in the footer.
+    fn show_settings(self: &Rc<Self>) {
+        let (page, list, back) = list_page("Settings", true);
+
+        let rows = {
+            let config = self.config.borrow();
+            let language = |code: &Option<String>, unset: &str| match code {
+                Some(code) => crate::languages::name_for(code),
+                None => unset.to_string(),
+            };
+            [
+                (
+                    "Theme".to_string(),
+                    match config.theme {
+                        crate::config::Theme::Auto => "Follow the desktop".to_string(),
+                        crate::config::Theme::Light => "Light".to_string(),
+                        crate::config::Theme::Dark => "Dark".to_string(),
+                    },
+                    true,
+                ),
+                (
+                    "Interface Size".to_string(),
+                    match config.ui_scale {
+                        Some(scale) => format!("{scale}x"),
+                        None => format!("Automatic ({}x)", self.scale.get()),
+                    },
+                    true,
+                ),
+                (
+                    "Navigation Sounds".to_string(),
+                    if config.sounds { "On" } else { "Off" }.to_string(),
+                    true,
+                ),
+                (
+                    "Primary Audio Device".to_string(),
+                    config
+                        .primary_sink
+                        .clone()
+                        .unwrap_or_else(|| "Not set".to_string()),
+                    true,
+                ),
+                (
+                    "Primary Language".to_string(),
+                    language(&config.primary_language, "First track"),
+                    true,
+                ),
+                (
+                    "Secondary Audio Device".to_string(),
+                    config
+                        .secondary_sink
+                        .clone()
+                        .unwrap_or_else(|| "None".to_string()),
+                    true,
+                ),
+                (
+                    "Secondary Language".to_string(),
+                    language(&config.secondary_language, "Second track"),
+                    true,
+                ),
+                (
+                    "Subtitle Language".to_string(),
+                    language(&config.subtitle_language, "None"),
+                    true,
+                ),
+                (
+                    "Subtitle Size".to_string(),
+                    config
+                        .subtitle_size
+                        .unwrap_or(crate::pipeline::DEFAULT_SUBTITLE_SIZE)
+                        .to_string(),
+                    true,
+                ),
+                (
+                    "Subtitle Font".to_string(),
+                    config
+                        .subtitle_font
+                        .clone()
+                        .unwrap_or_else(|| crate::pipeline::DEFAULT_SUBTITLE_FONT.to_string()),
+                    true,
+                ),
+                ("Clear Saved Playback Data".to_string(), String::new(), true),
+                (
+                    "Version".to_string(),
+                    env!("CARGO_PKG_VERSION").to_string(),
+                    false,
+                ),
+                (
+                    "GStreamer".to_string(),
+                    gstreamer::version_string().to_string(),
+                    false,
+                ),
+            ]
+        };
+        debug_assert_eq!(rows.len(), SETTINGS_ROWS);
+
+        for (label, value, enabled) in &rows {
+            list.append(&menu_row(label, value, *enabled));
+        }
+        for index in SETTINGS_SECTIONS {
+            if let Some(row) = list.row_at_index(index) {
+                row.add_css_class("tp-section-start");
+            }
+        }
+
+        {
+            let app = self.clone();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                // Remembered so returning from a chooser lands back on the
+                // row it was opened from, as the main menu does.
+                *app.settings_row.borrow_mut() = row.index();
+                match row.index() {
+                    0 => app.open_setting(Setting::Theme),
+                    1 => app.open_setting(Setting::InterfaceScale),
+                    2 => app.toggle_sounds(),
+                    3 => app.open_setting(Setting::PrimaryDevice),
+                    4 => app.open_setting(Setting::PrimaryLanguage),
+                    5 => app.open_setting(Setting::SecondaryDevice),
+                    6 => app.open_setting(Setting::SecondaryLanguage),
+                    7 => app.open_setting(Setting::SubtitleLanguage),
+                    8 => app.open_setting(Setting::SubtitleSize),
+                    9 => app.open_setting(Setting::SubtitleFont),
+                    10 => app.confirm_clear_data(),
+                    _ => {}
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| app.show_menu());
+        }
+
+        self.wire_navigation(&list, &[]);
+        *self.screen.borrow_mut() = Screen::Settings;
+        self.window.set_child(Some(&page));
+        let remembered = (*self.settings_row.borrow()).min(last_row_index(&list));
+        if let Some(row) = list.row_at_index(remembered) {
+            list.select_row(Some(&row));
+            row.grab_focus();
+        }
+    }
+
+    /// Opens a chooser and remembers to come back here rather than to the
+    /// main menu.
+    fn open_setting(self: &Rc<Self>, setting: Setting) {
+        self.from_settings.set(true);
+        self.show_chooser(setting);
+    }
+
+    fn toggle_sounds(self: &Rc<Self>) {
+        let (enabled, device) = {
+            let mut config = self.config.borrow_mut();
+            config.sounds = !config.sounds;
+            let _ = config.save();
+            (config.sounds, config.primary_sink.clone())
+        };
+        *self.sounds.borrow_mut() = Sounds::new(enabled, device);
+        self.show_settings();
+    }
+
+    /// Re-renders every size in the interface at a new scale.
+    fn restyle(&self, scale: f64) {
+        self.scale.set(scale);
+        self.styles.load_from_data(&style_css(scale));
+    }
+
+    fn confirm_clear_data(self: &Rc<Self>) {
+        let app = self.clone();
+        self.show_confirm(
+            "Forget saved positions and track choices\nfor every video?",
+            "Clear",
+            move || {
+                if let Err(e) = crate::config::clear_all_resume() {
+                    eprintln!("{e}");
+                }
+                // The loaded file keeps its choices for this session; only
+                // what was written down is gone.
+                app.show_settings();
+            },
+        );
+    }
+
+    /// A yes-or-no page in the same style as the rest, since a dialog would
+    /// be unreadable at a distance and awkward with a controller.
+    fn show_confirm(
+        self: &Rc<Self>,
+        message: &str,
+        confirm_label: &str,
+        action: impl Fn() + 'static,
+    ) {
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(32)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        page.append(&heading_label(message));
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        let confirm = gtk::Button::with_label(confirm_label);
+        confirm.add_css_class("tp-button");
+        buttons.append(&cancel);
+        buttons.append(&confirm);
+        page.append(&buttons);
+
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_settings();
+            });
+        }
+        {
+            let app = self.clone();
+            confirm.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                action();
+            });
+        }
+
+        self.set_nav(None, &[]);
+        *self.screen.borrow_mut() = Screen::Confirm;
+        self.window.set_child(Some(&page));
+        // Cancel takes focus, so a reflexive second press doesn't destroy
+        // anything.
+        cancel.grab_focus();
     }
 
     // --- Playback ------------------------------------------------------
@@ -1104,7 +1563,7 @@ impl App {
                 ));
                 *self.playback.borrow_mut() = Some(playback);
                 // Nothing to move a selection through here.
-                self.set_nav(None, None);
+                self.set_nav(None, &[]);
                 *self.screen.borrow_mut() = Screen::Playing;
             }
             Err(e) => self.show_error(&format!("Couldn't play that file.\n\n{e}")),
@@ -1151,7 +1610,7 @@ impl App {
         }
 
         // Nothing to move a selection through here.
-        self.set_nav(None, None);
+        self.set_nav(None, &[]);
         *self.screen.borrow_mut() = Screen::ConfirmQuit;
         self.window.set_child(Some(&page));
         // Cancel takes focus so a reflexive second Enter doesn't quit.
@@ -1184,7 +1643,7 @@ impl App {
         back.connect_clicked(move |_| app.show_menu());
 
         // Nothing to move a selection through here.
-        self.set_nav(None, None);
+        self.set_nav(None, &[]);
         *self.screen.borrow_mut() = Screen::Error;
         self.window.set_child(Some(&page));
         back.grab_focus();
@@ -1438,6 +1897,8 @@ fn style_css(scale: f64) -> String {
         .tp-transport {{ -gtk-icon-size: {icon}px; color: #ffffff; }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
+        .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
+        .tp-gear image {{ -gtk-icon-size: {icon}px; }}
         .{video} {{ background-color: black; }}
         ",
         title = px(20.0),
