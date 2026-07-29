@@ -86,6 +86,16 @@ enum Screen {
     Playing,
 }
 
+/// Choices given on the command line, which skip the menu entirely.
+#[derive(Clone, Copy)]
+pub struct Preset {
+    /// Numbered as `--list-tracks` prints them, so 1 is the first track and
+    /// 0 means none.
+    pub primary: Option<u32>,
+    pub secondary: Option<u32>,
+    pub subtitle: Option<u32>,
+}
+
 /// Everything the menu can act on. Devices persist to the config file;
 /// the file and track choices last for the session.
 pub struct App {
@@ -142,7 +152,7 @@ impl App {
         gtk_app: &gtk::Application,
         config: Config,
         file: Option<PathBuf>,
-        preset_tracks: Option<(Option<u32>, Option<u32>)>,
+        preset: Option<Preset>,
         restart: bool,
         fullscreen: bool,
     ) {
@@ -263,8 +273,8 @@ impl App {
         // Command-line track choices go straight to playback, but only when
         // there's actually somewhere to play them.
         let ready = app.config.borrow().primary_sink.is_some();
-        match preset_tracks {
-            Some((primary, secondary)) if ready && app.file.borrow().is_some() => {
+        match preset {
+            Some(preset) if ready && app.file.borrow().is_some() => {
                 let resolve = |choice: Option<u32>| -> Option<u32> {
                     let tracks = app.tracks.borrow();
                     choice
@@ -272,8 +282,18 @@ impl App {
                         .and_then(|n| tracks.get((n - 1) as usize))
                         .map(|t| t.index)
                 };
-                *app.primary_track.borrow_mut() = resolve(primary);
-                *app.secondary_track.borrow_mut() = resolve(secondary);
+                *app.primary_track.borrow_mut() = resolve(preset.primary);
+                *app.secondary_track.borrow_mut() = resolve(preset.secondary);
+
+                // Only touched when asked for, so a video's remembered
+                // subtitle survives being launched with audio flags alone.
+                if let Some(choice) = preset.subtitle {
+                    let options = app.subtitle_options.borrow();
+                    *app.subtitle.borrow_mut() = (choice > 0)
+                        .then(|| options.get((choice - 1) as usize))
+                        .flatten()
+                        .map(|option| option.choice());
+                }
                 app.start_playback(app.restart);
             }
             _ => app.show_menu(),

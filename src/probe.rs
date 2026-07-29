@@ -34,10 +34,6 @@ pub struct Media {
     pub subtitles: Vec<SubtitleTrack>,
 }
 
-pub fn probe_audio_tracks(path: &Path) -> Result<Vec<AudioTrack>, String> {
-    probe_media(path).map(|media| media.audio)
-}
-
 pub fn probe_media(path: &Path) -> Result<Media, String> {
     let uri = glib::filename_to_uri(path, None).map_err(|e| e.to_string())?;
 

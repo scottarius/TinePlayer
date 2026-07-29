@@ -112,16 +112,18 @@ Any of the menu choices can be given up front, and will skip straight to playbac
 
 Track numbers are those `--list-tracks` prints.
 
-| Option            | Meaning                                                        |
-|-------------------|----------------------------------------------------------------|
-| `FILE`            | Path to the video to play. Omit it to choose one in the window |
-| `--primary <N>`   | Audio track for the primary output. `0` for no audio there     |
-| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there   |
-| `--list-tracks`   | Print the file's audio tracks with their numbers, then exit    |
-| `--restart`       | Start video from the beginning, ignoring any saved position    |
-| `--fullscreen`    | Start fullscreen                                               |
-| `-V`, `--version` | Print the version                                              |
-| `-h`, `--help`    | Print help                                                     |
+| Option            | Meaning                                                                   |
+|-------------------|---------------------------------------------------------------------------|
+| `FILE`            | Path to the video to play. Omit it to choose one in the window            |
+| `--primary <N>`   | Audio track for the primary output. `0` for no audio there                |
+| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there              |
+| `--subtitle <N>`  | Subtitles to show. `0` for none                                           |
+| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers, then exit |
+| `--restart`       | Start video from the beginning, ignoring any saved position               |
+| `--fullscreen`    | Start fullscreen                                                          |
+| `--windowed`      | Start windowed, overriding a remembered fullscreen preference             |
+| `-V`, `--version` | Print the version                                                         |
+| `-h`, `--help`    | Print help                                                                |
 
 ```sh
 TinePlayer --list-tracks video.mkv

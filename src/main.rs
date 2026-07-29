@@ -56,7 +56,13 @@ struct Args {
     #[arg(long, value_name = "N")]
     secondary: Option<u32>,
 
-    /// Print the file's audio tracks with their numbers, then exit
+    /// Subtitles to show, numbered as `--list-tracks` shows them. 0 means
+    /// none.
+    #[arg(long, value_name = "N")]
+    subtitle: Option<u32>,
+
+    /// Print the file's audio tracks and subtitles with their numbers, then
+    /// exit
     #[arg(long)]
     list_tracks: bool,
 
@@ -67,6 +73,10 @@ struct Args {
     /// Start fullscreen
     #[arg(long)]
     fullscreen: bool,
+
+    /// Start windowed, overriding a remembered fullscreen preference
+    #[arg(long, conflicts_with = "fullscreen")]
+    windowed: bool,
 }
 
 /// `dtsdec` (wraps libdca) produces silent output on this platform's
@@ -141,10 +151,11 @@ fn silence_upstream_unref_spam() {
 }
 
 fn list_tracks(path: &std::path::Path) -> Result<(), String> {
-    let tracks = probe::probe_audio_tracks(path)?;
+    let media = probe::probe_media(path)?;
+
     println!("Audio tracks in {}:", path.display());
     println!("  0  None");
-    for (position, track) in tracks.iter().enumerate() {
+    for (position, track) in media.audio.iter().enumerate() {
         let mut line = format!(
             "  {}  {} — {} {}ch",
             position + 1,
@@ -156,6 +167,17 @@ fn list_tracks(path: &std::path::Path) -> Result<(), String> {
             line.push_str(&format!(" — {}", track.title));
         }
         println!("{line}");
+    }
+
+    // The same list the menu offers, in the same order, so the numbers here
+    // are the ones `--subtitle` takes. Includes subtitle files sitting beside
+    // the video, not just what is inside it.
+    let subtitles = subtitles::options(path, &media.subtitles);
+    println!();
+    println!("Subtitles:");
+    println!("  0  None");
+    for (position, option) in subtitles.iter().enumerate() {
+        println!("  {}  {}", position + 1, option.label());
     }
     Ok(())
 }
@@ -207,8 +229,13 @@ fn main() -> std::process::ExitCode {
     // doesn't inherit them.
     display::apply_display_env(&display::resolve_display(&config));
 
-    let preset_tracks = (args.primary.is_some() || args.secondary.is_some())
-        .then_some((args.primary, args.secondary));
+    // Any of them being given means "start playing", so the menu is skipped.
+    let preset = (args.primary.is_some() || args.secondary.is_some() || args.subtitle.is_some())
+        .then_some(app::Preset {
+            primary: args.primary,
+            secondary: args.secondary,
+            subtitle: args.subtitle,
+        });
 
     let gtk_app = gtk::Application::builder()
         .application_id("dev.tineplayer.TinePlayer")
@@ -223,15 +250,13 @@ fn main() -> std::process::ExitCode {
             .clone()
             .or_else(|| config.last_video.clone().filter(|path| path.exists()));
         let restart = args.restart;
-        // The flag turns it on; it can't turn a remembered preference off,
-        // which is what --windowed would be for if it is ever wanted.
-        let fullscreen = args.fullscreen || config.fullscreen;
+        let fullscreen = (args.fullscreen || config.fullscreen) && !args.windowed;
         gtk_app.connect_activate(move |gtk_app| {
             App::build(
                 gtk_app,
                 config.clone(),
                 file.clone(),
-                preset_tracks,
+                preset,
                 restart,
                 fullscreen,
             );
