@@ -331,13 +331,52 @@ impl Playback {
         let Some(target) = self.seek_target.get() else {
             return;
         };
+
         // KEY_UNIT rather than ACCURATE: seeking to the nearest keyframe is
         // near-instant, where an exact seek has to decode forward from one
         // and stalls noticeably on a Pi.
-        match self
+        // Restarting each audio sink around the seek, which is a workaround
+        // rather than a cure.
+        //
+        // With two audio outputs, seeking leaves one permanently silent on
+        // Linux within a couple of attempts. It is not the clock or the sinks'
+        // async handling: six combinations of those were measured and all
+        // failed, a single output never fails, and pointing the second branch
+        // at a fakesink fails identically, so it is neither the devices nor
+        // their settings. The fault sits above the sinks and is provoked by
+        // the flush.
+        //
+        // They go down *before* the seek deliberately: keeping them up through
+        // it and restarting afterwards was measured and is markedly worse, so
+        // what matters is that they do not see the flush at all.
+        if cfg!(target_os = "linux") {
+            for role in ["primary", "secondary"] {
+                if let Some(sink) = self.pipeline.by_name(&format!("{role}_out")) {
+                    let _ = sink.set_state(gst::State::Null);
+                }
+            }
+        }
+
+        let result = self
             .pipeline
-            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT, target)
-        {
+            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT, target);
+
+        if cfg!(target_os = "linux") {
+            for role in ["primary", "secondary"] {
+                if let Some(sink) = self.pipeline.by_name(&format!("{role}_out")) {
+                    let _ = sink.sync_state_with_parent();
+                }
+            }
+            // With a sink in NULL the pipeline cannot report the seek as
+            // handled, even though it takes effect through the video branch,
+            // so the result says nothing here and reporting it would print a
+            // failure on every skip. The cost is that a genuine seek failure
+            // goes unreported on Linux while this workaround stands.
+            self.seeking.set(true);
+            return;
+        }
+
+        match result {
             Ok(()) => self.seeking.set(true),
             Err(e) => {
                 eprintln!("Seek failed: {e}");
