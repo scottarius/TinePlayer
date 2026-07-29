@@ -22,6 +22,20 @@ fn default_sounds() -> bool {
     true
 }
 
+/// Which file picker to open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowserMode {
+    /// The built-in browser when the last thing touched was a controller,
+    /// the system dialog otherwise. Each is better in its own situation:
+    /// the dialog can be typed into, the browser can be reached from a sofa.
+    #[default]
+    Automatic,
+    System,
+    #[serde(rename = "builtin")]
+    BuiltIn,
+}
+
 /// Which way round to draw the interface. `Auto` follows the desktop, and
 /// falls back to dark when it cannot be asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -49,6 +63,11 @@ pub struct Config {
     pub ui_scale: Option<f64>,
     #[serde(default)]
     pub theme: Theme,
+    #[serde(default)]
+    pub file_browser: BrowserMode,
+    /// Where the built-in browser last was, so it reopens there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_folder: Option<PathBuf>,
     /// Font family and style for subtitles, without a size, e.g. "Sans Bold".
     ///
     /// Set because Pango's default resolves to a serif face, which is a poor
@@ -94,6 +113,8 @@ impl Default for Config {
             secondary_sink: None,
             ui_scale: None,
             theme: Theme::default(),
+            file_browser: BrowserMode::default(),
+            last_folder: None,
             subtitle_font: None,
             subtitle_size: None,
             primary_language: None,

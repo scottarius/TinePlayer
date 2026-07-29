@@ -1,0 +1,110 @@
+//! Reading directories for the built-in file browser.
+//!
+//! The system file dialog is the better tool at a desk, but it cannot be
+//! driven from a controller and is not legible across a room. This provides
+//! the listing; the screen that draws it lives with the other menus.
+
+use std::path::{Path, PathBuf};
+
+/// Extensions offered when browsing. The pipeline typefinds rather than
+/// trusting the name, so this is about keeping the list free of clutter
+/// rather than about what will play.
+pub const VIDEO_EXTENSIONS: [&str; 15] = [
+    "mkv", "webm", "mp4", "m4v", "mov", "avi", "ts", "m2ts", "mts", "mpg", "mpeg", "wmv", "flv",
+    "ogv", "3gp",
+];
+
+pub struct Entry {
+    pub path: PathBuf,
+    pub label: String,
+    pub is_dir: bool,
+}
+
+pub fn is_video(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.as_str()))
+}
+
+/// Folders first, then videos, each sorted the way a person reads them:
+/// case-insensitively, so `avatar` and `Avatar` sit together rather than in
+/// separate blocks.
+pub fn read(directory: &Path) -> Vec<Entry> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+
+    let mut folders = Vec::new();
+    let mut videos = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Dotfiles are noise here, and on Linux the home directory is full
+        // of them.
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+
+        if kind.is_dir() {
+            folders.push(Entry {
+                path,
+                label: name,
+                is_dir: true,
+            });
+        } else if is_video(&path) {
+            videos.push(Entry {
+                path,
+                label: name,
+                is_dir: false,
+            });
+        }
+    }
+
+    let by_name = |a: &Entry, b: &Entry| a.label.to_lowercase().cmp(&b.label.to_lowercase());
+    folders.sort_by(by_name);
+    videos.sort_by(by_name);
+    folders.extend(videos);
+    folders
+}
+
+/// What sits above the top of the tree.
+///
+/// On Windows that is the drives, since there is nothing above `C:\`. On
+/// Unix everything hangs off one root, so going up eventually stops there
+/// and this is never needed.
+#[cfg(target_os = "windows")]
+pub fn roots() -> Vec<Entry> {
+    ('A'..='Z')
+        .map(|letter| PathBuf::from(format!("{letter}:\\")))
+        .filter(|path| path.exists())
+        .map(|path| Entry {
+            label: path.to_string_lossy().to_string(),
+            path,
+            is_dir: true,
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn roots() -> Vec<Entry> {
+    Vec::new()
+}
+
+/// The directory to open at: where browsing last stopped, else beside the
+/// last video played, else the user's home.
+pub fn start_location(remembered: Option<&Path>, last_video: Option<&Path>) -> PathBuf {
+    remembered
+        .filter(|path| path.is_dir())
+        .map(|path| path.to_path_buf())
+        .or_else(|| {
+            last_video
+                .and_then(|video| video.parent())
+                .filter(|path| path.is_dir())
+                .map(|path| path.to_path_buf())
+        })
+        .or_else(|| glib::home_dir().into())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}

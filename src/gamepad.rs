@@ -26,6 +26,8 @@ pub enum Action {
     /// The held direction was let go. Playback uses it to end a scrub; the
     /// menus ignore it.
     DirectionReleased,
+    PageUp,
+    PageDown,
     PlayPause,
     Fullscreen,
 }
@@ -101,6 +103,10 @@ fn button_action(button: Button) -> Option<Action> {
         Button::South => Some(Action::Activate),
         Button::East => Some(Action::Back),
         Button::North => Some(Action::Fullscreen),
+        // Shoulder buttons jump a screenful, which is what makes a folder of
+        // a hundred films navigable one press at a time.
+        Button::LeftTrigger => Some(Action::PageUp),
+        Button::RightTrigger => Some(Action::PageDown),
         Button::Start => Some(Action::PlayPause),
         _ => None,
     }

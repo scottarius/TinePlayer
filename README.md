@@ -36,6 +36,8 @@ device from a single pipeline, staying in sync because it is all one clock.
   automatically for a video you have not watched before
 - A settings screen for theme, interface size, devices, languages and
   subtitle appearance
+- A built-in file browser for choosing videos with a controller, or drop a
+  file onto the window
 - Remembers your output devices
 - Command-line arguments to launch straight into a video
 
@@ -150,7 +152,9 @@ the minimal desktops a media machine tends to run.
 
 All of this is also reachable from the gear at the bottom of the menu, along
 with preferred languages, subtitle size and font, and a way to forget every
-saved playback position. `subtitle_size` is in points against the video's own
+saved playback position. `file_browser` chooses between the system dialog and
+the built-in browser; left on `automatic` it uses the built-in one when a
+controller was the last thing you touched, and the system dialog otherwise. `subtitle_size` is in points against the video's own
 resolution rather than the screen's, so one value holds on any display.
 
 ## Compatibility

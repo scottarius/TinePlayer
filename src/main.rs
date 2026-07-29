@@ -7,6 +7,7 @@
 
 mod app;
 mod appearance;
+mod browser;
 mod config;
 mod controls;
 mod devices;

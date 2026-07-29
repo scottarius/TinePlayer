@@ -31,13 +31,18 @@ enum Setting {
     SubtitleLanguage,
     SubtitleSize,
     SubtitleFont,
+    FileBrowser,
 }
 
 /// Rows of the settings screen, in the order they appear.
-const SETTINGS_ROWS: usize = 13;
+/// Rows a page jump covers, roughly a screenful at the default size. What
+/// makes a folder of a hundred films navigable without a hundred presses.
+const PAGE_ROWS: i32 = 8;
+
+const SETTINGS_ROWS: usize = 14;
 /// Rows that begin a group: audio, subtitles, then the housekeeping at the
 /// bottom.
-const SETTINGS_SECTIONS: [i32; 3] = [3, 7, 10];
+const SETTINGS_SECTIONS: [i32; 3] = [4, 8, 11];
 
 /// Sizes offered for subtitles. The middle of the range is the default; the
 /// ends are deliberately wide, since what reads well from a sofa and what
@@ -74,6 +79,7 @@ const SCRUB_ABANDON: std::time::Duration = std::time::Duration::from_millis(700)
 enum Screen {
     Menu,
     Settings,
+    Browser,
     Chooser,
     Confirm,
     ConfirmQuit,
@@ -113,6 +119,9 @@ pub struct App {
     /// Whether the open chooser was reached from the settings screen, so
     /// that finishing with it returns where it came from.
     from_settings: Cell<bool>,
+    /// Whether a controller was the last thing to act, which decides the
+    /// picker in automatic mode.
+    gamepad_last: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -189,6 +198,7 @@ impl App {
             nav_footer: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
             from_settings: Cell::new(false),
+            gamepad_last: Cell::new(false),
             styles: styles.clone(),
             scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
@@ -273,6 +283,7 @@ impl App {
         let controller = gtk::EventControllerKey::new();
         let app = self.clone();
         controller.connect_key_pressed(move |_, key, _, _| {
+            app.gamepad_last.set(false);
             let playing = app.playback.borrow().is_some();
             match key {
                 // Only claimed during playback — the menus need Space for
@@ -302,6 +313,14 @@ impl App {
                 }
                 // Available on every screen, not just during playback: on a
                 // television the menus want the whole display too.
+                gdk::Key::Page_Up => {
+                    app.move_selection(-PAGE_ROWS);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::Page_Down => {
+                    app.move_selection(PAGE_ROWS);
+                    glib::Propagation::Stop
+                }
                 gdk::Key::f | gdk::Key::F => {
                     app.toggle_fullscreen();
                     glib::Propagation::Stop
@@ -324,6 +343,38 @@ impl App {
                 }
             });
         }
+        // Dropping a file on the window loads it, from any screen including
+        // mid-playback. Quicker than any picker when the file is already in
+        // front of you in a file manager.
+        {
+            let app = self.clone();
+            let drop = gtk::DropTarget::new(gtk::gio::File::static_type(), gdk::DragAction::COPY);
+            drop.connect_drop(move |_, value, _, _| {
+                let Ok(file) = value.get::<gtk::gio::File>() else {
+                    return false;
+                };
+                // Only local files have a path; a remote URI has nothing for
+                // filesrc to open.
+                let Some(path) = file.path() else {
+                    return false;
+                };
+                app.stop_playback();
+                app.set_file(&path);
+                app.show_menu();
+                true
+            });
+            self.window.add_controller(drop);
+        }
+
+        // Any pointer movement means someone is at the machine rather than
+        // on a sofa, which is what automatic picker mode keys off.
+        {
+            let app = self.clone();
+            let pointer = gtk::EventControllerMotion::new();
+            pointer.connect_motion(move |_, _, _| app.gamepad_last.set(false));
+            self.window.add_controller(pointer);
+        }
+
         self.window.add_controller(controller);
     }
 
@@ -341,7 +392,9 @@ impl App {
             }
             Screen::Chooser => self.leave_chooser(),
             Screen::Confirm => self.show_settings(),
-            Screen::Settings | Screen::Error | Screen::ConfirmQuit => self.show_menu(),
+            Screen::Browser | Screen::Settings | Screen::Error | Screen::ConfirmQuit => {
+                self.show_menu()
+            }
             Screen::Menu => self.show_confirm_quit(),
         }
     }
@@ -473,6 +526,7 @@ impl App {
 
     fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
         use crate::gamepad::Action;
+        self.gamepad_last.set(true);
         match action {
             Action::Up | Action::Down if self.playback.borrow().is_some() => self.wake_controls(),
             Action::Up => self.move_selection(-1),
@@ -500,6 +554,8 @@ impl App {
             Action::Activate => self.activate_focused(),
             Action::PlayPause => {}
             Action::DirectionReleased => self.end_scrub(),
+            Action::PageUp => self.move_selection(-PAGE_ROWS),
+            Action::PageDown => self.move_selection(PAGE_ROWS),
             Action::Back => self.go_back(),
             Action::Fullscreen => self.toggle_fullscreen(),
         }
@@ -539,8 +595,18 @@ impl App {
             return;
         }
 
-        let next = list.selected_row().map(|row| row.index()).unwrap_or(0) + delta;
+        let position = list.selected_row().map(|row| row.index()).unwrap_or(0);
+        let next = position + delta;
+        // A page that runs off the end stops at the end, rather than doing
+        // nothing: only a single step from the very edge should be ignored.
         if next < 0 {
+            if position > 0 {
+                select(0);
+            }
+            return;
+        }
+        if next > last && position < last {
+            select(last);
             return;
         }
         if next > last {
@@ -746,7 +812,7 @@ impl App {
                 app.sounds.borrow().click();
                 *app.menu_row.borrow_mut() = row.index();
                 match row.index() {
-                    0 => app.open_file_chooser(),
+                    0 => app.choose_video(),
                     1 => app.show_chooser(Setting::PrimaryDevice),
                     2 => app.show_chooser(Setting::PrimaryTrack),
                     3 => app.show_chooser(Setting::SecondaryDevice),
@@ -797,6 +863,7 @@ impl App {
             Setting::SubtitleLanguage => "Subtitle Language",
             Setting::SubtitleSize => "Subtitle Size",
             Setting::SubtitleFont => "Subtitle Font",
+            Setting::FileBrowser => "File Browser",
         };
         let (page, list, back) = list_page(title, true);
 
@@ -920,6 +987,19 @@ impl App {
                         ""
                     };
                     entries.push((format!("{size}{note}"), Some(position)));
+                }
+            }
+            Setting::FileBrowser => {
+                current = Some(match self.config.borrow().file_browser {
+                    crate::config::BrowserMode::Automatic => 0,
+                    crate::config::BrowserMode::System => 1,
+                    crate::config::BrowserMode::BuiltIn => 2,
+                });
+                for (position, name) in ["Automatic", "System dialog", "Built-in"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    entries.push((name.to_string(), Some(position)));
                 }
             }
             Setting::SubtitleFont => {
@@ -1170,6 +1250,15 @@ impl App {
                 }
                 let _ = config.save();
             }
+            Setting::FileBrowser => {
+                let mut config = self.config.borrow_mut();
+                config.file_browser = match choice {
+                    Some(1) => crate::config::BrowserMode::System,
+                    Some(2) => crate::config::BrowserMode::BuiltIn,
+                    _ => crate::config::BrowserMode::Automatic,
+                };
+                let _ = config.save();
+            }
             Setting::SubtitleSize => {
                 let mut config = self.config.borrow_mut();
                 config.subtitle_size = choice.and_then(|index| SUBTITLE_SIZES.get(index).copied());
@@ -1225,10 +1314,7 @@ impl App {
         // which is why "All files" stays available below.
         let filter = gtk::FileFilter::new();
         filter.set_name(Some("Video files"));
-        for extension in [
-            "mkv", "webm", "mp4", "m4v", "mov", "avi", "ts", "m2ts", "mts", "mpg", "mpeg", "wmv",
-            "flv", "ogv", "3gp",
-        ] {
+        for extension in crate::browser::VIDEO_EXTENSIONS {
             // Case-insensitive by hand: GTK's pattern matching is not, and
             // ".MKV" off a camera or an old disc is common enough to matter.
             filter.add_pattern(&format!("*.{extension}"));
@@ -1342,6 +1428,158 @@ impl App {
         let _ = config.save();
     }
 
+    // --- Browsing ------------------------------------------------------
+
+    /// The built-in browser: another list screen, so it navigates exactly
+    /// like the menus and needs no pointer.
+    ///
+    /// `select` names the folder just stepped out of, which is then the row
+    /// focus lands on. Going up otherwise dumps you at the top of a long
+    /// list with no sense of where you were.
+    fn show_browser(
+        self: &Rc<Self>,
+        directory: &std::path::Path,
+        select: Option<&std::path::Path>,
+    ) {
+        let (page, list, back) = list_page(
+            &directory
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| directory.to_string_lossy().to_string()),
+            true,
+        );
+
+        // Entries and the paths they lead to. `None` steps up a level.
+        let mut rows: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
+        let parent = directory.parent().map(|p| p.to_path_buf());
+        if parent.is_some() || !crate::browser::roots().is_empty() {
+            rows.push(("⬆  Up".to_string(), None));
+        }
+        for entry in crate::browser::read(directory) {
+            let label = if entry.is_dir {
+                format!("📁  {}", entry.label)
+            } else {
+                entry.label.clone()
+            };
+            rows.push((label, Some(entry.path)));
+        }
+        if rows.is_empty() {
+            rows.push(("Nothing here".to_string(), None));
+        }
+
+        for (label, _) in &rows {
+            list.append(&chooser_row(label));
+        }
+
+        {
+            let app = self.clone();
+            let rows = rows.clone();
+            let here = directory.to_path_buf();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                let Some((_, target)) = rows.get(row.index() as usize) else {
+                    return;
+                };
+                match target {
+                    Some(path) if path.is_dir() => app.show_browser(path, None),
+                    Some(path) => {
+                        app.set_file(path);
+                        app.show_menu();
+                    }
+                    // Up: to the parent, or to the drive list when there is
+                    // nothing above this.
+                    None => match here.parent() {
+                        Some(parent) => app.show_browser(parent, Some(&here)),
+                        None => app.show_roots(),
+                    },
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| app.show_menu());
+        }
+
+        {
+            let mut config = self.config.borrow_mut();
+            config.last_folder = Some(directory.to_path_buf());
+            let _ = config.save();
+        }
+
+        self.wire_navigation(&list, &[]);
+        *self.screen.borrow_mut() = Screen::Browser;
+        self.window.set_child(Some(&page));
+
+        let opening = select
+            .and_then(|wanted| {
+                rows.iter()
+                    .position(|(_, path)| path.as_deref() == Some(wanted))
+            })
+            // Otherwise the first real entry rather than the Up row.
+            .unwrap_or(if rows.len() > 1 { 1 } else { 0 }) as i32;
+        if let Some(row) = list.row_at_index(opening) {
+            list.select_row(Some(&row));
+            row.grab_focus();
+        }
+    }
+
+    /// The drive list, which only Windows has anything above the root to
+    /// show.
+    fn show_roots(self: &Rc<Self>) {
+        let roots = crate::browser::roots();
+        if roots.is_empty() {
+            return;
+        }
+        let (page, list, back) = list_page("Drives", true);
+        for entry in &roots {
+            list.append(&chooser_row(&entry.label));
+        }
+
+        {
+            let app = self.clone();
+            let paths: Vec<std::path::PathBuf> = roots.iter().map(|e| e.path.clone()).collect();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                if let Some(path) = paths.get(row.index() as usize) {
+                    app.show_browser(path, None);
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| app.show_menu());
+        }
+
+        self.wire_navigation(&list, &[]);
+        *self.screen.borrow_mut() = Screen::Browser;
+        self.window.set_child(Some(&page));
+        if let Some(row) = list.row_at_index(0) {
+            list.select_row(Some(&row));
+            row.grab_focus();
+        }
+    }
+
+    /// Opens whichever picker suits how the request arrived.
+    fn choose_video(self: &Rc<Self>) {
+        let mode = self.config.borrow().file_browser;
+        let built_in = match mode {
+            crate::config::BrowserMode::BuiltIn => true,
+            crate::config::BrowserMode::System => false,
+            crate::config::BrowserMode::Automatic => self.gamepad_last.get(),
+        };
+        if built_in {
+            let (remembered, last_video) = {
+                let config = self.config.borrow();
+                (config.last_folder.clone(), config.last_video.clone())
+            };
+            let start =
+                crate::browser::start_location(remembered.as_deref(), last_video.as_deref());
+            self.show_browser(&start, None);
+        } else {
+            self.open_file_chooser();
+        }
+    }
+
     // --- Settings ------------------------------------------------------
 
     /// Everything that applies to the application rather than to the video
@@ -1376,6 +1614,15 @@ impl App {
                 (
                     "Navigation Sounds".to_string(),
                     if config.sounds { "On" } else { "Off" }.to_string(),
+                    true,
+                ),
+                (
+                    "File Browser".to_string(),
+                    match config.file_browser {
+                        crate::config::BrowserMode::Automatic => "Automatic".to_string(),
+                        crate::config::BrowserMode::System => "System dialog".to_string(),
+                        crate::config::BrowserMode::BuiltIn => "Built-in".to_string(),
+                    },
                     true,
                 ),
                 (
@@ -1460,14 +1707,15 @@ impl App {
                     0 => app.open_setting(Setting::Theme),
                     1 => app.open_setting(Setting::InterfaceScale),
                     2 => app.toggle_sounds(),
-                    3 => app.open_setting(Setting::PrimaryDevice),
-                    4 => app.open_setting(Setting::PrimaryLanguage),
-                    5 => app.open_setting(Setting::SecondaryDevice),
-                    6 => app.open_setting(Setting::SecondaryLanguage),
-                    7 => app.open_setting(Setting::SubtitleLanguage),
-                    8 => app.open_setting(Setting::SubtitleSize),
-                    9 => app.open_setting(Setting::SubtitleFont),
-                    10 => app.confirm_clear_data(),
+                    3 => app.open_setting(Setting::FileBrowser),
+                    4 => app.open_setting(Setting::PrimaryDevice),
+                    5 => app.open_setting(Setting::PrimaryLanguage),
+                    6 => app.open_setting(Setting::SecondaryDevice),
+                    7 => app.open_setting(Setting::SecondaryLanguage),
+                    8 => app.open_setting(Setting::SubtitleLanguage),
+                    9 => app.open_setting(Setting::SubtitleSize),
+                    10 => app.open_setting(Setting::SubtitleFont),
+                    11 => app.confirm_clear_data(),
                     _ => {}
                 }
             });
