@@ -804,7 +804,7 @@ impl App {
         // missing-image glyph.
         let fullscreen = gtk::Button::new();
         fullscreen.set_child(Some(&fullscreen_image(
-            &self.window,
+            self.window.is_fullscreen(),
             self.scale.get(),
             self.dark.get(),
         )));
@@ -829,7 +829,7 @@ impl App {
             let dark = self.dark.get();
             self.window.connect_fullscreened_notify(move |window| {
                 if let Some(button) = weak.upgrade() {
-                    button.set_child(Some(&fullscreen_image(window, scale, dark)));
+                    button.set_child(Some(&fullscreen_image(window.is_fullscreen(), scale, dark)));
                 }
             });
         }
@@ -2078,7 +2078,58 @@ impl App {
 
         match result {
             Ok(playback) => {
-                let controls = Controls::new(playback.widget());
+                let controls = Controls::new(
+                    playback.widget(),
+                    self.scale.get(),
+                    self.dark.get(),
+                    self.window.is_fullscreen(),
+                );
+                {
+                    let app = self.clone();
+                    controls.connect_play_pause(move || {
+                        if let Some(playback) = app.playback.borrow().as_ref() {
+                            playback.toggle_pause();
+                        }
+                        app.wake_controls();
+                    });
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_fullscreen(move || app.toggle_fullscreen());
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_double_click(move || app.toggle_fullscreen());
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_motion(move || app.wake_controls());
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_seek(move |fraction| {
+                        let playback = app.playback.borrow().clone();
+                        let Some(playback) = playback else { return };
+                        let Some(duration) = playback.duration() else {
+                            return;
+                        };
+                        playback.seek_to(gstreamer::ClockTime::from_nseconds(
+                            (duration.nseconds() as f64 * fraction) as u64,
+                        ));
+                        app.wake_controls();
+                    });
+                }
+                {
+                    // The mark has to follow the state however it changed:
+                    // this button, the menu's, the F key, or the window
+                    // manager.
+                    let weak = Rc::downgrade(&controls);
+                    self.window.connect_fullscreened_notify(move |window| {
+                        if let Some(controls) = weak.upgrade() {
+                            controls.set_fullscreen(window.is_fullscreen());
+                        }
+                    });
+                }
                 self.window.set_child(Some(controls.widget()));
                 controls.update(&playback);
                 controls.flash(false);
@@ -2293,13 +2344,13 @@ fn heading_label(text: &str) -> gtk::Label {
 /// Drawn twice in each direction, once in each theme's foreground colour,
 /// because an embedded image cannot be recoloured the way a symbolic icon is.
 /// A single compromise grey read poorly against both.
-fn fullscreen_image(window: &impl IsA<gtk::Window>, scale: f64, dark: bool) -> gtk::Image {
+pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
     const ENTER_LIGHT: &[u8] = include_bytes!("../data/fullscreen-light.png");
     const ENTER_DARK: &[u8] = include_bytes!("../data/fullscreen-dark.png");
     const LEAVE_LIGHT: &[u8] = include_bytes!("../data/restore-light.png");
     const LEAVE_DARK: &[u8] = include_bytes!("../data/restore-dark.png");
 
-    let bytes = match (window.as_ref().is_fullscreen(), dark) {
+    let bytes = match (fullscreen, dark) {
         (true, true) => LEAVE_DARK,
         (true, false) => LEAVE_LIGHT,
         (false, true) => ENTER_DARK,
@@ -2546,6 +2597,18 @@ fn style_css(scale: f64) -> String {
         }}
         .tp-time {{ font-size: {hint}px; color: #ffffff; }}
         .tp-transport {{ -gtk-icon-size: {icon}px; color: #ffffff; }}
+        /* Flat over the picture: the strip already reads as a control bar,
+           and button chrome on top of video looks like a mistake. */
+        .tp-transport-button {{
+            background-image: none;
+            background-color: transparent;
+            border-color: transparent;
+            box-shadow: none;
+            min-height: 0px;
+            min-width: 0px;
+            padding: 0px {crumb_pad}px;
+        }}
+        .tp-transport-button:hover {{ background-color: rgba(255, 255, 255, 0.15); }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
         /* Reads as a path rather than a row of buttons, until one takes

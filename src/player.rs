@@ -285,6 +285,22 @@ impl Playback {
         gst::ClockTime::from_nseconds(target)
     }
 
+    /// Seeks to an absolute point, for the scrubber. Goes through the same
+    /// queue as everything else, so dragging cannot pile seeks onto a
+    /// pipeline still servicing the last one.
+    pub fn seek_to(&self, target: gst::ClockTime) {
+        self.scrub.set(None);
+        self.scrub_started.set(None);
+        self.scrubbed.set(false);
+        self.seek_target.set(Some(target));
+
+        if self.seeking.get() {
+            self.seek_queued.set(true);
+        } else {
+            self.run_seek();
+        }
+    }
+
     /// Performs the one seek the gesture asked for: to wherever scrubbing
     /// travelled, or one step along if it turned out to be a tap.
     pub fn commit_scrub(&self) {
