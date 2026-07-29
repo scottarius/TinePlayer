@@ -23,32 +23,22 @@ device from a single pipeline, staying in sync because it is all one clock.
 
 ## Features
 
-- Plays two audio tracks at once, each to its own output device, in sync with
-  the video
-- Reads standard video containers: MKV, MP4, MPEG-TS, and anything else
+- Built primarily for use on an HTPC and TV, but works just as well on a computer
+- Plays a video and two audio tracks at once, each to its own output device, all in sync
+- Works with standard video containers: MKV, MP4, MPEG-TS, and anything else
   GStreamer supports
-- Standard playback controls, shown over the video
-- Remembers the playback position for each video and resumes there
-- Interface large enough to use from the couch, with gamepad support
-- Subtitles, either embedded in the video or from a subtitle file beside it,
-  chosen separately from the two audio tracks
-- Preferred languages per output and for subtitles, used to pick tracks
-  automatically for a video you have not watched before
-- A settings screen for theme, interface size, devices, languages and
-  subtitle appearance
-- A built-in file browser for choosing videos with a controller, or drop a
-  file onto the window
-- Remembers your output devices
-- Command-line arguments to launch straight into a video
+- Remembers the playback position, output devices, track selection, and subtitle choice for each video when resuming
+- Interface large enough to use from the couch, with full gamepad support
+- Supports subtitles, either embedded in the video or from an external subtitle file beside it
+- Preferred language settings per audio track and for subtitles, used to pick tracks
+  automatically from what's available
+- A built-in gamepad enabled file browser for choosing videos
+- Command-line arguments to bypass the UI and launch straight into video playback
 
 ## Known issues
 
-- On Linux, seeking can silence an audio output for the rest of playback.
-  Returning to the menu and playing again clears it.
 - Blu-ray PGS subtitles cannot be shown: GStreamer ships no decoder for them,
   so they are left out of the list rather than drawn as nothing.
-- On Windows, switching from dark back to light needs a restart, which the
-  application offers to do. GTK there changes to dark but not back.
 - No packaged downloads yet, so it has to be built from source.
 
 ## Requirements
@@ -93,19 +83,18 @@ MSYS2/MinGW builds use a different ABI and will not link.
 
 ## Using it
 
-Run it with no arguments, or by double-clicking the executable:
+Run it from the command line with or without arguments, or by double-clicking the executable:
 
 ```
 ./target/release/TinePlayer
 ```
 
-Everything is chosen from one menu: the video, the output devices, the audio
-track for each, and the subtitles. Choosing a video opens a built-in browser;
-a button in its top corner opens the system dialog instead.
+Everything required for video playback is chosen from the main screen: the video, the output devices, the audio
+track for each, and the subtitles. The settings menu contains more advanced settings and preferences. See Configuration section below.
 
 ### Controls
 
-Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse.
+Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse, though everything is also mouse interactable.
 
 | Key | Gamepad | Action |
 | --- | --- | --- |
@@ -119,8 +108,9 @@ Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse.
 
 ### Command line
 
-Any of the menu choices can be given up front, which skips straight to
-playback. Track numbers are those `--list-tracks` prints.
+Any of the menu choices can be given up front, and will skip straight to playback if required options are provided.
+
+Track numbers are those `--list-tracks` prints.
 
 | Option            | Meaning                                                        |
 |-------------------|----------------------------------------------------------------|
@@ -144,22 +134,22 @@ Everything in the settings menu is stored in `config.yaml`, which can also be
 edited directly. It lives in the per-user config directory
 (`~/.config/tineplayer/` on Linux, `%LOCALAPPDATA%\tineplayer\` on Windows).
 
-| Setting                       | Key                  | Default     | Meaning                                                                                            |
-|-------------------------------|----------------------|-------------|----------------------------------------------------------------------------------------------------|
-| Theme                         | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                          |
-| Interface Size                | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>Unset scales automatically to the display resolution           |
-| Navigation Sounds             | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                               |
-| Primary Audio Device          | `primary_sink`       | Unset       | Primary output device name. Required                                                               |
-| Primary Language Preference   | `primary_language`   | Unset       | Preferred primary language, such as `en` <br/>Unset defaults to the first track, see list below    |
-| Secondary Audio Device        | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                 |
-| Secondary Language Preference | `secondary_language` | Unset       | Preferred secondary language, such as `en` <br/>Unset defaults to the second track, see list below |
-| Subtitle Language             | `subtitle_language`  | Unset       | Preferred subtitle language, such as `en` <br/>Unset shows no subtitles, see list below            |
-| Subtitle Size                 | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's                                        |
-| Subtitle Font                 | `subtitle_font`      | `Sans Bold` | Font Family and style name                                                                         |
+| Setting                       | Key                  | Default     | Meaning                                                        |
+|-------------------------------|----------------------|-------------|----------------------------------------------------------------|
+| Theme                         | `theme`              | `auto`      | `auto`, `light` or `dark`                                      |
+| Interface Size                | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution |
+| Navigation Sounds             | `sounds`             | `true`      | Navigation clicks, `true` or `false`                           |
+| Primary Audio Device          | `primary_sink`       | Unset       | Primary output device name. Required                           |
+| Primary Language Preference   | `primary_language`   | Unset       | Preferred primary language, see list below <br/>If unset defaults to the first track |
+| Secondary Audio Device        | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only |
+| Secondary Language Preference | `secondary_language` | Unset       | Preferred secondary language, see list below <br/>If unset defaults to the second track |
+| Subtitle Language             | `subtitle_language`  | Unset       | Preferred subtitle language, see list below <br/>If unset shows no subtitles |
+| Subtitle Size                 | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's    |
+| Subtitle Font                 | `subtitle_font`      | `Sans Bold` | Font Family and style name                                     |
 
-Languages are `en`, `ru`, `es`, `fr`, `de`, `it`, `pt`, `nl`, `pl`, `uk`,
-`cs`, `sv`, `no`, `da`, `fi`, `hu`, `tr`, `el`, `he`, `ar`, `hi`, `ja`, `ko`
-and `zh`.
+Supported languages: `en`, `ru`, `es`, `fr`, `de`, `it`, `pt`, `nl`, `pl`, `uk`,
+`cs`, `sv`, `no`, `da`, `fi`, `hu`, `tr`, `el`, `he`, `ar`, `hi`, `ja`, `ko`,
+ `zh`
 
 Only the leading letters are compared, so `en` matches a track tagged `eng` or
 `en-US`, and a subtitle file named `film.en.hi.srt`.
