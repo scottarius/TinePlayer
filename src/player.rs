@@ -93,6 +93,11 @@ pub struct Playback {
 impl Playback {
     /// Builds the pipeline, seeks to any saved resume position, and starts
     /// playing. `on_ended` fires when the file finishes or errors out.
+    ///
+    /// Called from exactly one place, and every argument is a different kind
+    /// of thing, so grouping them into a struct would only move the same list
+    /// somewhere less obvious than the call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         path: &Path,
         primary_track: Option<u32>,

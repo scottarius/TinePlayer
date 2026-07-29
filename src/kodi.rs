@@ -121,7 +121,7 @@ pub fn details(file: &Path) -> Option<Details> {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        resume_ns: (position > 0.0).then(|| (position * 1_000_000_000.0) as u64),
+        resume_ns: (position > 0.0).then_some((position * 1_000_000_000.0) as u64),
     })
 }
 
