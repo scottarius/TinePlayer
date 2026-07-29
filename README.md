@@ -47,184 +47,23 @@ device from a single pipeline, staying in sync because it is all one clock.
   works: speakers and headphones, a USB headset, an external DAC, and so on.
 - A video file containing two or more audio tracks.
 
-## Building from source
+## Documentation
 
-Setup scripts are provided for both platforms. Each is idempotent, skipping
-anything already present, so they are safe to re-run.
+- **[Building from source](docs/building.md)** — setup scripts and dependencies for each platform
+- **[Using TinePlayer](docs/usage.md)** — controls, keyboard and gamepad, command-line options
+- **[Configuration](docs/configuration.md)** — `config.yaml`, language preferences, saved playback resume data
+- **[Integrations](docs/integrations.md)** - integrating with other media players and libraries
 
-**Linux**
+## Quick start
 
 ```sh
-./install.sh
+./install.sh            # Linux, or .\install.ps1 on Windows
 cargo build --release
-```
-
-Installs the Rust toolchain, GTK 4 development headers, and the GStreamer
-runtime, development headers and plugins (including those for common
-Blu-ray-rip codecs like AC3 and DTS).
-
-**Windows**
-
-```powershell
-.\install.ps1
-cargo build --release
-```
-
-Installs Rust, the Visual Studio 2022 C++ build tools and GStreamer, then sets
-the environment variables needed to build. Open a new terminal afterwards so
-those take effect.
-
-GStreamer's Windows distribution bundles GTK 4 and glib alongside GStreamer, so
-it supplies every native dependency in one place. **Don't install GTK
-separately** (with gvsbuild, for instance): a second GTK brings a second copy
-of glib, and mixing one library's headers with the other's build tools fails to
-build. Everything must be an MSVC build to match Rust's MSVC toolchain, because
-MSYS2/MinGW builds use a different ABI and will not link.
-
-## Using it
-
-Run it from the command line with or without arguments, or by double-clicking the executable:
-
-```
 ./target/release/TinePlayer
 ```
 
-Everything required for video playback is chosen from the main screen: the video, the output devices, the audio
-track for each, and the subtitles. The settings menu contains more advanced settings and preferences. See Configuration section below.
-
-### Controls
-
-Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse, though everything is also mouse interactable.
-
-| Key | Gamepad | Action |
-| --- | --- | --- |
-| Arrow keys | D-pad or left stick | Navigate the menus |
-| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | Shoulder buttons | Jump a screenful, for long folders |
-| <kbd>Enter</kbd> | A / Cross | Select |
-| <kbd>Esc</kbd> | B / Circle | Back one menu; stop video playback |
-| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback |
-| <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
-| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
-
-### Command line
-
-Any of the menu choices can be given up front, and will skip straight to playback if required options are provided.
-
-Track numbers are those `--list-tracks` prints.
-
-| Option            | Meaning                                                                   |
-|-------------------|---------------------------------------------------------------------------|
-| `FILE`            | Path to the video to play. Omit it to choose one in the window            |
-| `--primary <N>`   | Audio track for the primary output. `0` for no audio there                |
-| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there              |
-| `--subtitle <N>`  | Subtitles to show. `0` for none                                           |
-| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers, then exit |
-| `--restart`       | Start video from the beginning, ignoring any saved position               |
-| `--fullscreen`    | Start fullscreen                                                          |
-| `--windowed`      | Start windowed, overriding a remembered fullscreen preference             |
-| `-V`, `--version` | Print the version                                                         |
-| `-h`, `--help`    | Print help                                                                |
-
-```sh
-TinePlayer --list-tracks video.mkv
-TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
-```
-
-### Configuration
-
-Everything in the settings menu is stored in `config.yaml`, which can also be
-edited directly. It lives in the per-user config directory
-(`~/.config/tineplayer/` on Linux, `%LOCALAPPDATA%\tineplayer\` on Windows).
-
-| Setting                       | Key                  | Default     | Meaning                                                        |
-|-------------------------------|----------------------|-------------|----------------------------------------------------------------|
-| Theme                         | `theme`              | `auto`      | `auto`, `light` or `dark`                                      |
-| Interface Size                | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution |
-| Navigation Sounds             | `sounds`             | `true`      | Navigation clicks, `true` or `false`                           |
-| Primary Audio Device          | `primary_sink`       | Unset       | Primary output device name. Required                           |
-| Primary Language Preference   | `primary_language`   | Unset       | Preferred primary language, see list below <br/>If unset defaults to the first track |
-| Secondary Audio Device        | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only |
-| Secondary Language Preference | `secondary_language` | Unset       | Preferred secondary language, see list below <br/>If unset defaults to the second track |
-| Subtitle Language             | `subtitle_language`  | Unset       | Preferred subtitle language, see list below <br/>If unset shows no subtitles |
-| Subtitle Size                 | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's    |
-| Subtitle Font                 | `subtitle_font`      | `Sans Bold` | Font Family and style name                                     |
-
-Supported languages: `en`, `ru`, `es`, `fr`, `de`, `it`, `pt`, `nl`, `pl`, `uk`,
-`cs`, `sv`, `no`, `da`, `fi`, `hu`, `tr`, `el`, `he`, `ar`, `hi`, `ja`, `ko`,
- `zh`
-
-Only the leading letters are compared, so `en` matches a track tagged `eng` or
-`en-US`, and a subtitle file named `film.en.hi.srt`.
-
-Each video's position, track and subtitle choices are kept separately, in
-`positions.json`.
-
-### Kodi
-
-[Kodi](https://kodi.tv) is a media center application: it catalogues your films
-and TV files with artwork and plays them on a television. It can hand playback to
-TinePlayer rather than playing video itself so that you get the benefits of Kodi's
-library browser plus the benefits of TinePlayer's dual audio output.
-
-There are two ways to set it up depending on your preference:
-
-* **As a choice per video:** By default Kodi will play videos itself, and 
-TinePlayer becomes an extra option under **Play using...** in a video's context menu.
-* **As the default player:** Kodi opens every video in TinePlayer.
-
-Caveat about Kodi versions: 
-* On Kodi 21 and later, the **Play using...** option appears throughout.
-* On Kodi 20 and earlier, the **Play using...** only appears under the **Videos → Files** section, not in the Libraries.
-
-**Manual Installation**
-
-Kodi has no interface for this, so it means editing `playercorefactory.xml` in Kodi's userdata directory — `~/.kodi/userdata/` on
-Linux, `%APPDATA%\Kodi\userdata\` on Windows. If it doesn't exist already, you can create it yourself. 
-
-Paste in the following snippit, replacing `<filename>` with the TinePlayer executable path.
-
-```xml
-<playercorefactory>
-  <players>
-    <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
-      <filename>/path/to/TinePlayer</filename>
-      <args>"{1}" --fullscreen</args>
-      <hidexbmc>true</hidexbmc>
-      <hideconsole>true</hideconsole>
-    </player>
-  </players>
-  <!-- Rules here -->
-</playercorefactory>
-```
-
-This will add an option to the **Play Using...** menu.<br/> 
-To force TinePlayer to act as the default player, insert the following under `<!-- Rules here -->`:
-
-```xml
-  <rules action="prepend">
-    <rule video="true" player="TinePlayer" />
-  </rules>
-```
-
-On Windows, you must point `<filename>` at `launch-tineplayer.cmd` rather than straight at the
-executable. It will start the player from the right working directory so it can launch without conflicts.
-
-**Automated Installation**
-
-If you don't want to do the above manual installation, the following scripts will do it for you:
-
-```sh
-./install-kodi.sh             # Linux
-./install-kodi.sh --default   # Linux, as default player
-
-.\install-kodi.ps1            # Windows
-.\install-kodi.ps1 -Default   # Windows, as default player
-```
-
-They find Kodi's userdata directory themselves and write the correct configuration file.
-Any existing `playercorefactory.xml` is backed up rather than replaced.
-
-Restart Kodi after either installation method.
+See [Building from source](docs/building.md) for what those scripts install, and
+for the Windows caveat about installing GTK separately.
 
 ## Compatibility
 
