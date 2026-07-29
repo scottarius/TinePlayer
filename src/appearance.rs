@@ -84,15 +84,28 @@ pub fn resolve_scale(configured: Option<f64>, monitor: Option<&gdk::Monitor>) ->
 /// television in a darkened room, where a full-screen light menu between
 /// films is genuinely unpleasant, and the desktops most likely to fail the
 /// query are the minimal ones a media machine runs.
-pub fn apply_theme(theme: Theme) {
+pub fn apply_theme(theme: Theme) -> bool {
     let dark = match theme {
         Theme::Light => false,
         Theme::Dark => true,
         Theme::Auto => !system_prefers_light(),
     };
-    if let Some(settings) = gtk::Settings::default() {
-        settings.set_gtk_application_prefer_dark_theme(dark);
-    }
+    let Some(settings) = gtk::Settings::default() else {
+        return dark;
+    };
+    settings.set_gtk_application_prefer_dark_theme(dark);
+
+    // Measured on both platforms: clearing the preference returns Linux to
+    // light immediately, and does nothing at all on Windows, where the theme
+    // stays dark however it is prodded. Reassigning the theme name is enough
+    // on Linux; Windows needs the process restarting, which the caller
+    // offers. The intermediate name has to be one nothing could be called,
+    // since GTK's own default theme is literally named "Default".
+    let name = settings.gtk_theme_name();
+    settings.set_gtk_theme_name(Some("tineplayer-force-reload"));
+    settings.set_gtk_theme_name(name.as_deref());
+
+    dark
 }
 
 /// Whether the desktop explicitly asks for a light interface. Anything else,

@@ -31,7 +31,6 @@ enum Setting {
     SubtitleLanguage,
     SubtitleSize,
     SubtitleFont,
-    FileBrowser,
 }
 
 /// Rows of the settings screen, in the order they appear.
@@ -39,10 +38,10 @@ enum Setting {
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
 
-const SETTINGS_ROWS: usize = 14;
+const SETTINGS_ROWS: usize = 13;
 /// Rows that begin a group: audio, subtitles, then the housekeeping at the
 /// bottom.
-const SETTINGS_SECTIONS: [i32; 3] = [4, 8, 11];
+const SETTINGS_SECTIONS: [i32; 3] = [3, 7, 10];
 
 /// Sizes offered for subtitles. The middle of the range is the default; the
 /// ends are deliberately wide, since what reads well from a sofa and what
@@ -122,12 +121,9 @@ pub struct App {
     /// Whether the open chooser was reached from the settings screen, so
     /// that finishing with it returns where it came from.
     from_settings: Cell<bool>,
-    /// Whether a mouse click was the last thing to act, which decides the
-    /// picker in automatic mode.
-    ///
-    /// A click specifically, not any pointer activity: the mouse getting
-    /// nudged on a desk should not change what a controller press does.
-    clicked_last: Cell<bool>,
+    /// Whether the dark theme is in force, so switching away from it can be
+    /// recognised.
+    dark: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -150,7 +146,7 @@ impl App {
         restart: bool,
         fullscreen: bool,
     ) {
-        appearance::apply_theme(config.theme);
+        let dark = appearance::apply_theme(config.theme);
         suppress_error_bell();
 
         // Sized from the tallest monitor to begin with, since no window exists
@@ -205,7 +201,7 @@ impl App {
             nav_header: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
             from_settings: Cell::new(false),
-            clicked_last: Cell::new(false),
+            dark: Cell::new(dark),
             styles: styles.clone(),
             scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
@@ -290,7 +286,6 @@ impl App {
         let controller = gtk::EventControllerKey::new();
         let app = self.clone();
         controller.connect_key_pressed(move |_, key, _, _| {
-            app.clicked_last.set(false);
             let playing = app.playback.borrow().is_some();
             match key {
                 // Only claimed during playback — the menus need Space for
@@ -371,17 +366,6 @@ impl App {
                 true
             });
             self.window.add_controller(drop);
-        }
-
-        // Watched in the capture phase so a click is seen wherever it lands,
-        // before the widget under it handles the press. The gesture never
-        // claims the sequence, so nothing downstream is affected.
-        {
-            let app = self.clone();
-            let click = gtk::GestureClick::new();
-            click.set_propagation_phase(gtk::PropagationPhase::Capture);
-            click.connect_pressed(move |_, _, _, _| app.clicked_last.set(true));
-            self.window.add_controller(click);
         }
 
         self.window.add_controller(controller);
@@ -541,7 +525,6 @@ impl App {
 
     fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
         use crate::gamepad::Action;
-        self.clicked_last.set(false);
         match action {
             Action::Up | Action::Down if self.playback.borrow().is_some() => self.wake_controls(),
             Action::Up => self.move_selection(-1),
@@ -816,8 +799,44 @@ impl App {
         }
         buttons.append(&plays);
 
+        // Maximize and restore rather than the usual fullscreen pair, which
+        // is absent from the icon theme on both platforms and would draw the
+        // missing-image glyph.
+        let fullscreen = gtk::Button::new();
+        fullscreen.set_child(Some(&fullscreen_image(
+            &self.window,
+            self.scale.get(),
+            self.dark.get(),
+        )));
+        fullscreen.add_css_class("tp-gear");
+        // Still reachable by keyboard and controller, but a mouse click no
+        // longer leaves it holding focus and lit up.
+        fullscreen.set_focus_on_click(false);
+        fullscreen.set_tooltip_text(Some("Toggle fullscreen"));
+        buttons.append(&fullscreen);
+        {
+            let app = self.clone();
+            fullscreen.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.toggle_fullscreen();
+            });
+        }
+        {
+            // Weak, so a menu rebuilt later leaves this handler harmless
+            // rather than keeping the old button alive.
+            let weak = fullscreen.downgrade();
+            let scale = self.scale.get();
+            let dark = self.dark.get();
+            self.window.connect_fullscreened_notify(move |window| {
+                if let Some(button) = weak.upgrade() {
+                    button.set_child(Some(&fullscreen_image(window, scale, dark)));
+                }
+            });
+        }
+
         let gear = gtk::Button::from_icon_name("emblem-system-symbolic");
         gear.add_css_class("tp-gear");
+        gear.set_focus_on_click(false);
         gear.set_tooltip_text(Some("Settings"));
         buttons.append(&gear);
         page.append(&buttons);
@@ -833,6 +852,7 @@ impl App {
         // Ordered as they sit on screen, so left and right walk along the
         // row and Down from the list lands on the first.
         let mut footer = play_buttons.clone();
+        footer.push(fullscreen);
         footer.push(gear);
 
         {
@@ -887,12 +907,11 @@ impl App {
             Setting::Subtitles => "Subtitles",
             Setting::Theme => "Theme",
             Setting::InterfaceScale => "Interface Size",
-            Setting::PrimaryLanguage => "Primary Language",
-            Setting::SecondaryLanguage => "Secondary Language",
+            Setting::PrimaryLanguage => "Primary Language Preference",
+            Setting::SecondaryLanguage => "Secondary Language Preference",
             Setting::SubtitleLanguage => "Subtitle Language",
             Setting::SubtitleSize => "Subtitle Size",
             Setting::SubtitleFont => "Subtitle Font",
-            Setting::FileBrowser => "File Browser",
         };
         let (page, list, back, _header) = list_page(title, true);
 
@@ -960,10 +979,7 @@ impl App {
                     crate::config::Theme::Light => 1,
                     crate::config::Theme::Dark => 2,
                 });
-                for (position, name) in ["Follow the desktop", "Light", "Dark"]
-                    .into_iter()
-                    .enumerate()
-                {
+                for (position, name) in ["System", "Light", "Dark"].into_iter().enumerate() {
                     entries.push((name.to_string(), Some(position)));
                 }
             }
@@ -988,9 +1004,16 @@ impl App {
                     }
                 };
                 current = language_position(configured.as_deref());
-                // Not "None": an output with no preference still plays
-                // something, it just takes whatever comes first.
-                entries.push(("No preference".to_string(), None));
+                // Worded exactly as the settings row shows it when unset, so
+                // the list and the value it came from agree.
+                entries.push((
+                    if setting == Setting::PrimaryLanguage {
+                        "First track".to_string()
+                    } else {
+                        "Second track".to_string()
+                    },
+                    None,
+                ));
                 for (position, (_, name, _)) in crate::languages::LANGUAGES.iter().enumerate() {
                     entries.push((name.to_string(), Some(position)));
                 }
@@ -1016,19 +1039,6 @@ impl App {
                         ""
                     };
                     entries.push((format!("{size}{note}"), Some(position)));
-                }
-            }
-            Setting::FileBrowser => {
-                current = Some(match self.config.borrow().file_browser {
-                    crate::config::BrowserMode::Automatic => 0,
-                    crate::config::BrowserMode::System => 1,
-                    crate::config::BrowserMode::BuiltIn => 2,
-                });
-                for (position, name) in ["Automatic", "System dialog", "Built-in"]
-                    .into_iter()
-                    .enumerate()
-                {
-                    entries.push((name.to_string(), Some(position)));
                 }
             }
             Setting::SubtitleFont => {
@@ -1057,8 +1067,9 @@ impl App {
                 let Some((_, choice)) = entries.get(row.index() as usize) else {
                     return;
                 };
-                app.apply_choice(setting, *choice);
-                app.leave_chooser();
+                if !app.apply_choice(setting, *choice) {
+                    app.leave_chooser();
+                }
             });
         }
         {
@@ -1066,7 +1077,9 @@ impl App {
             back.connect_clicked(move |_| app.leave_chooser());
         }
 
-        self.wire_navigation(&list, &[], &[]);
+        // Up from the first row reaches the back arrow, so leaving is a
+        // navigable step rather than only a button press.
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
 
         *self.screen.borrow_mut() = Screen::Chooser;
         self.window.set_child(Some(&page));
@@ -1222,7 +1235,9 @@ impl App {
             .unwrap_or_else(|| "None".to_string())
     }
 
-    fn apply_choice(self: &Rc<Self>, setting: Setting, choice: Option<usize>) {
+    /// Returns whether it has already moved to another screen, in which case
+    /// the caller must not navigate on top of it.
+    fn apply_choice(self: &Rc<Self>, setting: Setting, choice: Option<usize>) -> bool {
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
                 let names: Vec<String> = list_audio_output_devices()
@@ -1239,8 +1254,10 @@ impl App {
                 {
                     let mut config = self.config.borrow_mut();
                     if setting == Setting::PrimaryDevice {
+                        // The primary output cannot be cleared: without one
+                        // there is nothing to play through.
                         if picked.is_none() {
-                            return;
+                            return false;
                         }
                         config.primary_sink = picked;
                     } else {
@@ -1285,7 +1302,24 @@ impl App {
                     config.theme = theme;
                     let _ = config.save();
                 }
-                appearance::apply_theme(theme);
+                let was_dark = self.dark.get();
+                let now_dark = appearance::apply_theme(theme);
+                self.dark.set(now_dark);
+
+                // GTK's Windows build will move to the dark theme but never
+                // back, whatever is done to the settings. Everything worth
+                // keeping is already written to disk, so restarting is
+                // seamless, but it should still be asked for rather than
+                // done out of the blue.
+                if cfg!(target_os = "windows") && was_dark && !now_dark {
+                    let app = self.clone();
+                    self.show_confirm(
+                        "Switching to the light theme needs a restart.\nRestart now?",
+                        "Restart",
+                        move || app.relaunch(),
+                    );
+                    return true;
+                }
             }
             Setting::InterfaceScale => {
                 let picked = choice.and_then(|index| UI_SCALES.get(index).copied());
@@ -1314,15 +1348,6 @@ impl App {
                     Setting::SecondaryLanguage => config.secondary_language = picked,
                     _ => config.subtitle_language = picked,
                 }
-                let _ = config.save();
-            }
-            Setting::FileBrowser => {
-                let mut config = self.config.borrow_mut();
-                config.file_browser = match choice {
-                    Some(1) => crate::config::BrowserMode::System,
-                    Some(2) => crate::config::BrowserMode::BuiltIn,
-                    _ => crate::config::BrowserMode::Automatic,
-                };
                 let _ = config.save();
             }
             Setting::SubtitleSize => {
@@ -1358,6 +1383,26 @@ impl App {
                 self.remember_tracks();
             }
         }
+        false
+    }
+
+    /// Starts a fresh copy and closes this one. Playback cannot be running
+    /// here, since the settings are only reachable from the menu, and the
+    /// file, tracks, position and window state are all already saved.
+    fn relaunch(&self) {
+        match std::env::current_exe() {
+            Ok(exe) => {
+                if let Err(e) = std::process::Command::new(exe).spawn() {
+                    eprintln!("Could not restart: {e}");
+                    return;
+                }
+            }
+            Err(e) => {
+                eprintln!("Could not find the executable to restart: {e}");
+                return;
+            }
+        }
+        self.window.close();
     }
 
     // --- File selection ------------------------------------------------
@@ -1394,17 +1439,33 @@ impl App {
         chooser.add_filter(&all);
 
         let app = self.clone();
+        // Where this was opened from, so cancelling returns there rather than
+        // dropping to the menu. Reached from the browser, cancelling should
+        // leave you in the folder you were looking at.
+        let from_browser = *self.screen.borrow() == Screen::Browser;
+        let folder = self.config.borrow().last_folder.clone();
+
         // Held by the closure so the dialog outlives this function; a
         // dropped FileChooserNative closes before the user can answer.
         let held = RefCell::new(Some(chooser.clone()));
         chooser.connect_response(move |chooser, response| {
-            if response == gtk::ResponseType::Accept
-                && let Some(path) = chooser.file().and_then(|f| f.path())
-            {
-                app.set_file(&path);
-            }
+            let chosen = (response == gtk::ResponseType::Accept)
+                .then(|| chooser.file().and_then(|f| f.path()))
+                .flatten();
             held.borrow_mut().take();
-            app.show_menu();
+
+            match chosen {
+                // A file was picked, so the menu is where to go next either
+                // way.
+                Some(path) => {
+                    app.set_file(&path);
+                    app.show_menu();
+                }
+                None => match folder.as_deref().filter(|_| from_browser) {
+                    Some(folder) => app.show_browser(folder, None),
+                    None => app.show_menu(),
+                },
+            }
         });
         chooser.show();
     }
@@ -1508,28 +1569,53 @@ impl App {
         select: Option<&std::path::Path>,
     ) {
         let (crumbs, crumb_buttons) = self.breadcrumbs(directory);
+
+        // Switching to the system dialog belongs here, where a file is
+        // already being chosen, rather than on the main menu. Not focusable:
+        // it exists for a pointer, and the dialog it opens cannot be driven
+        // by a controller anyway, so offering it to one is a dead end.
+        let spacer = gtk::Box::builder().hexpand(true).build();
+        crumbs.append(&spacer);
+        let browse = gtk::Button::from_icon_name("document-open-symbolic");
+        browse.add_css_class("tp-browse");
+        browse.set_can_focus(false);
+        browse.set_valign(gtk::Align::Center);
+        browse.set_tooltip_text(Some("Browse with the system dialog"));
+        crumbs.append(&browse);
+        {
+            let app = self.clone();
+            browse.connect_clicked(move |_| app.open_file_chooser());
+        }
         let (page, list, back, _header) = list_page_with(&crumbs, true);
 
-        // Entries and the paths they lead to. `None` steps up a level.
-        let mut rows: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
+        // Entries, the icon that leads them, and the path they open. `None`
+        // steps up a level.
+        let mut rows: Vec<(String, &str, Option<std::path::PathBuf>)> = Vec::new();
         let parent = directory.parent().map(|p| p.to_path_buf());
         if parent.is_some() || !crate::browser::roots().is_empty() {
-            rows.push(("⬆  Up".to_string(), None));
+            rows.push(("Up".to_string(), "go-up-symbolic", None));
         }
         for entry in crate::browser::read(directory) {
-            let label = if entry.is_dir {
-                format!("📁  {}", entry.label)
+            // A play mark rather than a generic video one: that icon is not
+            // in this theme and fell back to the missing-image glyph, which
+            // reads as a warning about the file itself.
+            let icon = if entry.is_dir {
+                "folder-symbolic"
             } else {
-                entry.label.clone()
+                "media-playback-start-symbolic"
             };
-            rows.push((label, Some(entry.path)));
+            rows.push((entry.label.clone(), icon, Some(entry.path)));
         }
         if rows.is_empty() {
-            rows.push(("Nothing here".to_string(), None));
+            rows.push((
+                "Nothing here".to_string(),
+                "dialog-information-symbolic",
+                None,
+            ));
         }
 
-        for (label, _) in &rows {
-            list.append(&chooser_row(label));
+        for (label, icon, _) in &rows {
+            list.append(&browser_row(icon, label));
         }
 
         {
@@ -1538,7 +1624,7 @@ impl App {
             let here = directory.to_path_buf();
             list.connect_row_activated(move |_, row| {
                 app.sounds.borrow().click();
-                let Some((_, target)) = rows.get(row.index() as usize) else {
+                let Some((_, _, target)) = rows.get(row.index() as usize) else {
                     return;
                 };
                 match target {
@@ -1567,14 +1653,18 @@ impl App {
             let _ = config.save();
         }
 
-        self.wire_navigation(&list, &crumb_buttons, &[]);
+        // The arrow first, then the trail: left from the current folder
+        // walks back up and finally reaches the way out.
+        let mut header = vec![back.clone()];
+        header.extend(crumb_buttons);
+        self.wire_navigation(&list, &header, &[]);
         *self.screen.borrow_mut() = Screen::Browser;
         self.window.set_child(Some(&page));
 
         let opening = select
             .and_then(|wanted| {
                 rows.iter()
-                    .position(|(_, path)| path.as_deref() == Some(wanted))
+                    .position(|(_, _, path)| path.as_deref() == Some(wanted))
             })
             // Otherwise the first real entry rather than the Up row.
             .unwrap_or(if rows.len() > 1 { 1 } else { 0 }) as i32;
@@ -1691,7 +1781,7 @@ impl App {
             back.connect_clicked(move |_| app.show_menu());
         }
 
-        self.wire_navigation(&list, &[], &[]);
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
         *self.screen.borrow_mut() = Screen::Browser;
         self.window.set_child(Some(&page));
         if let Some(row) = list.row_at_index(0) {
@@ -1700,28 +1790,18 @@ impl App {
         }
     }
 
-    /// Opens whichever picker suits how the request arrived.
+    /// Always the built-in browser.
+    ///
+    /// Guessing from the last input was unpredictable: the same button opened
+    /// different things depending on what you had touched. The system dialog
+    /// is still reachable, from a pointer-only button in the footer.
     fn choose_video(self: &Rc<Self>) {
-        let mode = self.config.borrow().file_browser;
-        let built_in = match mode {
-            crate::config::BrowserMode::BuiltIn => true,
-            crate::config::BrowserMode::System => false,
-            // Only a mouse gets the system dialog. Reaching the menu from a
-            // keyboard is as awkward with that dialog as reaching it from a
-            // controller, so both get the built-in browser.
-            crate::config::BrowserMode::Automatic => !self.clicked_last.get(),
+        let (remembered, last_video) = {
+            let config = self.config.borrow();
+            (config.last_folder.clone(), config.last_video.clone())
         };
-        if built_in {
-            let (remembered, last_video) = {
-                let config = self.config.borrow();
-                (config.last_folder.clone(), config.last_video.clone())
-            };
-            let start =
-                crate::browser::start_location(remembered.as_deref(), last_video.as_deref());
-            self.show_browser(&start, None);
-        } else {
-            self.open_file_chooser();
-        }
+        let start = crate::browser::start_location(remembered.as_deref(), last_video.as_deref());
+        self.show_browser(&start, None);
     }
 
     // --- Settings ------------------------------------------------------
@@ -1741,7 +1821,7 @@ impl App {
                 (
                     "Theme".to_string(),
                     match config.theme {
-                        crate::config::Theme::Auto => "Follow the desktop".to_string(),
+                        crate::config::Theme::Auto => "System".to_string(),
                         crate::config::Theme::Light => "Light".to_string(),
                         crate::config::Theme::Dark => "Dark".to_string(),
                     },
@@ -1761,15 +1841,6 @@ impl App {
                     true,
                 ),
                 (
-                    "File Browser".to_string(),
-                    match config.file_browser {
-                        crate::config::BrowserMode::Automatic => "Automatic".to_string(),
-                        crate::config::BrowserMode::System => "System dialog".to_string(),
-                        crate::config::BrowserMode::BuiltIn => "Built-in".to_string(),
-                    },
-                    true,
-                ),
-                (
                     "Primary Audio Device".to_string(),
                     config
                         .primary_sink
@@ -1778,7 +1849,7 @@ impl App {
                     true,
                 ),
                 (
-                    "Primary Language".to_string(),
+                    "Primary Language Preference".to_string(),
                     language(&config.primary_language, "First track"),
                     true,
                 ),
@@ -1791,7 +1862,7 @@ impl App {
                     true,
                 ),
                 (
-                    "Secondary Language".to_string(),
+                    "Secondary Language Preference".to_string(),
                     language(&config.secondary_language, "Second track"),
                     true,
                 ),
@@ -1851,15 +1922,14 @@ impl App {
                     0 => app.open_setting(Setting::Theme),
                     1 => app.open_setting(Setting::InterfaceScale),
                     2 => app.toggle_sounds(),
-                    3 => app.open_setting(Setting::FileBrowser),
-                    4 => app.open_setting(Setting::PrimaryDevice),
-                    5 => app.open_setting(Setting::PrimaryLanguage),
-                    6 => app.open_setting(Setting::SecondaryDevice),
-                    7 => app.open_setting(Setting::SecondaryLanguage),
-                    8 => app.open_setting(Setting::SubtitleLanguage),
-                    9 => app.open_setting(Setting::SubtitleSize),
-                    10 => app.open_setting(Setting::SubtitleFont),
-                    11 => app.confirm_clear_data(),
+                    3 => app.open_setting(Setting::PrimaryDevice),
+                    4 => app.open_setting(Setting::PrimaryLanguage),
+                    5 => app.open_setting(Setting::SecondaryDevice),
+                    6 => app.open_setting(Setting::SecondaryLanguage),
+                    7 => app.open_setting(Setting::SubtitleLanguage),
+                    8 => app.open_setting(Setting::SubtitleSize),
+                    9 => app.open_setting(Setting::SubtitleFont),
+                    10 => app.confirm_clear_data(),
                     _ => {}
                 }
             });
@@ -1869,7 +1939,7 @@ impl App {
             back.connect_clicked(move |_| app.show_menu());
         }
 
-        self.wire_navigation(&list, &[], &[]);
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
         *self.screen.borrow_mut() = Screen::Settings;
         self.window.set_child(Some(&page));
         let remembered = (*self.settings_row.borrow()).min(last_row_index(&list));
@@ -2214,6 +2284,35 @@ fn heading_label(text: &str) -> gtk::Label {
     label
 }
 
+/// The four-corner mark for entering or leaving fullscreen.
+///
+/// Drawn for this application rather than taken from the icon theme: the
+/// bundled theme has 157 icons and none of them mean fullscreen. The nearest,
+/// `window-maximize-symbolic`, is a small square that reads as "maximize".
+///
+/// Drawn twice in each direction, once in each theme's foreground colour,
+/// because an embedded image cannot be recoloured the way a symbolic icon is.
+/// A single compromise grey read poorly against both.
+fn fullscreen_image(window: &impl IsA<gtk::Window>, scale: f64, dark: bool) -> gtk::Image {
+    const ENTER_LIGHT: &[u8] = include_bytes!("../data/fullscreen-light.png");
+    const ENTER_DARK: &[u8] = include_bytes!("../data/fullscreen-dark.png");
+    const LEAVE_LIGHT: &[u8] = include_bytes!("../data/restore-light.png");
+    const LEAVE_DARK: &[u8] = include_bytes!("../data/restore-dark.png");
+
+    let bytes = match (window.as_ref().is_fullscreen(), dark) {
+        (true, true) => LEAVE_DARK,
+        (true, false) => LEAVE_LIGHT,
+        (false, true) => ENTER_DARK,
+        (false, false) => ENTER_LIGHT,
+    };
+    let image = gtk::Image::new();
+    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
+        image.set_paintable(Some(&texture));
+    }
+    image.set_pixel_size((26.0 * scale).round() as i32);
+    image
+}
+
 fn back_button() -> gtk::Button {
     // An icon rather than a text glyph: a "‹" character sits off the
     // vertical centre because it's positioned by font metrics rather than
@@ -2273,6 +2372,31 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
     row.append(&chevron);
 
     row.set_sensitive(enabled);
+    row
+}
+
+/// A browser row: an icon from the desktop's own set, then the name.
+///
+/// Icons rather than emoji, because emoji depend on a colour font being
+/// installed. The Pi has none, so a folder character rendered as an empty box
+/// with the codepoint inside it.
+fn browser_row(icon: &str, text: &str) -> gtk::Box {
+    // The padding goes on the row rather than the label, so it applies
+    // before the icon as well as around the text.
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(16)
+        .css_classes(["tp-row"])
+        .build();
+
+    let image = gtk::Image::from_icon_name(icon);
+    image.add_css_class("tp-row-icon");
+    row.append(&image);
+
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    row.append(&label);
     row
 }
 
@@ -2350,6 +2474,10 @@ fn style_css(scale: f64) -> String {
         .tp-button, .tp-play {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
         .tp-play {{ font-weight: bold; }}
         .tp-menu > row {{ border-radius: {radius}px; }}
+        /* Grey rather than a theme colour, so it lifts off the background in
+           both light and dark without needing two rules. */
+        .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
+        .tp-menu > row:selected:hover {{ background-color: {highlight}; }}
         .tp-menu > row.tp-section-start {{ margin-top: {section}px; }}
         /* The selected row keeps the same colours whether or not the list
            holds focus, and is simply dimmed when it doesn't. Fading the
@@ -2436,8 +2564,23 @@ fn style_css(scale: f64) -> String {
         }}
         .tp-crumb:focus {{ opacity: 1; }}
         .tp-crumb-separator {{ font-size: {title}px; opacity: 0.4; }}
+        /* Kept small enough that the header stays the height every other
+           screen's header is. */
+        .tp-browse {{
+            background-image: none;
+            background-color: transparent;
+            border-color: transparent;
+            box-shadow: none;
+            min-height: 0px;
+            min-width: 0px;
+            padding: 2px {crumb_pad}px;
+            opacity: 0.6;
+        }}
+        .tp-browse:hover {{ opacity: 1; }}
+        .tp-browse image {{ -gtk-icon-size: {back_icon}px; }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
         .tp-gear image {{ -gtk-icon-size: {icon}px; }}
+        .tp-row-icon {{ -gtk-icon-size: {row_icon}px; opacity: 0.65; }}
         .tp-back image {{ -gtk-icon-size: {back_icon}px; }}
         .{video} {{ background-color: black; }}
         ",
@@ -2453,6 +2596,7 @@ fn style_css(scale: f64) -> String {
         crumb_pad = px(6.0),
         leading = px(38.0),
         back_icon = px(22.0),
+        row_icon = px(22.0),
         bar = px(6.0),
         // A literal colour rather than a theme name: GTK's named colours
         // differ between themes and libadwaita, and an undefined one makes
