@@ -115,13 +115,19 @@ pub struct App {
     /// selection itself and therefore needs to know what it is moving.
     nav_list: RefCell<Option<gtk::ListBox>>,
     nav_footer: RefCell<Vec<gtk::Button>>,
+    /// Buttons above the list, currently the browser's path trail. Up from
+    /// the first row reaches them, the way Down reaches the footer.
+    nav_header: RefCell<Vec<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
     /// Whether the open chooser was reached from the settings screen, so
     /// that finishing with it returns where it came from.
     from_settings: Cell<bool>,
-    /// Whether a controller was the last thing to act, which decides the
+    /// Whether a mouse click was the last thing to act, which decides the
     /// picker in automatic mode.
-    gamepad_last: Cell<bool>,
+    ///
+    /// A click specifically, not any pointer activity: the mouse getting
+    /// nudged on a desk should not change what a controller press does.
+    clicked_last: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -196,9 +202,10 @@ impl App {
             restart,
             nav_list: RefCell::new(None),
             nav_footer: RefCell::new(Vec::new()),
+            nav_header: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
             from_settings: Cell::new(false),
-            gamepad_last: Cell::new(false),
+            clicked_last: Cell::new(false),
             styles: styles.clone(),
             scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
@@ -283,7 +290,7 @@ impl App {
         let controller = gtk::EventControllerKey::new();
         let app = self.clone();
         controller.connect_key_pressed(move |_, key, _, _| {
-            app.gamepad_last.set(false);
+            app.clicked_last.set(false);
             let playing = app.playback.borrow().is_some();
             match key {
                 // Only claimed during playback — the menus need Space for
@@ -366,13 +373,15 @@ impl App {
             self.window.add_controller(drop);
         }
 
-        // Any pointer movement means someone is at the machine rather than
-        // on a sofa, which is what automatic picker mode keys off.
+        // Watched in the capture phase so a click is seen wherever it lands,
+        // before the widget under it handles the press. The gesture never
+        // claims the sequence, so nothing downstream is affected.
         {
             let app = self.clone();
-            let pointer = gtk::EventControllerMotion::new();
-            pointer.connect_motion(move |_, _, _| app.gamepad_last.set(false));
-            self.window.add_controller(pointer);
+            let click = gtk::GestureClick::new();
+            click.set_propagation_phase(gtk::PropagationPhase::Capture);
+            click.connect_pressed(move |_, _, _, _| app.clicked_last.set(true));
+            self.window.add_controller(click);
         }
 
         self.window.add_controller(controller);
@@ -510,8 +519,9 @@ impl App {
 
     /// Records what the gamepad should be moving through. Screens built from
     /// buttons alone pass `None`, and fall back to GTK's directional focus.
-    fn set_nav(&self, list: Option<&gtk::ListBox>, footer: &[gtk::Button]) {
+    fn set_nav(&self, list: Option<&gtk::ListBox>, header: &[gtk::Button], footer: &[gtk::Button]) {
         *self.nav_list.borrow_mut() = list.cloned();
+        *self.nav_header.borrow_mut() = header.to_vec();
         *self.nav_footer.borrow_mut() = footer.to_vec();
     }
 
@@ -524,9 +534,14 @@ impl App {
         footer.iter().find(|button| button.is_sensitive())
     }
 
+    /// The header button Up from the list should land on.
+    fn last_header(header: &[gtk::Button]) -> Option<&gtk::Button> {
+        header.iter().rev().find(|button| button.is_sensitive())
+    }
+
     fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
         use crate::gamepad::Action;
-        self.gamepad_last.set(true);
+        self.clicked_last.set(false);
         match action {
             Action::Up | Action::Down if self.playback.borrow().is_some() => self.wake_controls(),
             Action::Up => self.move_selection(-1),
@@ -568,6 +583,7 @@ impl App {
         // Cloned out before anything can rebuild the screen underneath us.
         let list = self.nav_list.borrow().clone();
         let footer = self.nav_footer.borrow().clone();
+        let header = self.nav_header.borrow().clone();
 
         let Some(list) = list else {
             let direction = if delta < 0 {
@@ -588,6 +604,12 @@ impl App {
             }
         };
 
+        if header.iter().any(|button| button.has_focus()) {
+            if delta > 0 {
+                select(0);
+            }
+            return;
+        }
         if footer.iter().any(|button| button.has_focus()) {
             if delta < 0 {
                 select(last);
@@ -602,6 +624,9 @@ impl App {
         if next < 0 {
             if position > 0 {
                 select(0);
+            } else if let Some(button) = App::last_header(&header) {
+                self.sounds.borrow().click();
+                button.grab_focus();
             }
             return;
         }
@@ -833,7 +858,7 @@ impl App {
             });
         }
 
-        self.wire_navigation(&list, &footer);
+        self.wire_navigation(&list, &[], &footer);
 
         *self.screen.borrow_mut() = Screen::Menu;
         self.window.set_child(Some(&page));
@@ -1037,7 +1062,7 @@ impl App {
             back.connect_clicked(move |_| app.leave_chooser());
         }
 
-        self.wire_navigation(&list, &[]);
+        self.wire_navigation(&list, &[], &[]);
 
         *self.screen.borrow_mut() = Screen::Chooser;
         self.window.set_child(Some(&page));
@@ -1058,13 +1083,20 @@ impl App {
     /// otherwise the button is unreachable without a pointer. Movements
     /// that would go past either end are swallowed, which also stops GTK
     /// reporting them as failed navigation.
-    fn wire_navigation(self: &Rc<Self>, list: &gtk::ListBox, footer: &[gtk::Button]) {
-        self.set_nav(Some(list), footer);
+    fn wire_navigation(
+        self: &Rc<Self>,
+        list: &gtk::ListBox,
+        header: &[gtk::Button],
+        footer: &[gtk::Button],
+    ) {
+        self.set_nav(Some(list), header, footer);
         {
             let app = self.clone();
             let list_weak = list.downgrade();
             let footer: Vec<glib::WeakRef<gtk::Button>> =
                 footer.iter().map(|b| b.downgrade()).collect();
+            let header_up: Vec<glib::WeakRef<gtk::Button>> =
+                header.iter().map(|b| b.downgrade()).collect();
             let controller = gtk::EventControllerKey::new();
             controller.connect_key_pressed(move |_, key, _, _| {
                 let Some(list) = list_weak.upgrade() else {
@@ -1087,6 +1119,14 @@ impl App {
                     return glib::Propagation::Stop;
                 }
                 if key == gdk::Key::Up && current == Some(0) {
+                    let buttons: Vec<gtk::Button> =
+                        header_up.iter().filter_map(|b| b.upgrade()).collect();
+                    // The rightmost, which is the folder you are in: moving
+                    // left from there walks back up the tree.
+                    if let Some(button) = App::last_header(&buttons) {
+                        app.sounds.borrow().click();
+                        button.grab_focus();
+                    }
                     return glib::Propagation::Stop;
                 }
 
@@ -1094,6 +1134,28 @@ impl App {
                 glib::Propagation::Proceed
             });
             list.add_controller(controller);
+        }
+
+        // Down from any header button returns to the top of the list.
+        for button in header {
+            let app = self.clone();
+            let list_weak = list.downgrade();
+            let controller = gtk::EventControllerKey::new();
+            controller.connect_key_pressed(move |_, key, _, _| {
+                if key != gdk::Key::Down {
+                    return glib::Propagation::Proceed;
+                }
+                let Some(list) = list_weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                if let Some(row) = list.row_at_index(0) {
+                    app.sounds.borrow().click();
+                    list.select_row(Some(&row));
+                    row.grab_focus();
+                }
+                glib::Propagation::Stop
+            });
+            button.add_controller(controller);
         }
 
         // Wired on every button, so Up returns to the list from whichever
@@ -1441,13 +1503,8 @@ impl App {
         directory: &std::path::Path,
         select: Option<&std::path::Path>,
     ) {
-        let (page, list, back) = list_page(
-            &directory
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| directory.to_string_lossy().to_string()),
-            true,
-        );
+        let (crumbs, crumb_buttons) = self.breadcrumbs(directory);
+        let (page, list, back) = list_page_with(&crumbs, true);
 
         // Entries and the paths they lead to. `None` steps up a level.
         let mut rows: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
@@ -1506,7 +1563,7 @@ impl App {
             let _ = config.save();
         }
 
-        self.wire_navigation(&list, &[]);
+        self.wire_navigation(&list, &crumb_buttons, &[]);
         *self.screen.borrow_mut() = Screen::Browser;
         self.window.set_child(Some(&page));
 
@@ -1521,6 +1578,86 @@ impl App {
             list.select_row(Some(&row));
             row.grab_focus();
         }
+    }
+
+    /// The current directory as a row of buttons, one per level, so any
+    /// ancestor is a single press away rather than several trips through Up.
+    ///
+    /// Capped at the last few levels: a deep path would otherwise run off the
+    /// side, and the leading button stands in for everything trimmed away.
+    fn breadcrumbs(self: &Rc<Self>, directory: &std::path::Path) -> (gtk::Box, Vec<gtk::Button>) {
+        use std::path::{Component, PathBuf};
+
+        // Each level paired with the path that reaches it.
+        let mut levels: Vec<(String, PathBuf)> = Vec::new();
+        let mut walked = PathBuf::new();
+        for component in directory.components() {
+            match component {
+                Component::Prefix(prefix) => {
+                    walked.push(prefix.as_os_str());
+                    levels.push((
+                        prefix.as_os_str().to_string_lossy().to_string(),
+                        walked.clone(),
+                    ));
+                }
+                Component::RootDir => {
+                    walked.push(std::path::MAIN_SEPARATOR_STR);
+                    if levels.is_empty() {
+                        levels.push(("/".to_string(), walked.clone()));
+                    }
+                }
+                Component::Normal(name) => {
+                    walked.push(name);
+                    levels.push((name.to_string_lossy().to_string(), walked.clone()));
+                }
+                _ => {}
+            }
+        }
+
+        const SHOWN: usize = 4;
+        let mut trimmed = Vec::new();
+        if levels.len() > SHOWN {
+            let hidden = levels.len() - SHOWN;
+            // Leads to the level just above the first one still shown.
+            trimmed.push(("…".to_string(), levels[hidden - 1].1.clone()));
+            trimmed.extend_from_slice(&levels[hidden..]);
+        } else {
+            trimmed = levels;
+        }
+
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .hexpand(true)
+            .build();
+        let mut buttons = Vec::new();
+
+        for (position, (label, target)) in trimmed.iter().enumerate() {
+            if position > 0 {
+                let separator = gtk::Label::new(Some("›"));
+                separator.add_css_class("tp-crumb-separator");
+                row.append(&separator);
+            }
+
+            let button = gtk::Button::with_label(label);
+            button.add_css_class("tp-crumb");
+            {
+                let app = self.clone();
+                let target = target.clone();
+                let here = directory.to_path_buf();
+                button.connect_clicked(move |_| {
+                    app.sounds.borrow().click();
+                    // Selecting the folder you are already in should settle
+                    // focus back on the listing rather than rebuild nothing.
+                    let select = (target != here).then(|| here.clone());
+                    app.show_browser(&target, select.as_deref());
+                });
+            }
+            row.append(&button);
+            buttons.push(button);
+        }
+
+        (row, buttons)
     }
 
     /// The drive list, which only Windows has anything above the root to
@@ -1550,7 +1687,7 @@ impl App {
             back.connect_clicked(move |_| app.show_menu());
         }
 
-        self.wire_navigation(&list, &[]);
+        self.wire_navigation(&list, &[], &[]);
         *self.screen.borrow_mut() = Screen::Browser;
         self.window.set_child(Some(&page));
         if let Some(row) = list.row_at_index(0) {
@@ -1565,7 +1702,10 @@ impl App {
         let built_in = match mode {
             crate::config::BrowserMode::BuiltIn => true,
             crate::config::BrowserMode::System => false,
-            crate::config::BrowserMode::Automatic => self.gamepad_last.get(),
+            // Only a mouse gets the system dialog. Reaching the menu from a
+            // keyboard is as awkward with that dialog as reaching it from a
+            // controller, so both get the built-in browser.
+            crate::config::BrowserMode::Automatic => !self.clicked_last.get(),
         };
         if built_in {
             let (remembered, last_video) = {
@@ -1725,7 +1865,7 @@ impl App {
             back.connect_clicked(move |_| app.show_menu());
         }
 
-        self.wire_navigation(&list, &[]);
+        self.wire_navigation(&list, &[], &[]);
         *self.screen.borrow_mut() = Screen::Settings;
         self.window.set_child(Some(&page));
         let remembered = (*self.settings_row.borrow()).min(last_row_index(&list));
@@ -1819,7 +1959,7 @@ impl App {
             });
         }
 
-        self.set_nav(None, &[]);
+        self.set_nav(None, &[], &[]);
         *self.screen.borrow_mut() = Screen::Confirm;
         self.window.set_child(Some(&page));
         // Cancel takes focus, so a reflexive second press doesn't destroy
@@ -1878,7 +2018,7 @@ impl App {
                 ));
                 *self.playback.borrow_mut() = Some(playback);
                 // Nothing to move a selection through here.
-                self.set_nav(None, &[]);
+                self.set_nav(None, &[], &[]);
                 *self.screen.borrow_mut() = Screen::Playing;
             }
             Err(e) => self.show_error(&format!("Couldn't play that file.\n\n{e}")),
@@ -1925,7 +2065,7 @@ impl App {
         }
 
         // Nothing to move a selection through here.
-        self.set_nav(None, &[]);
+        self.set_nav(None, &[], &[]);
         *self.screen.borrow_mut() = Screen::ConfirmQuit;
         self.window.set_child(Some(&page));
         // Cancel takes focus so a reflexive second Enter doesn't quit.
@@ -1958,7 +2098,7 @@ impl App {
         back.connect_clicked(move |_| app.show_menu());
 
         // Nothing to move a selection through here.
-        self.set_nav(None, &[]);
+        self.set_nav(None, &[], &[]);
         *self.screen.borrow_mut() = Screen::Error;
         self.window.set_child(Some(&page));
         back.grab_focus();
@@ -1975,6 +2115,17 @@ impl App {
 /// changes the header's height, which shifted the heading and the whole
 /// list every time the user moved between the menu and a chooser.
 fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Button) {
+    let heading = heading_label(title);
+    heading.set_xalign(0.0);
+    list_page_with(&heading, show_back)
+}
+
+/// The same page with a heading of the caller's choosing, for the browser's
+/// path trail.
+fn list_page_with(
+    heading: &impl IsA<gtk::Widget>,
+    show_back: bool,
+) -> (gtk::Box, gtk::ListBox, gtk::Button) {
     let page = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(24)
@@ -1998,9 +2149,7 @@ fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Butt
     }
     header.append(&back);
 
-    let heading = heading_label(title);
-    heading.set_xalign(0.0);
-    header.append(&heading);
+    header.append(heading);
     page.append(&header);
 
     let list = gtk::ListBox::new();
@@ -2220,6 +2369,20 @@ fn style_css(scale: f64) -> String {
         .tp-transport {{ -gtk-icon-size: {icon}px; color: #ffffff; }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
+        /* Reads as a path rather than a row of buttons, until one takes
+           focus and the shared button:focus rule highlights it. */
+        .tp-crumb {{
+            background-image: none;
+            background-color: transparent;
+            border-color: transparent;
+            box-shadow: none;
+            padding: {crumb_pad}px {crumb_pad}px;
+            font-size: {title}px;
+            font-weight: bold;
+            opacity: 0.75;
+        }}
+        .tp-crumb:focus {{ opacity: 1; }}
+        .tp-crumb-separator {{ font-size: {title}px; opacity: 0.4; }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
         .tp-gear image {{ -gtk-icon-size: {icon}px; }}
         .{video} {{ background-color: black; }}
@@ -2233,6 +2396,7 @@ fn style_css(scale: f64) -> String {
         radius = px(8.0),
         section = px(28.0),
         icon = px(24.0),
+        crumb_pad = px(6.0),
         bar = px(6.0),
         // A literal colour rather than a theme name: GTK's named colours
         // differ between themes and libadwaita, and an undefined one makes
