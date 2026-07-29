@@ -1,0 +1,86 @@
+# TinePlayer settings, fully commented.
+#
+# Copy this to the per-user config directory and edit it, or just use the
+# settings menu, which writes the same file:
+#
+#   Linux:    ~/.config/tineplayer/config.yaml
+#   Windows:  %LOCALAPPDATA%\tineplayer\config.yaml
+#
+# Every setting is optional except primary_sink. Leave one out and its default
+# applies; there is no need to list settings you are not changing.
+
+
+# --- Appearance -------------------------------------------------------------
+
+# auto, light or dark. auto follows the desktop, and falls back to dark where
+# that cannot be asked.
+theme: dark
+
+# Multiplies every font size and spacing in the interface.
+#
+# Leave it out and the size is worked out from the display, which is what suits
+# a television: a 4K screen the desktop is not already scaling would otherwise
+# draw a ten-foot interface at desk-monitor size. Set it to pin the size
+# regardless.
+ui_scale: 1.5
+
+# A short click when moving through the menus, played through the primary
+# output. true or false.
+sounds: true
+
+
+# --- Audio outputs ----------------------------------------------------------
+#
+# Device names are the ones the settings menu lists. They differ by platform:
+# "Built-in Audio Analogue Stereo" on Linux, "Speakers (Realtek High Definition
+# Audio)" on Windows. Copy them from the menu rather than guessing.
+
+# Where the first audio track goes. The only required setting.
+primary_sink: Built-in Audio Analogue Stereo
+
+# Where the second goes. Leave it out, or set it to null, to play through the
+# primary output alone.
+secondary_sink: Sennheiser USB Headset Analogue Stereo
+
+
+# --- Language preferences ---------------------------------------------------
+#
+# Used to choose tracks automatically for a video that has not been played
+# before. Once you have chosen tracks for a video by hand, those are what it
+# comes back to.
+#
+# Two-letter codes; the full list is in docs/configuration.md. Only the leading
+# letters are compared, so "en" matches a track tagged eng or en-US, and a
+# subtitle file named film.en.hi.srt.
+
+# Falls back to the first audio track when unset.
+primary_language: en
+
+# Falls back to the second audio track when unset.
+secondary_language: ru
+
+# Unset means no subtitles unless you pick them for a video.
+subtitle_language: ru
+
+
+# --- Subtitles --------------------------------------------------------------
+
+# Point size against the video's own resolution rather than the screen's, so
+# one number holds on any display.
+subtitle_size: 12
+
+# Font family and style, without a size. The generic families — Sans, Serif,
+# Monospace — resolve on any system whatever is installed. A family that is not
+# installed is quietly substituted rather than reported.
+subtitle_font: Sans Bold
+
+
+# --- Written automatically --------------------------------------------------
+#
+# TinePlayer adds these itself so it reopens where you left off. They are listed
+# here only so they are not a surprise when you open a real config file; there
+# is no need to set them by hand.
+#
+#   last_video:   the video that was open last
+#   last_folder:  where the built-in browser last was
+#   fullscreen:   whether it was fullscreen, remembered between runs

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Offers TinePlayer to Kodi as an external player, fully commented.
+
+  install-kodi.sh and install-kodi.ps1 write this file for you, and are the
+  easier route. This copy is for setting it up by hand, or for merging into a
+  playercorefactory.xml that already configures other players.
+
+  Put it in Kodi's userdata directory and restart Kodi:
+
+    Linux:    ~/.kodi/userdata/playercorefactory.xml
+    Windows:  %APPDATA%\Kodi\userdata\playercorefactory.xml
+
+  Kodi has no interface for any of this, which is why the file is edited by
+  hand at all.
+-->
+<playercorefactory>
+  <players>
+    <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
+
+      <!-- The full path to the player.
+
+           On Linux, the executable itself.
+
+           On Windows, point this at launch-tineplayer.cmd, which ships at the
+           top of the TinePlayer folder, rather than at TinePlayer.exe. Kodi
+           starts external players from its own program folder, and Windows
+           looks there for libraries before it looks anywhere else. Kodi ships
+           some of the same ones GStreamer does, so started directly the player
+           picks up the wrong copies and dies before it can report anything.
+           The script starts it from its own folder instead. -->
+      <filename>/path/to/TinePlayer</filename>
+
+      <!-- {1} is the video Kodi wants played, and is the only substitution
+           Kodi makes here.
+
+           The fullscreen flag suits a television. Drop it to play in a window.
+
+           The kodi flag is what tells TinePlayer that Kodi launched it, rather
+           than it being guessed at: it takes the resume position from Kodi's
+           library, reports progress back while playing, and leaves choosing
+           the video to Kodi. Without it the player still works, but the two
+           keep separate ideas of where you are in a film.
+
+           (Written without their leading dashes only because an XML comment
+           cannot contain two hyphens in a row. Copy them from the line below,
+           not from this comment.) -->
+      <args>"{1}" --fullscreen --kodi</args>
+
+      <!-- Gets Kodi out of the way while the film plays, which matters on a
+           television where both are fullscreen. -->
+      <hidexbmc>true</hidexbmc>
+
+      <!-- Windows only, and only relevant when filename points at the launcher
+           script above: without this its console window sits on screen for the
+           whole film. Ignored on Linux. -->
+      <hideconsole>true</hideconsole>
+
+      <!-- How long the player must run before Kodi marks the video watched
+           itself, deliberately set beyond any possible running time.
+
+           Kodi only knows how long the player ran, not where it got to, so
+           when the player exits it writes a bookmark saying "watched" or
+           nothing at all. At the default of 10 seconds that means anything
+           played for more than a moment is marked fully watched and loses its
+           resume point — overwriting the real position, because Kodi writes it
+           after the player has exited.
+
+           Out of reach, Kodi writes nothing and leaves the position TinePlayer
+           reported while playing alone. Watched state is still set, by
+           TinePlayer, once you have actually watched enough of it. -->
+      <playcountminimumtime>2147483647</playcountminimumtime>
+
+    </player>
+  </players>
+
+  <!-- Without a rules block, Kodi goes on playing video itself and TinePlayer
+       appears under "Play using..." in a video's context menu.
+
+       Uncomment this to send every video to TinePlayer instead. Worth knowing:
+       on Kodi 20 and earlier "Play using..." only appears under Videos → Files
+       and never in the Movies or TV Shows libraries, so this is the practical
+       choice there. -->
+  <!--
+  <rules action="prepend">
+    <rule video="true" player="TinePlayer" />
+  </rules>
+  -->
+</playercorefactory>

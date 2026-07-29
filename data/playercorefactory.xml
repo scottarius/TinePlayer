@@ -5,6 +5,11 @@
   place of the placeholder below: the executable itself on Linux, and on
   Windows a small launcher script they write alongside this file.
 
+  This is the template the install scripts consume, so it keeps the placeholder
+  and the RULES markers they cut on. examples/playercorefactory.xml says the
+  same thing to people rather than to scripts, with the settings explained and
+  nothing to substitute, and wants changing alongside this one.
+
   Kodi launches the player, waits for it to exit, then carries on. It passes
   only the file, as {1}, so TinePlayer's own resume position and remembered
   track choices are what apply.

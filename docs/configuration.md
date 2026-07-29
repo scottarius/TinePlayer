@@ -23,6 +23,10 @@ edited directly. It lives in the per-user config directory:
 Everything is optional except `primary_sink`. Leave a setting out and its
 default applies.
 
+A fully commented version of the whole file is at
+**[examples/config.yaml](../examples/config.yaml)**, if you would rather start
+from that than build one up.
+
 ```yaml
 theme: dark
 ui_scale: 1.5

@@ -1,7 +1,7 @@
 # Integrations
 
 TinePlayer can be launched by other applications, so you keep the benefits of
-their library browsing with easy hand-off to TinePlayer.
+their library browsing with easy hand-off to TinePlayer for playback.
 
 ## Kodi
 
@@ -19,53 +19,9 @@ Caveat about Kodi versions:
 * On Kodi 21 and later, the **Play using...** option appears throughout.
 * On Kodi 20 and earlier, the **Play using...** only appears under the **Videos → Files** section, not in the Libraries.
 
-**Manual Installation**
+### Automated Installation
 
-Kodi has no interface for this, so it means editing `playercorefactory.xml` in Kodi's userdata directory — `~/.kodi/userdata/` on
-Linux, `%APPDATA%\Kodi\userdata\` on Windows. If it doesn't exist already, you can create it yourself. 
-
-Paste in the following snippit, replacing `<filename>` with the TinePlayer executable path.
-
-```xml
-<playercorefactory>
-  <players>
-    <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
-      <filename>/path/to/TinePlayer</filename>
-      <args>"{1}" --fullscreen --kodi</args>
-      <hidexbmc>true</hidexbmc>
-      <hideconsole>true</hideconsole>
-      <playcountminimumtime>2147483647</playcountminimumtime>
-    </player>
-  </players>
-  <!-- Rules here -->
-</playercorefactory>
-```
-
-`--kodi` is what tells TinePlayer it was launched by Kodi, so it takes the
-resume position from Kodi's library, hands progress back as you watch, and
-leaves choosing the video to Kodi.
-
-The large `playcountminimumtime` stops Kodi writing its own progress when the
-player exits. Kodi only knows how long the player ran, not where you got to, so
-by default anything played for more than ten seconds is marked fully watched
-and loses its resume point. Set out of reach, Kodi leaves the real position —
-which TinePlayer reports while playing — alone.
-
-This will add an option to the **Play Using...** menu.<br/> 
-To force TinePlayer to act as the default player, insert the following under `<!-- Rules here -->`:
-
-```xml
-  <rules action="prepend">
-    <rule video="true" player="TinePlayer" />
-  </rules>
-```
-
-On Windows, you must point `<filename>` at `launch-tineplayer.cmd` rather than straight at the
-executable. It will start the player from the right working directory so it can launch without conflicts.
-
-**Automated Installation**
-
-If you don't want to do the above manual installation, the following scripts will do it for you:
+The easiest way. These scripts write the configuration file for you:
 
 ```sh
 ./install-kodi.sh             # Linux
@@ -78,4 +34,25 @@ If you don't want to do the above manual installation, the following scripts wil
 They find Kodi's userdata directory themselves and write the correct configuration file.
 Any existing `playercorefactory.xml` is backed up rather than replaced.
 
-Restart Kodi after either installation method.
+Restart Kodi to see changes.
+
+### Manual Installation
+
+Kodi has no interface for this, so it means editing `playercorefactory.xml`
+yourself. It lives in Kodi's userdata directory, and you can create it if it
+isn't there already:
+
+* Linux: `~/.kodi/userdata/playercorefactory.xml`
+* Windows: `%APPDATA%\Kodi\userdata\playercorefactory.xml`
+
+**[examples/playercorefactory.xml](../examples/playercorefactory.xml)** is a
+complete, commented copy to start from. Two things to change:
+
+* Set `<filename>` to the TinePlayer executable path. On Windows, point it at
+  `launch-tineplayer.cmd` rather than straight at the executable.
+* Uncomment the `<rules>` block at the bottom to make TinePlayer the default
+  player. Left commented, TinePlayer appears under **Play Using...** instead.
+
+Refer to the comments in the file for further explanation.
+
+Restart Kodi to see changes.
