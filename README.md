@@ -49,6 +49,9 @@ device from a single pipeline, staying in sync because it is all one clock.
 - Blu-ray PGS subtitles cannot be shown. No decoder for them ships with
   GStreamer, so they are left out of the subtitle list rather than offered and
   silently drawn as nothing. Subtitle files beside the video are unaffected.
+- On Windows, switching from the dark theme back to light needs the
+  application to restart, which it offers to do. GTK there will change to dark
+  but not back. Linux switches immediately.
 - No packaged downloads yet, so it has to be built from source.
 
 ## Requirements
@@ -99,9 +102,15 @@ Run it with no arguments, or by double-clicking the executable:
 ./target/release/TinePlayer
 ```
 
-Everything is chosen from one menu: the video, which output devices to use, and
-which audio track goes to each. Output devices are remembered; the video and
-track choices are per-session.
+Everything is chosen from one menu: the video, which output devices to use,
+which audio track goes to each, and the subtitles. Output devices are
+remembered, as are each video's own track and subtitle choices and where you
+stopped watching it.
+
+Choosing a video opens a built-in file browser, which works from a controller
+like the rest of the interface. A button in its top corner opens the system
+file dialog instead, for when a pointer is to hand and typing a path is
+quicker.
 
 Settings live in the per-user config directory (`~/.config/tineplayer/` on
 Linux, `%LOCALAPPDATA%\tineplayer\` on Windows), so they apply however the
@@ -109,17 +118,24 @@ application is launched.
 
 ### Controls
 
-| Key | Gamepad | Action                                |
-| --- | --- |---------------------------------------|
-| Arrow keys | D-pad or left stick | Navigate the menus                    |
-| <kbd>Enter</kbd> | A / Cross | Select                                |
-| <kbd>Esc</kbd> | B / Circle | Back one menu; stop video playback    |
-| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback               |
+| Key | Gamepad | Action |
+| --- | --- | --- |
+| Arrow keys | D-pad or left stick | Navigate the menus |
+| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | Shoulder buttons | Jump a screenful, for long folders |
+| <kbd>Enter</kbd> | A / Cross | Select |
+| <kbd>Esc</kbd> | B / Circle | Back one menu; stop video playback |
+| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback |
 | <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
-| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen                     |
+| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
 
 Controllers are picked up whenever they are connected, including part-way
 through a session, and no configuration is needed.
+
+During playback a strip appears over the video whenever you press or move
+something, and hides again a few seconds later. It stays up while paused. Its
+controls can be clicked as well: play and pause, the position bar to seek, and
+a fullscreen toggle. Double-clicking the picture toggles fullscreen too, and a
+video file can be dropped onto the window at any time to load it.
 
 ### Command line
 
@@ -152,10 +168,11 @@ the minimal desktops a media machine tends to run.
 
 All of this is also reachable from the gear at the bottom of the menu, along
 with preferred languages, subtitle size and font, and a way to forget every
-saved playback position. `file_browser` chooses between the system dialog and
-the built-in browser; left on `automatic` it uses the built-in one when a
-controller was the last thing you touched, and the system dialog otherwise. `subtitle_size` is in points against the video's own
-resolution rather than the screen's, so one value holds on any display.
+saved playback position.
+
+`subtitle_size` is in points against the video's own resolution rather than
+the screen's, so one value holds on any display. `subtitle_font` takes a font
+family and style, such as `Sans Bold`.
 
 ## Compatibility
 
