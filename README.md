@@ -43,7 +43,7 @@ device from a single pipeline, staying in sync because it is all one clock.
 
 ## Requirements
 
-- A display, and two or more connected audio output devices. Any combination
+- A display and two or more connected audio output devices. Any combination
   works: speakers and headphones, a USB headset, an external DAC, and so on.
 - A video file containing two or more audio tracks.
 
@@ -130,24 +130,6 @@ TinePlayer --list-tracks video.mkv
 TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
 ```
 
-### Kodi
-
-Kodi can hand video playback to TinePlayer instead of playing it itself.
-
-```sh
-./install-kodi.sh          # Linux
-.\install-kodi.ps1         # Windows
-```
-
-That writes `playercorefactory.xml` into Kodi's userdata directory, which Kodi
-has no interface for editing. TinePlayer then appears under **Play using...**
-in a video's context menu, leaving Kodi to play everything else as before. Pass
-`--default` (or `-Default`) to send every video to TinePlayer instead. An
-existing `playercorefactory.xml` is backed up rather than replaced.
-
-Kodi passes only the file, so TinePlayer's own resume position and remembered
-track choices apply. Restart Kodi after installing.
-
 ### Configuration
 
 Everything in the settings menu is stored in `config.yaml`, which can also be
@@ -177,6 +159,73 @@ Only the leading letters are compared, so `en` matches a track tagged `eng` or
 Each video's position, track and subtitle choices are kept separately, in
 `positions.json`.
 
+### Kodi
+
+[Kodi](https://kodi.tv) is a media center application: it catalogues your films
+and TV files with artwork and plays them on a television. It can hand playback to
+TinePlayer rather than playing video itself so that you get the benefits of Kodi's
+library browser plus the benefits of TinePlayer's dual audio output.
+
+There are two ways to set it up depending on your preference:
+
+* **As a choice per video:** By default Kodi will play videos itself, and 
+TinePlayer becomes an extra option under **Play using...** in a video's context menu.
+* **As the default player:** Kodi opens every video in TinePlayer.
+
+Caveat about Kodi versions: 
+* On Kodi 21 and later, the **Play using...** option appears throughout.
+* On Kodi 20 and earlier, the **Play using...** only appears under the **Videos → Files** section, not in the Libraries.
+
+**Manual Installation**
+
+Kodi has no interface for this, so it means editing `playercorefactory.xml` in Kodi's userdata directory — `~/.kodi/userdata/` on
+Linux, `%APPDATA%\Kodi\userdata\` on Windows. If it doesn't exist already, you can create it yourself. 
+
+Paste in the following snippit, replacing `<filename>` with the TinePlayer executable path.
+
+```xml
+<playercorefactory>
+  <players>
+    <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
+      <filename>/path/to/TinePlayer</filename>
+      <args>"{1}" --fullscreen</args>
+      <hidexbmc>true</hidexbmc>
+      <hideconsole>true</hideconsole>
+    </player>
+  </players>
+  <!-- Rules here -->
+</playercorefactory>
+```
+
+This will add an option to the **Play Using...** menu.<br/> 
+To force TinePlayer to act as the default player, insert the following under `<!-- Rules here -->`:
+
+```xml
+  <rules action="prepend">
+    <rule video="true" player="TinePlayer" />
+  </rules>
+```
+
+On Windows, you must point `<filename>` at `launch-tineplayer.cmd` rather than straight at the
+executable. It will start the player from the right working directory so it can launch without conflicts.
+
+**Automated Installation**
+
+If you don't want to do the above manual installation, the following scripts will do it for you:
+
+```sh
+./install-kodi.sh             # Linux
+./install-kodi.sh --default   # Linux, as default player
+
+.\install-kodi.ps1            # Windows
+.\install-kodi.ps1 -Default   # Windows, as default player
+```
+
+They find Kodi's userdata directory themselves and write the correct configuration file.
+Any existing `playercorefactory.xml` is backed up rather than replaced.
+
+Restart Kodi after either installation method.
+
 ## Compatibility
 
 TinePlayer targets a deliberately conservative baseline of **GTK 4.6** and
@@ -203,9 +252,9 @@ The OpenGL path used instead handles 1080p comfortably, including on a Pi 5.
 
 ## How this was built
 
-Written collaboratively with an AI assistant (Claude). Every design
-decision, and all testing and verification, was done by hand: much of what
-this application does can only be checked by watching and listening to it.
+Written collaboratively with an AI assistant (Claude). While Claude wrote
+the bulk of the code, every architectural and design decision, and all 
+testing and verification, was done by hand.
 
 ## License
 

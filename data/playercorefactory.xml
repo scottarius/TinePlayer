@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Offers TinePlayer to Kodi as an external player. Copied into Kodi's userdata
-  directory by install-kodi.sh or install-kodi.ps1, which put the real path to
-  the executable in place of the placeholder below.
+  directory by install-kodi.sh or install-kodi.ps1, which put a real path in
+  place of the placeholder below: the executable itself on Linux, and on
+  Windows a small launcher script they write alongside this file.
 
   Kodi launches the player, waits for it to exit, then carries on. It passes
   only the file, as {1}, so TinePlayer's own resume position and remembered
@@ -21,6 +22,10 @@
       <!-- Gets Kodi out of the way while the film plays, which matters on a
            television where both are fullscreen. -->
       <hidexbmc>true</hidexbmc>
+      <!-- On Windows the player is started through a small script, which would
+           otherwise sit on screen as a console window for the whole film.
+           Ignored on Linux, where the player is started directly. -->
+      <hideconsole>true</hideconsole>
     </player>
   </players>
 <!-- RULES START -->

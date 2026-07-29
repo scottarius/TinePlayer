@@ -49,9 +49,21 @@ if (-not $Userdata) {
 
 $target = Join-Path $Userdata 'playercorefactory.xml'
 
+# --- The launcher Kodi actually runs ------------------------------------
+# Not the executable itself: Kodi starts external players from its own program
+# directory, and Windows searches there for DLLs before PATH. Kodi ships copies
+# of DLLs that GStreamer also ships, so launched directly TinePlayer loads the
+# wrong ones and dies before main(). launch-tineplayer.cmd moves to
+# TinePlayer's directory first, and locates it relative to itself, so there is
+# nothing to substitute and nothing to keep in step.
+$launcher = Join-Path $root 'launch-tineplayer.cmd'
+if (-not (Test-Path $launcher)) {
+    throw "launch-tineplayer.cmd not found at $launcher. It ships alongside this script."
+}
+
 # --- Build the file ----------------------------------------------------
 $template = Get-Content (Join-Path $root 'data\playercorefactory.xml') -Raw
-$xml = $template.Replace('TINEPLAYER_BINARY', $binary)
+$xml = $template.Replace('TINEPLAYER_BINARY', $launcher)
 
 if (-not $Default) {
     # Drop the rules block, leaving TinePlayer selectable rather than forced.
@@ -69,6 +81,7 @@ if (Test-Path $target) {
 
 Set-Content -Path $target -Value $xml -Encoding UTF8
 Write-Host "Wrote $target" -ForegroundColor Green
+Write-Host "Kodi will launch TinePlayer through $launcher" -ForegroundColor Green
 if ($Default) {
     Write-Host 'Kodi will now play all video through TinePlayer.'
 } else {
