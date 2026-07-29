@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=TinePlayer
+GenericName=Video Player
+Comment=Play one video with two audio tracks on two output devices
+Exec=TinePlayer %f
+Icon=dev.tineplayer.TinePlayer
+Terminal=false
+Categories=AudioVideo;Video;Player;
+MimeType=video/x-matroska;video/mp4;video/mpeg;video/mp2t;video/x-msvideo;video/quicktime;video/webm;
+# Matches the application id the process registers, which is how a Wayland
+# compositor pairs the running window with this file and finds its icon.
+StartupWMClass=TinePlayer

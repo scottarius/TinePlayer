@@ -29,4 +29,21 @@ sudo apt install -y \
     gstreamer1.0-libav \
     alsa-utils
 
+# --- Desktop integration ----------------------------------------------
+# Gives the application an icon and a launcher entry. The Exec line points at
+# the built binary rather than assuming it is on PATH, since nothing here
+# installs it system-wide. Wayland matches a running window to this file by
+# the application id, which is what puts the icon in the taskbar too.
+icons="$HOME/.local/share/icons/hicolor/scalable/apps"
+applications="$HOME/.local/share/applications"
+mkdir -p "$icons" "$applications"
+
+cp data/dev.tineplayer.TinePlayer.svg "$icons/"
+sed "s|^Exec=.*|Exec=$PWD/target/release/TinePlayer %f|"     data/dev.tineplayer.TinePlayer.desktop     > "$applications/dev.tineplayer.TinePlayer.desktop"
+
+# Both are best-effort: the desktop still works without the caches, they just
+# take longer to notice the new entry.
+update-desktop-database "$applications" 2>/dev/null || true
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+
 echo "Done. Next: cargo build --release && ./target/release/TinePlayer"

@@ -681,7 +681,11 @@ impl App {
     // --- Menu ----------------------------------------------------------
 
     fn show_menu(self: &Rc<Self>) {
-        let (page, list, _back) = list_page("Playback Options", false);
+        let (page, list, back, slot) = list_page("Playback Options", false);
+        // The arrow's slot is empty on this screen, so the mark takes it
+        // rather than leaving a gap beside the title.
+        slot.remove(&back);
+        slot.append(&logo_image(self.scale.get()));
 
         let file = self.file.borrow().clone();
         let config = self.config.borrow();
@@ -890,7 +894,7 @@ impl App {
             Setting::SubtitleFont => "Subtitle Font",
             Setting::FileBrowser => "File Browser",
         };
-        let (page, list, back) = list_page(title, true);
+        let (page, list, back, _header) = list_page(title, true);
 
         // Entries are (display text, choice). `None` means the "None"
         // option, which every list offers except the primary device — an
@@ -1504,7 +1508,7 @@ impl App {
         select: Option<&std::path::Path>,
     ) {
         let (crumbs, crumb_buttons) = self.breadcrumbs(directory);
-        let (page, list, back) = list_page_with(&crumbs, true);
+        let (page, list, back, _header) = list_page_with(&crumbs, true);
 
         // Entries and the paths they lead to. `None` steps up a level.
         let mut rows: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
@@ -1667,7 +1671,7 @@ impl App {
         if roots.is_empty() {
             return;
         }
-        let (page, list, back) = list_page("Drives", true);
+        let (page, list, back, _header) = list_page("Drives", true);
         for entry in &roots {
             list.append(&chooser_row(&entry.label));
         }
@@ -1725,7 +1729,7 @@ impl App {
     /// Everything that applies to the application rather than to the video
     /// currently loaded. Reached from the gear in the footer.
     fn show_settings(self: &Rc<Self>) {
-        let (page, list, back) = list_page("Settings", true);
+        let (page, list, back, _header) = list_page("Settings", true);
 
         let rows = {
             let config = self.config.borrow();
@@ -2114,7 +2118,7 @@ impl App {
 /// back to, where it's made invisible instead of omitted. Leaving it out
 /// changes the header's height, which shifted the heading and the whole
 /// list every time the user moved between the menu and a chooser.
-fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Button) {
+fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let heading = heading_label(title);
     heading.set_xalign(0.0);
     list_page_with(&heading, show_back)
@@ -2125,7 +2129,7 @@ fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Butt
 fn list_page_with(
     heading: &impl IsA<gtk::Widget>,
     show_back: bool,
-) -> (gtk::Box, gtk::ListBox, gtk::Button) {
+) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let page = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(24)
@@ -2138,7 +2142,18 @@ fn list_page_with(
     let header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(16)
+        .css_classes(["tp-header"])
         .build();
+    // Its own box rather than sizing the widgets themselves: a button adds
+    // padding and borders to whatever minimum it is given, so the arrow and
+    // the mark never agree on a size. An empty box takes exactly the size the
+    // stylesheet asks for, and the child sits centred inside it.
+    let slot = gtk::Box::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["tp-leading"])
+        .build();
+
     let back = back_button();
     if !show_back {
         // Kept in the layout so it still occupies its space, but invisible
@@ -2147,7 +2162,8 @@ fn list_page_with(
         back.set_sensitive(false);
         back.set_can_focus(false);
     }
-    header.append(&back);
+    slot.append(&back);
+    header.append(&slot);
 
     header.append(heading);
     page.append(&header);
@@ -2166,7 +2182,28 @@ fn list_page_with(
         .build();
     page.append(&scroller);
 
-    (page, list, back)
+    (page, list, back, slot)
+}
+
+/// The application mark, decoded from the PNG compiled into the binary.
+///
+/// A PNG rather than the SVG it was drawn from, because GStreamer's Windows
+/// distribution ships no gdk-pixbuf loaders at all and so cannot decode SVG
+/// at runtime. The SVG is still what Linux installs, where librsvg is present.
+fn logo_image(scale: f64) -> gtk::Image {
+    const LOGO: &[u8] = include_bytes!("../data/tineplayer.png");
+
+    let image = gtk::Image::new();
+    match gdk::Texture::from_bytes(&glib::Bytes::from_static(LOGO)) {
+        Ok(texture) => image.set_paintable(Some(&texture)),
+        Err(e) => eprintln!("Could not load the application icon: {e}"),
+    }
+    // Shares the back arrow's fixed slot, so the title beside it sits in the
+    // same place on every screen instead of shifting as you move between
+    // them. Drawn a little smaller than the slot so it cannot force it wider.
+    image.set_valign(gtk::Align::Center);
+    image.set_pixel_size((30.0 * scale).round() as i32);
+    image
 }
 
 /// Uppercased here rather than with the `text-transform` CSS property,
@@ -2343,7 +2380,21 @@ fn style_css(scale: f64) -> String {
         button:focus label {{ color: #ffffff; }}
         /* Chrome-less until pointed at, but the arrow itself stays visible
            so the way back is always apparent. */
+        /* One fixed footprint for whatever leads the header, the back arrow
+           or the application mark. Without it the two screens allocate
+           different widths and everything after them moves. */
+        .tp-leading {{
+            min-width: {leading}px;
+            min-height: {leading}px;
+            padding: 0px;
+        }}
+        /* Fixed too, so a header of buttons is no taller than one holding a
+           plain label and the list below starts in the same place. */
+        .tp-header {{ min-height: {leading}px; }}
         .tp-back {{
+            padding: 0px;
+            min-width: 0px;
+            min-height: 0px;
             background-image: none;
             background-color: transparent;
             border-color: transparent;
@@ -2376,7 +2427,9 @@ fn style_css(scale: f64) -> String {
             background-color: transparent;
             border-color: transparent;
             box-shadow: none;
-            padding: {crumb_pad}px {crumb_pad}px;
+            min-height: 0px;
+            min-width: 0px;
+            padding: 2px {crumb_pad}px;
             font-size: {title}px;
             font-weight: bold;
             opacity: 0.75;
@@ -2385,6 +2438,7 @@ fn style_css(scale: f64) -> String {
         .tp-crumb-separator {{ font-size: {title}px; opacity: 0.4; }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
         .tp-gear image {{ -gtk-icon-size: {icon}px; }}
+        .tp-back image {{ -gtk-icon-size: {back_icon}px; }}
         .{video} {{ background-color: black; }}
         ",
         title = px(20.0),
@@ -2397,6 +2451,8 @@ fn style_css(scale: f64) -> String {
         section = px(28.0),
         icon = px(24.0),
         crumb_pad = px(6.0),
+        leading = px(38.0),
+        back_icon = px(22.0),
         bar = px(6.0),
         // A literal colour rather than a theme name: GTK's named colours
         // differ between themes and libadwaita, and an undefined one makes

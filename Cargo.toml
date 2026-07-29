@@ -72,6 +72,11 @@ libc = "0.2"
 # is Wayland or X11; the sink picks the right one at runtime.
 gst-plugin-gtk4 = { version = "0.13.7", features = ["wayland", "x11egl", "x11glx"] }
 
+[target.'cfg(target_os = "windows")'.build-dependencies]
+# Compiles the icon into the executable's resources. Build-time only, and
+# Windows-only: there is no counterpart to embed on Linux.
+winresource = "0.1"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Only for AttachConsole: release builds are GUI-subsystem, so they need to
 # reattach to the parent terminal's console for CLI output to be visible.
