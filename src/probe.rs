@@ -1,6 +1,6 @@
-use std::path::Path;
-
 use gstreamer as gst;
+
+use crate::source::Source;
 use gstreamer_pbutils as pbutils;
 
 use pbutils::prelude::*;
@@ -32,16 +32,21 @@ pub struct SubtitleTrack {
 pub struct Media {
     pub audio: Vec<AudioTrack>,
     pub subtitles: Vec<SubtitleTrack>,
+    /// Zero when the source could not say, which some live streams cannot.
+    pub duration_ns: u64,
 }
 
-pub fn probe_media(path: &Path) -> Result<Media, String> {
-    let uri = glib::filename_to_uri(path, None).map_err(|e| e.to_string())?;
+pub fn probe_media(source: &Source) -> Result<Media, String> {
+    // The discoverer has always worked in URIs, so a remote source needs
+    // nothing special here: it opens an HTTP or SMB stream the same way it
+    // opens a file, and reports the same track list either way.
+    let uri = source.uri();
 
     let discoverer =
         pbutils::Discoverer::new(gst::ClockTime::from_seconds(10)).map_err(|e| e.to_string())?;
     let info = discoverer
         .discover_uri(&uri)
-        .map_err(|e| format!("Failed to probe {}: {e}", path.display()))?;
+        .map_err(|e| format!("Failed to probe {uri}: {e}"))?;
 
     let mut subtitles = Vec::new();
     for (index, stream) in info.subtitle_streams().into_iter().enumerate() {
@@ -100,5 +105,6 @@ pub fn probe_media(path: &Path) -> Result<Media, String> {
     Ok(Media {
         audio: tracks,
         subtitles,
+        duration_ns: info.duration().map(|d| d.nseconds()).unwrap_or(0),
     })
 }

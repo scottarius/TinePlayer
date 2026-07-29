@@ -19,9 +19,8 @@ mod pipeline;
 mod player;
 mod probe;
 mod sound;
+mod source;
 mod subtitles;
-
-use std::path::PathBuf;
 
 use clap::Parser;
 use gtk::prelude::*;
@@ -44,8 +43,9 @@ use config::Config;
                   Run with no arguments to pick everything in the window."
 )]
 struct Args {
-    /// Video file to play. Omit it to choose one in the window.
-    file: Option<PathBuf>,
+    /// Video to play: a file, or a URL that GStreamer can open (`http://`,
+    /// `smb://`). Omit it to choose one in the window.
+    file: Option<String>,
 
     /// Audio track for the Primary output, numbered as `--list-tracks`
     /// shows them. 0 means no audio on this output.
@@ -160,10 +160,10 @@ fn silence_upstream_unref_spam() {
     );
 }
 
-fn list_tracks(path: &std::path::Path) -> Result<(), String> {
-    let media = probe::probe_media(path)?;
+fn list_tracks(source: &source::Source) -> Result<(), String> {
+    let media = probe::probe_media(source)?;
 
-    println!("Audio tracks in {}:", path.display());
+    println!("Audio tracks in {}:", source.label());
     println!("  0  None");
     for (position, track) in media.audio.iter().enumerate() {
         let mut line = format!(
@@ -182,7 +182,7 @@ fn list_tracks(path: &std::path::Path) -> Result<(), String> {
     // The same list the menu offers, in the same order, so the numbers here
     // are the ones `--subtitle` takes. Includes subtitle files sitting beside
     // the video, not just what is inside it.
-    let subtitles = subtitles::options(path, &media.subtitles);
+    let subtitles = subtitles::options(source.local(), &media.subtitles);
     println!();
     println!("Subtitles:");
     println!("  0  None");
@@ -208,12 +208,14 @@ fn main() -> std::process::ExitCode {
     // registered explicitly — GStreamer's normal plugin scan won't find it.
     gstgtk4::plugin_register_static().expect("Failed to register gtk4paintablesink");
 
+    let source = args.file.as_deref().map(source::Source::parse);
+
     if args.list_tracks {
-        let Some(file) = args.file.as_deref() else {
+        let Some(source) = source.as_ref() else {
             eprintln!("--list-tracks needs a file");
             return std::process::ExitCode::FAILURE;
         };
-        return match list_tracks(file) {
+        return match list_tracks(source) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("{e}");
@@ -222,10 +224,12 @@ fn main() -> std::process::ExitCode {
         };
     }
 
-    if let Some(file) = args.file.as_deref()
-        && !file.exists()
+    // Only a local file can be checked here. A URL is taken on trust and left
+    // to playback to report, since finding out means a network round trip.
+    if let Some(source) = source.as_ref()
+        && !source.is_available()
     {
-        eprintln!("File not found: {}", file.display());
+        eprintln!("File not found: {}", source.label());
         return std::process::ExitCode::FAILURE;
     }
 
@@ -257,9 +261,15 @@ fn main() -> std::process::ExitCode {
         // deleted, which would otherwise open onto an error.
         // Kodi always passes the file it wants played, so falling back to the
         // last one would be wrong there as well as pointless.
-        let file = args.file.clone().or_else(|| {
+        let file = source.or_else(|| {
             (!args.kodi)
-                .then(|| config.last_video.clone().filter(|path| path.exists()))
+                .then(|| {
+                    config
+                        .last_video
+                        .clone()
+                        .filter(|path| path.exists())
+                        .map(source::Source::File)
+                })
                 .flatten()
         });
         let restart = args.restart;

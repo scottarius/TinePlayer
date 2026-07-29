@@ -53,7 +53,7 @@ Track numbers are those `--list-tracks` prints.
 
 | Option            | Meaning                                                                   |
 |-------------------|---------------------------------------------------------------------------|
-| `FILE`            | Path to the video to play. Omit it to choose one in the window            |
+| `FILE`            | The video to play: a path, or a URL such as `http://…` or `smb://…`. Omit it to choose one in the window |
 | `--primary <N>`   | Audio track for the primary output. `0` for no audio there                |
 | `--secondary <N>` | Audio track for the secondary output. `0` for no audio there              |
 | `--subtitle <N>`  | Subtitles to show. `0` for none                                           |

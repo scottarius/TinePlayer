@@ -1,5 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +8,7 @@ use gtk::{gdk, glib};
 
 use crate::config::{Config, clear_position, save_position};
 use crate::pipeline::build_pipeline;
+use crate::source::Source;
 
 /// Applied to the video widget so the letterbox area around the picture
 /// can be styled black without affecting the rest of the interface.
@@ -47,7 +47,12 @@ const SCRUB_RATES: [(Duration, f64); 4] = [
 /// thread — so `Rc`/`Cell` rather than `Arc`/atomics.
 pub struct Playback {
     pipeline: gst::Pipeline,
-    path: PathBuf,
+    /// How this video's position is filed — a Kodi id when Kodi launched us,
+    /// otherwise derived from the source itself.
+    key: String,
+    /// The path Kodi knows the item by, for reporting progress back to it.
+    /// Empty when Kodi is not involved.
+    kodi_file: String,
     picture: gtk::Picture,
     playing: Cell<bool>,
     last_toggle: Cell<Instant>,
@@ -86,8 +91,6 @@ pub struct Playback {
     /// Whether the hold lasted long enough to actually travel. A press that
     /// ends before it does is a tap, and steps instead.
     scrubbed: Cell<bool>,
-    /// Report progress back to the Kodi that launched us.
-    kodi: bool,
 }
 
 impl Playback {
@@ -99,16 +102,17 @@ impl Playback {
     /// somewhere less obvious than the call site.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
-        path: &Path,
+        source: &Source,
         primary_track: Option<u32>,
         secondary_track: Option<u32>,
         subtitle: Option<&crate::subtitles::SubtitleChoice>,
         config: &Config,
         resume_ns: Option<u64>,
-        kodi: bool,
+        key: String,
+        kodi_file: String,
         on_ended: impl Fn() + 'static,
     ) -> Result<Rc<Self>, String> {
-        let pipeline = build_pipeline(path, primary_track, secondary_track, subtitle, config)?;
+        let pipeline = build_pipeline(source, primary_track, secondary_track, subtitle, config)?;
 
         // gtk4paintablesink renders into a GdkPaintable rather than creating
         // its own window; handing that to a gtk::Picture is what embeds the
@@ -120,7 +124,8 @@ impl Playback {
 
         let playback = Rc::new(Self {
             pipeline: pipeline.clone(),
-            path: path.to_path_buf(),
+            key,
+            kodi_file,
             picture: gtk::Picture::builder()
                 .paintable(&paintable)
                 .css_classes([VIDEO_CSS_CLASS])
@@ -138,7 +143,6 @@ impl Playback {
             scrub_started: Cell::new(None),
             scrub_direction: Cell::new(0.0),
             scrubbed: Cell::new(false),
-            kodi,
         });
 
         let bus = pipeline.bus().ok_or("pipeline has no bus")?;
@@ -421,7 +425,7 @@ impl Playback {
     /// Kodi's library close to right. The call itself is made on a thread and
     /// cannot block playback.
     pub fn report_to_kodi(&self) {
-        if !self.kodi {
+        if self.kodi_file.is_empty() {
             return;
         }
         let (Some(position), Some(duration)) = (
@@ -430,7 +434,7 @@ impl Playback {
         ) else {
             return;
         };
-        crate::kodi::report_position(&self.path, position.nseconds(), duration.nseconds());
+        crate::kodi::report_position(&self.kodi_file, position.nseconds(), duration.nseconds());
     }
 
     /// Persist (or clear) the resume position and tear the pipeline down.
@@ -441,19 +445,23 @@ impl Playback {
         }
 
         if self.reached_eos.get() {
-            clear_position(&self.path);
+            clear_position(&self.key);
             // Watched to the end, which Kodi records as a play rather than a
             // resume point. Reported as the full duration so it crosses the
             // same threshold Kodi's own player uses.
-            if self.kodi
+            if !self.kodi_file.is_empty()
                 && let Some(duration) = self.pipeline.query_duration::<gst::ClockTime>()
             {
-                crate::kodi::report_position(&self.path, duration.nseconds(), duration.nseconds());
+                crate::kodi::report_position(
+                    &self.kodi_file,
+                    duration.nseconds(),
+                    duration.nseconds(),
+                );
             }
         } else if let Some(position) = self.pipeline.query_position::<gst::ClockTime>()
             && position.nseconds() > 0
         {
-            save_position(&self.path, position.nseconds());
+            save_position(&self.key, position.nseconds());
             self.report_to_kodi();
         }
 

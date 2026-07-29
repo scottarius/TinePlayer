@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+
+use crate::source::Source;
 use std::rc::Rc;
 
 use gstreamer::prelude::DeviceExt;
@@ -101,7 +102,7 @@ pub struct Preset {
 pub struct App {
     window: gtk::ApplicationWindow,
     config: RefCell<Config>,
-    file: RefCell<Option<PathBuf>>,
+    file: RefCell<Option<Source>>,
     tracks: RefCell<Vec<AudioTrack>>,
     primary_track: RefCell<Option<u32>>,
     secondary_track: RefCell<Option<u32>>,
@@ -152,17 +153,18 @@ pub struct App {
     /// of who started us, which stays true whether or not its JSON-RPC socket
     /// answers.
     kodi: bool,
-    /// The library title Kodi holds for the current file, which reads far
-    /// better than the file name. Empty when Kodi has not been asked, did not
-    /// answer, or does not have the file.
-    kodi_title: RefCell<Option<String>>,
+    /// What Kodi says it is playing through us: its title, database id, resume
+    /// point, and the path to report progress against. Fetched once at startup,
+    /// because it cannot change while we are the player. `None` when Kodi was
+    /// not involved or did not answer, which is not an error.
+    kodi_item: RefCell<Option<crate::kodi::Item>>,
 }
 
 impl App {
     pub fn build(
         gtk_app: &gtk::Application,
         config: Config,
-        file: Option<PathBuf>,
+        file: Option<Source>,
         preset: Option<Preset>,
         restart: bool,
         fullscreen: bool,
@@ -230,7 +232,7 @@ impl App {
             scrub_seen: Cell::new(None),
             tick: RefCell::new(None),
             kodi,
-            kodi_title: RefCell::new(None),
+            kodi_item: RefCell::new(None),
         });
 
         // Weak, so the polling closure doesn't keep the application alive
@@ -278,6 +280,14 @@ impl App {
         // menus are fullscreen too.
         if fullscreen {
             window.fullscreen();
+        }
+
+        // Asked before the file is loaded, because the answer supplies the
+        // title shown for it and the resume position it starts from. Kodi is
+        // the only thing that knows either, and only it can say which library
+        // item this playback is.
+        if kodi {
+            *app.kodi_item.borrow_mut() = crate::kodi::current_item();
         }
 
         if let Some(path) = file {
@@ -398,7 +408,7 @@ impl App {
                     return false;
                 };
                 app.stop_playback();
-                app.set_file(&path);
+                app.set_file(&Source::File(path));
                 app.show_menu();
                 true
             });
@@ -721,26 +731,34 @@ impl App {
     /// The title comes from the same call, so it is refreshed here rather
     /// than costing a second round trip.
     fn resume_position(&self) -> Option<u64> {
-        let file = self.file.borrow().clone()?;
-        if self.kodi
-            && let Some(details) = crate::kodi::details(&file)
-        {
-            *self.kodi_title.borrow_mut() = (!details.title.is_empty()).then_some(details.title);
-            return details.resume_ns;
+        if let Some(item) = self.kodi_item.borrow().as_ref() {
+            return item.resume_ns;
         }
-        crate::config::load_resume(&file).and_then(|resume| resume.resume_position())
+        let key = self.storage_key()?;
+        crate::config::load_resume(&key).and_then(|resume| resume.resume_position())
+    }
+
+    /// How this video's position and track choices are filed.
+    ///
+    /// Kodi's own id when it launched us, which survives an add-on stream URL
+    /// changing and is the same whichever form of the path is in play.
+    /// Otherwise the source names itself.
+    fn storage_key(&self) -> Option<String> {
+        if let Some(item) = self.kodi_item.borrow().as_ref() {
+            return Some(item.key());
+        }
+        self.file.borrow().as_ref().map(Source::key)
     }
 
     /// What to call the current file on screen: Kodi's library title when it
     /// has one, otherwise the file name.
     fn file_label(&self) -> Option<String> {
-        if let Some(title) = self.kodi_title.borrow().clone() {
-            return Some(title);
+        if let Some(item) = self.kodi_item.borrow().as_ref()
+            && !item.title.is_empty()
+        {
+            return Some(item.title.clone());
         }
-        self.file
-            .borrow()
-            .as_ref()
-            .and_then(|path| path.file_name().map(|n| n.to_string_lossy().to_string()))
+        self.file.borrow().as_ref().map(Source::label)
     }
 
     // --- Menu ----------------------------------------------------------
@@ -1299,11 +1317,11 @@ impl App {
     /// Writes the current track pair against the current file, so a choice
     /// survives even if the file is never played.
     fn remember_tracks(&self) {
-        let Some(path) = self.file.borrow().clone() else {
+        let Some(key) = self.storage_key() else {
             return;
         };
         crate::config::save_tracks(
-            &path,
+            &key,
             *self.primary_track.borrow(),
             *self.secondary_track.borrow(),
             self.subtitle.borrow().clone(),
@@ -1555,7 +1573,7 @@ impl App {
                 // A file was picked, so the menu is where to go next either
                 // way.
                 Some(path) => {
-                    app.set_file(&path);
+                    app.set_file(&Source::File(path));
                     app.show_menu();
                 }
                 None => match folder.as_deref().filter(|_| from_browser) {
@@ -1572,11 +1590,11 @@ impl App {
     /// A file played before comes back with the tracks it was played with;
     /// otherwise the first track goes to the primary output and a different
     /// one to the secondary, which is the whole point of the application.
-    fn set_file(self: &Rc<Self>, path: &std::path::Path) {
-        let media = match crate::probe::probe_media(path) {
+    fn set_file(self: &Rc<Self>, source: &Source) {
+        let media = match crate::probe::probe_media(source) {
             Ok(media) => media,
             Err(e) => {
-                eprintln!("Couldn't read {}: {e}", path.display());
+                eprintln!("Couldn't read {}: {e}", source.uri());
                 *self.tracks.borrow_mut() = Vec::new();
                 *self.subtitle_options.borrow_mut() = Vec::new();
                 *self.primary_track.borrow_mut() = None;
@@ -1586,8 +1604,29 @@ impl App {
                 return;
             }
         };
+        // Kodi's one video player slot is necessarily this playback while it
+        // waits for us, but a session started by hand with --kodi could attach
+        // to a *different* external player's item. Lengths agreeing is a cheap
+        // guard against that, and against writing progress onto the wrong film.
+        if let Some(runtime) = self
+            .kodi_item
+            .borrow()
+            .as_ref()
+            .map(|item| item.runtime_s)
+            .filter(|runtime| *runtime > 0)
+            && media.duration_ns > 0
+        {
+            let ours = media.duration_ns / 1_000_000_000;
+            if ours.abs_diff(runtime) > 5 {
+                eprintln!(
+                    "Kodi reports a {runtime}s item but this source is {ours}s;                      ignoring what it said and keeping local positions."
+                );
+                *self.kodi_item.borrow_mut() = None;
+            }
+        }
+
         let tracks = media.audio;
-        let options = crate::subtitles::options(path, &media.subtitles);
+        let options = crate::subtitles::options(source.local(), &media.subtitles);
 
         let (primary_language, secondary_language, subtitle_language) = {
             let config = self.config.borrow();
@@ -1606,7 +1645,10 @@ impl App {
                 .map(|track| track.index)
         };
 
-        let saved = crate::config::load_resume(path).and_then(|resume| resume.tracks);
+        let saved = self
+            .storage_key()
+            .and_then(|key| crate::config::load_resume(&key))
+            .and_then(|resume| resume.tracks);
         let (primary, secondary) = match saved.clone() {
             // A saved None is a real choice ("no audio on that output"), so a
             // saved pair is taken as it stands rather than filled in.
@@ -1645,11 +1687,16 @@ impl App {
             subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
         *self.subtitle_options.borrow_mut() = options;
         *self.tracks.borrow_mut() = tracks;
-        *self.file.borrow_mut() = Some(path.to_path_buf());
+        *self.file.borrow_mut() = Some(source.clone());
 
-        let mut config = self.config.borrow_mut();
-        config.last_video = Some(path.to_path_buf());
-        let _ = config.save();
+        // Only a local file is worth reopening: a remote URL can carry an
+        // access token that expires, and whatever launched us will hand it over
+        // again anyway.
+        if let Some(path) = source.local() {
+            let mut config = self.config.borrow_mut();
+            config.last_video = Some(path.to_path_buf());
+            let _ = config.save();
+        }
     }
 
     // --- Browsing ------------------------------------------------------
@@ -1727,7 +1774,7 @@ impl App {
                 match target {
                     Some(path) if path.is_dir() => app.show_browser(path, None),
                     Some(path) => {
-                        app.set_file(path);
+                        app.set_file(&Source::File(path.to_path_buf()));
                         app.show_menu();
                     }
                     // Up: to the parent, or to the drive list when there is
@@ -2155,7 +2202,9 @@ impl App {
             None
         };
         let subtitle = self.subtitle.borrow().clone();
-        crate::config::save_tracks(&path, primary, secondary, subtitle.clone());
+        if let Some(key) = self.storage_key() {
+            crate::config::save_tracks(&key, primary, secondary, subtitle.clone());
+        }
 
         let app = self.clone();
         let on_ended = move || {
@@ -2172,7 +2221,15 @@ impl App {
             // "Restart" means start from the beginning whoever is asking, so
             // it beats both our saved position and Kodi's.
             (!restart).then(|| self.resume_position()).flatten(),
-            self.kodi,
+            self.storage_key().unwrap_or_default(),
+            // Kodi's own path for the item, which is what it accepts progress
+            // against. Empty when Kodi is not involved, which turns reporting
+            // off rather than needing a flag of its own.
+            self.kodi_item
+                .borrow()
+                .as_ref()
+                .map(|item| item.file.clone())
+                .unwrap_or_default(),
             on_ended,
         );
 
@@ -2235,12 +2292,8 @@ impl App {
                 controls.flash(false);
                 *self.controls.borrow_mut() = Some(controls);
                 self.start_tick();
-                self.window.set_title(Some(
-                    &path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default(),
-                ));
+                self.window
+                    .set_title(Some(&self.file_label().unwrap_or_default()));
                 *self.playback.borrow_mut() = Some(playback);
                 // Nothing to move a selection through here.
                 self.set_nav(None, &[], &[]);

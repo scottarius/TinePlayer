@@ -47,7 +47,11 @@ pub enum SubtitleChoice {
 
 /// Everything on offer for a video: what is inside it, then what sits beside
 /// it on disk.
-pub fn options(video: &Path, embedded: &[SubtitleTrack]) -> Vec<Subtitle> {
+///
+/// `video` is `None` for a remote source, which offers only what is embedded —
+/// there is no folder to look in, and a media server hands its own subtitles
+/// over inside the stream anyway.
+pub fn options(video: Option<&Path>, embedded: &[SubtitleTrack]) -> Vec<Subtitle> {
     let mut options: Vec<Subtitle> = embedded
         .iter()
         .map(|track| Subtitle::Embedded {
@@ -59,7 +63,9 @@ pub fn options(video: &Path, embedded: &[SubtitleTrack]) -> Vec<Subtitle> {
             },
         })
         .collect();
-    options.extend(external(video));
+    if let Some(video) = video {
+        options.extend(external(video));
+    }
     options
 }
 

@@ -7,6 +7,7 @@ use gstreamer as gst;
 
 use crate::config::Config;
 use crate::devices::find_audio_output_device;
+use crate::source::Source;
 use crate::subtitles::SubtitleChoice;
 
 /// Pango leaves the family unspecified by default, which resolves to a serif
@@ -41,7 +42,10 @@ struct Targets {
     subtitle: Option<gst::Element>,
 }
 
-/// Builds the playback pipeline for `path`.
+/// Builds the playback pipeline for `source`.
+///
+/// The source may be a local file or a remote URL — everything below treats
+/// them alike, since `urisourcebin` hides the difference.
 ///
 /// `decodebin3` rather than a named demuxer, which is what makes this
 /// container-agnostic: it typefinds the file and picks the demuxer itself, so
@@ -74,7 +78,7 @@ struct Targets {
 /// keyboard input) instead of relaying input back out of a sink-created
 /// window. Caller reads the sink's `paintable` property to attach it.
 pub fn build_pipeline(
-    path: &Path,
+    source: &Source,
     primary_track: Option<u32>,
     secondary_track: Option<u32>,
     subtitle: Option<&SubtitleChoice>,
@@ -82,17 +86,35 @@ pub fn build_pipeline(
 ) -> Result<gst::Pipeline, String> {
     let pipeline = gst::Pipeline::new();
 
-    // Set as a property rather than parsed from a pipeline string: GStreamer's
-    // pipeline mini-language treats "(" and ")" as bin grouping, and real
-    // filenames commonly contain them (e.g. "Movie (2019).mkv").
-    let src = make("filesrc")?;
-    src.set_property("location", path.to_string_lossy().to_string());
+    // urisourcebin rather than filesrc so that anything GStreamer can open
+    // works: a local file, an HTTP stream from a media server, an SMB share.
+    // It picks the right source element for the scheme and adds buffering for
+    // the ones that need it.
+    //
+    // Its pads appear as the source is opened rather than existing up front,
+    // so the link to the decoder is made when they arrive. decodebin3 takes a
+    // request pad per stream.
+    let src = make("urisourcebin")?;
+    src.set_property("uri", source.uri());
     let decode = make("decodebin3")?;
     pipeline
         .add_many([&src, &decode])
         .map_err(|e| e.to_string())?;
-    src.link(&decode)
-        .map_err(|_| "Failed to link source to decoder".to_string())?;
+    {
+        let decode = decode.clone();
+        src.connect_pad_added(move |_, pad| {
+            let Some(sink) = decode
+                .request_pad_simple("sink_%u")
+                .or_else(|| decode.static_pad("sink"))
+            else {
+                eprintln!("Failed to get a decoder sink pad for {}", pad.name());
+                return;
+            };
+            if let Err(e) = pad.link(&sink) {
+                eprintln!("Failed to link source to decoder: {e}");
+            }
+        });
+    }
 
     // Family and size are stored apart so each can be a menu of its own, and
     // joined here into the single description Pango expects.
@@ -391,8 +413,19 @@ fn connect_pad_added(
     selected: Arc<Mutex<HashMap<String, Target>>>,
 ) {
     decode.connect_pad_added(move |_, pad| {
+        // `pad-added` fires for every pad an element gains, in either
+        // direction — including the sink pad requested to link the source in.
+        // Only decoded output is of interest here.
+        if pad.direction() != gst::PadDirection::Src {
+            return;
+        }
         let Some(id) = pad.stream_id() else {
-            eprintln!("Decoded pad has no stream id; ignoring it");
+            eprintln!(
+                "Decoded pad {} has no stream id, so nothing knows what it was \
+                 selected for; ignoring it. Caps: {:?}",
+                pad.name(),
+                pad.current_caps()
+            );
             return;
         };
         let target = selected.lock().unwrap().get(id.as_str()).copied();

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -243,30 +243,30 @@ fn save_all(entries: &std::collections::HashMap<String, Resume>) {
     }
 }
 
-pub fn load_resume(path: &Path) -> Option<Resume> {
-    load_all().get(&path.to_string_lossy().to_string()).cloned()
+pub fn load_resume(key: &str) -> Option<Resume> {
+    load_all().get(key).cloned()
 }
 
 /// Applies `edit` to a file's entry, creating it if there isn't one.
-fn update(path: &Path, edit: impl FnOnce(&mut Resume)) {
+fn update(key: &str, edit: impl FnOnce(&mut Resume)) {
     let mut entries = load_all();
-    edit(
-        entries
-            .entry(path.to_string_lossy().to_string())
-            .or_default(),
-    );
+    edit(entries.entry(key.to_string()).or_default());
     save_all(&entries);
 }
 
-/// Position stored in nanoseconds, keyed by absolute file path string.
-pub fn save_position(path: &Path, position_ns: u64) {
-    update(path, |entry| entry.position_ns = position_ns);
+/// Position stored in nanoseconds.
+///
+/// The key identifies the video: a local file's path, a remote source's URI,
+/// or — better than either — an id from whatever launched us. See
+/// `Source::key` and `kodi::Item::key`.
+pub fn save_position(key: &str, position_ns: u64) {
+    update(key, |entry| entry.position_ns = position_ns);
 }
 
 /// Called when a file plays to the end. Only the position is forgotten: the
 /// track choices are still the right ones next time you watch it.
-pub fn clear_position(path: &Path) {
-    update(path, |entry| entry.position_ns = 0);
+pub fn clear_position(key: &str) {
+    update(key, |entry| entry.position_ns = 0);
 }
 
 /// Forgets every remembered position and track choice.
@@ -279,12 +279,12 @@ pub fn clear_all_resume() -> Result<(), String> {
 }
 
 pub fn save_tracks(
-    path: &Path,
+    key: &str,
     primary: Option<u32>,
     secondary: Option<u32>,
     subtitle: Option<crate::subtitles::SubtitleChoice>,
 ) {
-    update(path, |entry| {
+    update(key, |entry| {
         entry.tracks = Some(TrackChoice {
             primary,
             secondary,
