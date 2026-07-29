@@ -130,6 +130,24 @@ TinePlayer --list-tracks video.mkv
 TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
 ```
 
+### Kodi
+
+Kodi can hand video playback to TinePlayer instead of playing it itself.
+
+```sh
+./install-kodi.sh          # Linux
+.\install-kodi.ps1         # Windows
+```
+
+That writes `playercorefactory.xml` into Kodi's userdata directory, which Kodi
+has no interface for editing. TinePlayer then appears under **Play using...**
+in a video's context menu, leaving Kodi to play everything else as before. Pass
+`--default` (or `-Default`) to send every video to TinePlayer instead. An
+existing `playercorefactory.xml` is backed up rather than replaced.
+
+Kodi passes only the file, so TinePlayer's own resume position and remembered
+track choices apply. Restart Kodi after installing.
+
 ### Configuration
 
 Everything in the settings menu is stored in `config.yaml`, which can also be
