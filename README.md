@@ -24,6 +24,11 @@ own language. The performances land, the jokes time correctly, and you follow
 the story without having to work at it. TinePlayer lets everyone watching have
 that experience together on the same screen.
 
+The same applies to an audio description track. Someone who is blind or has
+low vision can listen to the described version on headphones while everyone
+else hears the ordinary soundtrack, instead of the room choosing between the
+two. Any pair of tracks a file carries can be split this way.
+
 ## Why another video player
 
 Most video players decode exactly one audio track per playback session, and
@@ -47,6 +52,8 @@ from a single pipeline, staying in sync because it is all one clock.
 - Resumes videos with remembered playback time and language/track selections
 - Displays subtitles with support for both embedded and external files
 - Selects tracks automatically from your preferred languages
+- Splits any pair of tracks a file carries, including audio description
+  alongside the ordinary soundtrack
 - Integrates with Kodi and reports playback progress, including libraries from
   add-ons like Jellyfin and Plex
 - Launches straight into playback from command-line arguments, for custom
@@ -57,6 +64,10 @@ from a single pipeline, staying in sync because it is all one clock.
 - A display and two or more connected audio output devices. Any combination
   works: speakers and headphones, a USB headset, an external DAC, and so on.
 - A video file containing two or more audio tracks.
+
+> [!NOTE]
+> Bluetooth audio devices may add 100-200ms of latency and result in the audio
+> being slightly out of sync.
 
 ## Documentation
 
