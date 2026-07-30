@@ -1,5 +1,21 @@
 use gst::prelude::*;
 use gstreamer as gst;
+use gtk::glib;
+
+/// Assertion failures GStreamer's ALSA device provider prints while probing,
+/// which say nothing a user can act on.
+///
+/// A machine with an audio output ALSA cannot describe produces one of these
+/// per probe, on every launch. A Raspberry Pi does it by simply having a
+/// second HDMI port with no display attached: the provider probes the port,
+/// gets no caps back, and asserts. The device list is unaffected - the port
+/// has no audio output to offer in the first place.
+///
+/// The assertions are inside gst-plugins-base, so the only thing we control is
+/// whether they reach the terminal. Ignoring the provider entirely is not an
+/// option: on a system with no PulseAudio or PipeWire it is the one supplying
+/// every device we list.
+const ALSA_PROBE_NOISE: [&str; 2] = ["gst_alsa_device_new", "gst_caps_append"];
 
 /// List available audio *output* devices (cross-platform: PipeWire/Pulse
 /// sinks on Linux, WASAPI endpoints on Windows) via GStreamer's own
@@ -12,13 +28,24 @@ pub fn list_audio_output_devices() -> Result<Vec<gst::Device>, String> {
         .add_filter(Some("Audio/Sink"), Some(&caps))
         .ok_or("Failed to add device monitor filter")?;
 
-    monitor
-        .start()
-        .map_err(|e| format!("Failed to start device monitor: {e}"))?;
-    let devices = monitor.devices();
+    // Only around the probe itself, and only for those two messages, so
+    // anything else GStreamer has to say still comes through.
+    glib::log_set_default_handler(|domain, level, message| {
+        if ALSA_PROBE_NOISE.iter().any(|noise| message.contains(noise)) {
+            return;
+        }
+        glib::log_default_handler(domain, level, Some(message));
+    });
+
+    let started = monitor.start();
+    let devices = started.is_ok().then(|| monitor.devices());
     monitor.stop();
 
-    Ok(devices.into_iter().collect())
+    glib::log_unset_default_handler();
+
+    started.map_err(|e| format!("Failed to start device monitor: {e}"))?;
+
+    Ok(devices.unwrap_or_default().into_iter().collect())
 }
 
 /// Re-find a previously chosen device by its display name (what we persist
@@ -31,7 +58,7 @@ pub fn find_audio_output_device(name: &str) -> Result<gst::Device, String> {
         .ok_or_else(|| {
             format!(
                 "Audio output device \"{name}\" not found. It may have been unplugged, \
-                 renamed, or is otherwise unavailable — run --configure again."
+                 renamed, or is otherwise unavailable. Choose an output on the main screen."
             )
         })
 }

@@ -128,10 +128,7 @@ impl Config {
     pub fn load() -> Result<Config, String> {
         let path = config_path();
         if !path.exists() {
-            return Err(format!(
-                "No config found at {}.\nRun with --configure to set up your audio output devices.",
-                path.display()
-            ));
+            return Err(format!("No config found at {}.", path.display()));
         }
 
         let text = std::fs::read_to_string(&path)
