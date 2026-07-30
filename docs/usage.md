@@ -62,6 +62,8 @@ though everything is also mouse interactable.
 | <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
 | <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
 | <kbd>C</kbd> | X / Square | Show or hide subtitles, during playback |
+| <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser |
+| <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL |
 
 ## Subtitles
 

@@ -49,7 +49,15 @@ impl Source {
         match self {
             Self::File(path) => glib::filename_to_uri(path, None)
                 .map(|uri| uri.to_string())
-                .unwrap_or_else(|_| format!("file://{}", path.display())),
+                .unwrap_or_else(|e| {
+                    // Whatever comes out of here will not open: the fallback
+                    // is a plain concatenation, and on Windows that leaves
+                    // backslashes and a missing slash in a string GStreamer
+                    // reads as a host name. Said out loud rather than left to
+                    // surface as an unexplained "could not open".
+                    eprintln!("Could not form a URI for {}: {e}", path.display());
+                    format!("file://{}", path.display())
+                }),
             Self::Remote(uri) => uri.clone(),
         }
     }

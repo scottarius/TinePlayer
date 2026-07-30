@@ -80,6 +80,9 @@ enum Screen {
     Menu,
     Settings,
     Browser,
+    PasteUri,
+    VideoSource,
+    Opening,
     Chooser,
     Confirm,
     ConfirmQuit,
@@ -175,6 +178,10 @@ pub struct App {
     /// because it cannot change while we are the player. `None` when Kodi was
     /// not involved or did not answer, which is not an error.
     kodi_item: RefCell<Option<crate::kodi::Item>>,
+    /// The screen a modal was opened from, so backing out of one returns
+    /// there. Reached by shortcut as well as by row, so it cannot be assumed
+    /// to be the step that offers them.
+    origin: Cell<Screen>,
 }
 
 impl App {
@@ -255,6 +262,7 @@ impl App {
             external,
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
+            origin: Cell::new(Screen::Menu),
         });
 
         // Weak, so the polling closure doesn't keep the application alive
@@ -378,7 +386,7 @@ impl App {
     fn install_key_handling(self: &Rc<Self>) {
         let controller = gtk::EventControllerKey::new();
         let app = self.clone();
-        controller.connect_key_pressed(move |_, key, _, _| {
+        controller.connect_key_pressed(move |_, key, _, state| {
             let playing = app.playback.borrow().is_some();
             match key {
                 // Only claimed during playback - the menus need Space for
@@ -424,6 +432,33 @@ impl App {
                 // menu, and the choosers want the letter for type-ahead.
                 gdk::Key::c | gdk::Key::C if playing => {
                     app.toggle_subtitles();
+                    glib::Propagation::Stop
+                }
+                // The shortcut GTK's own file chooser and every web browser use
+                // to reach an address bar, worth having from the menu which is
+                // otherwise two steps away from the panel.
+                //
+                // Not from inside a modal, which already is one of the two
+                // ways of choosing a video, and never when something else
+                // chose the video: the menu's row for it is disabled then, and
+                // a shortcut past that would let a keypress replace what a
+                // launcher is waiting on.
+                gdk::Key::l | gdk::Key::L
+                    if state.contains(gdk::ModifierType::CONTROL_MASK)
+                        && !app.external
+                        && matches!(*app.screen.borrow(), Screen::Menu | Screen::VideoSource) =>
+                {
+                    app.show_paste_uri();
+                    glib::Propagation::Stop
+                }
+                // The other half of the pair, and the shortcut every desktop
+                // application uses for opening a file.
+                gdk::Key::o | gdk::Key::O
+                    if state.contains(gdk::ModifierType::CONTROL_MASK)
+                        && !app.external
+                        && matches!(*app.screen.borrow(), Screen::Menu | Screen::VideoSource) =>
+                {
+                    app.browse_for_file();
                     glib::Propagation::Stop
                 }
                 // Last, so it can't shadow the keys above: anything else
@@ -493,7 +528,9 @@ impl App {
             // Nothing to go back to when the video we were started for could
             // not be opened.
             Screen::Error if self.error_is_fatal.get() => self.window.close(),
-            Screen::Browser | Screen::Settings | Screen::Error | Screen::ConfirmQuit => {
+            Screen::Opening => self.show_paste_uri(),
+            Screen::PasteUri | Screen::Browser => self.return_to_origin(),
+            Screen::VideoSource | Screen::Settings | Screen::Error | Screen::ConfirmQuit => {
                 self.show_menu()
             }
             Screen::Menu => self.show_confirm_quit(),
@@ -855,7 +892,12 @@ impl App {
 
     // --- Menu ----------------------------------------------------------
 
-    fn show_menu(self: &Rc<Self>) {
+    /// Builds the main menu without installing it.
+    ///
+    /// Split out so the browser can raise the same page behind itself as a
+    /// backdrop, which is what makes it read as a window opening over the
+    /// menu rather than as another screen replacing it.
+    fn build_menu_page(self: &Rc<Self>) -> (gtk::Box, gtk::ListBox) {
         let (page, list, back, slot) = list_page("Playback Options", false);
         // The arrow's slot is empty on this screen, so the mark takes it
         // rather than leaving a gap beside the title.
@@ -1089,6 +1131,11 @@ impl App {
         }
 
         self.wire_navigation(&list, &[], &footer);
+        (page, list)
+    }
+
+    fn show_menu(self: &Rc<Self>) {
+        let (page, list) = self.build_menu_page();
 
         *self.screen.borrow_mut() = Screen::Menu;
         self.window.set_child(Some(&page));
@@ -1715,19 +1762,37 @@ impl App {
     /// otherwise the first track goes to the primary output and a different
     /// one to the secondary, which is the whole point of the application.
     fn set_file(self: &Rc<Self>, source: &Source) -> Result<(), String> {
-        let media = match crate::probe::probe_media(source) {
-            Ok(media) => media,
+        match crate::probe::probe_media(source) {
+            Ok(media) => self.apply_media(source, media),
             Err(e) => {
                 eprintln!("Couldn't read {}: {e}", source.uri());
-                *self.tracks.borrow_mut() = Vec::new();
-                *self.subtitle_options.borrow_mut() = Vec::new();
-                *self.primary_track.borrow_mut() = None;
-                *self.secondary_track.borrow_mut() = None;
-                *self.subtitle.borrow_mut() = None;
-                *self.file.borrow_mut() = None;
-                return Err(e);
+                self.forget_file();
+                Err(e)
             }
-        };
+        }
+    }
+
+    /// Drops everything that described the file that was loaded.
+    fn forget_file(&self) {
+        *self.tracks.borrow_mut() = Vec::new();
+        *self.subtitle_options.borrow_mut() = Vec::new();
+        *self.primary_track.borrow_mut() = None;
+        *self.secondary_track.borrow_mut() = None;
+        *self.subtitle.borrow_mut() = None;
+        *self.file.borrow_mut() = None;
+    }
+
+    /// Takes up a probed source: which tracks to start on, which subtitle,
+    /// and what to show in the menu.
+    ///
+    /// Separate from the probing so that a caller which probed on a thread,
+    /// rather than making the interface wait for it, has somewhere to hand
+    /// the result back on the main thread.
+    fn apply_media(
+        self: &Rc<Self>,
+        source: &Source,
+        media: crate::probe::Media,
+    ) -> Result<(), String> {
         // Kodi's one video player slot is necessarily this playback while it
         // waits for us, but a session started by hand with --kodi could attach
         // to a *different* external player's item. Lengths agreeing is a cheap
@@ -1886,37 +1951,361 @@ impl App {
     /// `select` names the folder just stepped out of, which is then the row
     /// focus lands on. Going up otherwise dumps you at the top of a long
     /// list with no sense of where you were.
+    /// Notes the screen a modal is about to cover.
+    ///
+    /// Only the screens that are not themselves modals, so that one modal
+    /// replacing another leaves the pair's origin alone. A modal recorded as
+    /// its own origin is a trap: backing out of it returns to itself, and
+    /// nothing closes it.
+    fn remember_origin(&self) {
+        let screen = *self.screen.borrow();
+        if matches!(screen, Screen::Menu | Screen::VideoSource) {
+            self.origin.set(screen);
+        }
+    }
+
+    /// Back to whatever the modal was opened over.
+    fn return_to_origin(self: &Rc<Self>) {
+        match self.origin.get() {
+            Screen::VideoSource => self.choose_video(),
+            _ => self.show_menu(),
+        }
+    }
+
+    /// Floats a page over the main menu, dimmed and unresponsive behind it.
+    ///
+    /// The menu is rebuilt rather than kept aside, because every screen here
+    /// replaces the window's child outright and there is no earlier page still
+    /// around to reuse. Building a second one is cheap next to what it buys:
+    /// the browser reads as something opened over the menu instead of as
+    /// another step deeper into it.
+    fn modal(self: &Rc<Self>, page: &gtk::Box) -> gtk::Overlay {
+        // Whatever is on screen right now, so the modal opens over the screen
+        // it was actually opened from rather than always over the main menu.
+        //
+        // One modal replacing another hands back the page *behind* it instead
+        // of the modal itself, or the dimming would stack up a layer deeper
+        // every time.
+        let existing = self.window.child();
+        let backdrop: gtk::Widget = match existing {
+            Some(child) => match child.downcast::<gtk::Overlay>() {
+                Ok(overlay) => {
+                    let under = overlay.child();
+                    overlay.set_child(None::<&gtk::Widget>);
+                    match under {
+                        Some(under) => under,
+                        None => self.build_menu_page().0.upcast(),
+                    }
+                }
+                Err(child) => {
+                    self.window.set_child(None::<&gtk::Widget>);
+                    child
+                }
+            },
+            None => self.build_menu_page().0.upcast(),
+        };
+        // Not just visually behind: an insensitive page cannot take focus, so
+        // neither tab nor the gamepad can reach what is underneath.
+        backdrop.set_sensitive(false);
+
+        let scrim = gtk::Box::builder().css_classes(["tp-scrim"]).build();
+
+        page.add_css_class("tp-modal");
+        if self.dark.get() {
+            page.add_css_class("tp-modal-dark");
+        }
+
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&backdrop));
+        overlay.add_overlay(&scrim);
+        overlay.add_overlay(page);
+        overlay
+    }
+
+    /// A panel for the one thing browsing folders cannot reach: an address.
+    ///
+    /// Its own screen rather than a field in the browser, because a text field
+    /// among the folders is a trap for a controller, which can neither type
+    /// into one nor easily get out of it. Behind a row, it is only ever
+    /// entered on purpose, and there is room to say what may be pasted.
+    fn show_paste_uri(self: &Rc<Self>) {
+        // Built by hand rather than from the list page every other screen
+        // uses: that one leads with a header and a list, and here both would
+        // be empty space above the only thing on the panel.
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(28)
+            .valign(gtk::Align::Center)
+            .margin_top(48)
+            .margin_bottom(48)
+            .margin_start(56)
+            .margin_end(56)
+            .build();
+
+        let heading = heading_label("Open a URL");
+        heading.set_halign(gtk::Align::Center);
+        page.append(&heading);
+
+        let blurb = gtk::Label::builder()
+            .label(
+                "Enter an address to a video file, such as a link from a media server, a local file path, or a network path.",
+            )
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .justify(gtk::Justification::Center)
+            .halign(gtk::Align::Center)
+            .css_classes(["tp-hint"])
+            .build();
+        page.append(&blurb);
+
+        let field = gtk::Entry::new();
+        field.add_css_class("tp-path");
+        field.set_placeholder_text(Some("http://…"));
+        gtk::prelude::EditableExt::set_alignment(&field, 0.5);
+        field.set_hexpand(true);
+        page.append(&field);
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.add_css_class("tp-cancel");
+        let open = gtk::Button::with_label("Open");
+        open.add_css_class("tp-button");
+        open.add_css_class("tp-play");
+        // Nothing to open until there is something in the field, and an empty
+        // one would only fail slowly against a source that does not exist.
+        open.set_sensitive(false);
+        {
+            let open = open.clone();
+            field.connect_changed(move |field| {
+                open.set_sensitive(!field.text().trim().is_empty());
+            });
+        }
+        buttons.append(&cancel);
+        buttons.append(&open);
+        page.append(&buttons);
+
+        {
+            let app = self.clone();
+            let field = field.clone();
+            open.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.open_typed_path(&field.text());
+            });
+        }
+        {
+            let app = self.clone();
+            field.connect_activate(move |field| {
+                if !field.text().trim().is_empty() {
+                    app.open_typed_path(&field.text());
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| app.go_back());
+        }
+
+        self.remember_origin();
+        *self.screen.borrow_mut() = Screen::PasteUri;
+        self.window.set_child(Some(&self.modal(&page)));
+        // Nothing here moves a selection, and the field wants the caret from
+        // the moment it opens: this screen exists to be typed into.
+        self.set_nav(None, &[], &[]);
+        field.grab_focus();
+
+        // Filled in for you when the clipboard already holds something this
+        // panel could open, and selected so typing replaces it. Better than a
+        // Paste button: a controller cannot reach one, and a button says
+        // nothing about whether pressing it would help.
+        {
+            let field = field.clone();
+            gtk::prelude::WidgetExt::display(&self.window)
+                .clipboard()
+                .read_text_async(gtk::gio::Cancellable::NONE, move |text| {
+                    let Ok(Some(text)) = text else { return };
+                    let text = text.trim();
+                    if looks_openable(text) {
+                        field.set_text(text);
+                        field.select_region(0, -1);
+                    }
+                });
+        }
+    }
+
+    /// Opens whatever was typed into the paste panel.
+    ///
+    /// A folder browses to it, so typing a path is another way to navigate.
+    /// Anything else is handed to [`Source`], which is what decides whether a
+    /// string is a file or a URL, so this cannot disagree with what the
+    /// command line accepts.
+    fn open_typed_path(self: &Rc<Self>, text: &str) {
+        let text = text.trim();
+        let as_path = std::path::Path::new(text);
+        if as_path.is_dir() {
+            self.show_browser(as_path, None);
+            return;
+        }
+
+        self.show_opening(Source::parse(text));
+    }
+
+    /// Waits for a source to answer, with something on screen that says so.
+    ///
+    /// Reading a remote source is not quick and can fail slowly: an address
+    /// nothing answers at takes the discoverer's full ten seconds. Doing that
+    /// on the main thread froze the whole window, which reads as a crash
+    /// rather than as waiting, so the probe runs on a thread of its own.
+    fn show_opening(self: &Rc<Self>, source: Source) {
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(28)
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::Center)
+            .margin_top(48)
+            .margin_bottom(48)
+            .margin_start(56)
+            .margin_end(56)
+            .build();
+
+        // A floor rather than a fixed size: with only a spinner and a short
+        // address on it, the panel would otherwise shrink to something much
+        // narrower than the one it replaces, and the swap would read as the
+        // window jumping about.
+        page.set_size_request((560.0 * self.scale.get()).round() as i32, -1);
+
+        let spinner = gtk::Spinner::new();
+        spinner.set_size_request(
+            (48.0 * self.scale.get()).round() as i32,
+            (48.0 * self.scale.get()).round() as i32,
+        );
+        spinner.start();
+        page.append(&spinner);
+        page.append(&heading_label("Opening"));
+
+        let what = gtk::Label::builder()
+            .label(source.label())
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .justify(gtk::Justification::Center)
+            .halign(gtk::Align::Center)
+            .css_classes(["tp-hint"])
+            .build();
+        page.append(&what);
+
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.add_css_class("tp-cancel");
+        cancel.set_halign(gtk::Align::Center);
+        page.append(&cancel);
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| app.show_paste_uri());
+        }
+
+        *self.screen.borrow_mut() = Screen::Opening;
+        self.window.set_child(Some(&self.modal(&page)));
+        self.set_nav(None, &[], &[]);
+        cancel.grab_focus();
+
+        // A plain channel polled from the main loop, rather than anything
+        // asynchronous: the probe returns once, and the result has to be
+        // applied on this thread because everything it touches is `Rc`.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let probing = source.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::probe::probe_media(&probing));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                // The thread is gone without an answer, which leaves nothing
+                // to report and no reason to keep looking.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            // Cancelled, or moved on some other way, while it was working.
+            if *app.screen.borrow() != Screen::Opening {
+                return glib::ControlFlow::Break;
+            }
+
+            match result.and_then(|media| app.apply_media(&source, media)) {
+                Ok(()) => app.show_menu(),
+                Err(e) => {
+                    eprintln!("Couldn't read {}: {e}", source.uri());
+                    app.forget_file();
+                    app.show_source_error(&source, &e, false);
+                }
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
     fn show_browser(
         self: &Rc<Self>,
         directory: &std::path::Path,
         select: Option<&std::path::Path>,
     ) {
+        // Guards against a relative folder reaching here from anywhere at
+        // all, including a `last_folder` saved before this was fixed.
+        let directory = &crate::browser::rooted(directory);
         let (crumbs, crumb_buttons) = self.breadcrumbs(directory);
 
-        // Switching to the system dialog belongs here, where a file is
-        // already being chosen, rather than on the main menu. Not focusable:
-        // it exists for a pointer, and the dialog it opens cannot be driven
-        // by a controller anyway, so offering it to one is a dead end.
-        let spacer = gtk::Box::builder().hexpand(true).build();
-        crumbs.append(&spacer);
-        let browse = gtk::Button::from_icon_name("document-open-symbolic");
-        browse.add_css_class("tp-browse");
+        let (page, list, _back, slot) = list_page_with(&crumbs, false);
+        // The arrow's slot holds a fixed width for every screen to line up
+        // against. With no arrow in it, that is just a gap before the trail.
+        slot.set_visible(false);
+
+        // Along the foot with the way out, rather than tucked into the header:
+        // both are things done with the browser rather than places inside it.
+        // Still not focusable, and last: it exists for a pointer, and the
+        // dialog it opens cannot be driven by a controller anyway.
+        let browse_face = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        // Larger than the lettering beside it: at this size the icon is what
+        // the eye finds first, and the words only confirm it.
+        let browse_icon = gtk::Image::from_icon_name("folder-symbolic");
+        browse_icon.set_pixel_size((24.0 * self.scale.get()).round() as i32);
+        browse_face.append(&browse_icon);
+        browse_face.append(&gtk::Label::new(Some("Open System Browser")));
+        let browse = gtk::Button::builder().child(&browse_face).build();
+        browse.add_css_class("tp-button");
+        browse.add_css_class("tp-secondary");
         browse.set_can_focus(false);
-        browse.set_valign(gtk::Align::Center);
-        browse.set_tooltip_text(Some("Browse with the system dialog"));
-        crumbs.append(&browse);
+        browse.set_valign(gtk::Align::Start);
         {
             let app = self.clone();
             browse.connect_clicked(move |_| app.open_file_chooser());
         }
-        let (page, list, back, _header) = list_page_with(&crumbs, true);
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.add_css_class("tp-cancel");
+        // A center box rather than a row: the way out belongs in the middle
+        // wherever the other button happens to end up, and a plain row would
+        // center the pair together instead.
+        let footer = gtk::CenterBox::new();
+        footer.set_start_widget(Some(&browse));
+        footer.set_center_widget(Some(&cancel));
+        page.append(&footer);
 
         // Entries, the icon that leads them, and the path they open. `None`
         // steps up a level.
         let mut rows: Vec<(String, &str, Option<std::path::PathBuf>)> = Vec::new();
         let parent = directory.parent().map(|p| p.to_path_buf());
         if parent.is_some() || !crate::browser::roots().is_empty() {
-            rows.push(("Up".to_string(), "go-up-symbolic", None));
+            // Two dots rather than the word: it is what a file listing has
+            // always called the folder above, and it needs no translating.
+            rows.push(("..".to_string(), "folder-symbolic", None));
         }
         for entry in crate::browser::read(directory) {
             // A play mark rather than a generic video one: that icon is not
@@ -1970,7 +2359,7 @@ impl App {
         }
         {
             let app = self.clone();
-            back.connect_clicked(move |_| app.show_menu());
+            cancel.connect_clicked(move |_| app.go_back());
         }
 
         {
@@ -1979,20 +2368,21 @@ impl App {
             let _ = config.save();
         }
 
-        // The arrow first, then the trail: left from the current folder
-        // walks back up and finally reaches the way out.
-        let mut header = vec![back.clone()];
-        header.extend(crumb_buttons);
-        self.wire_navigation(&list, &header, &[]);
+        // The trail alone now that the arrow has gone: left from the current
+        // folder simply walks back up it.
+        self.wire_navigation(&list, &crumb_buttons, std::slice::from_ref(&cancel));
+        self.remember_origin();
         *self.screen.borrow_mut() = Screen::Browser;
-        self.window.set_child(Some(&page));
+        self.window.set_child(Some(&self.modal(&page)));
 
         let opening = select
             .and_then(|wanted| {
                 rows.iter()
                     .position(|(_, _, path)| path.as_deref() == Some(wanted))
             })
-            // Otherwise the first real entry rather than the Up row.
+            // Otherwise the first real entry, skipping the rows that only
+            // lead somewhere else: paste, up, and the empty-folder notice.
+            .or_else(|| rows.iter().position(|(_, _, path)| path.is_some()))
             .unwrap_or(if rows.len() > 1 { 1 } else { 0 }) as i32;
         if let Some(row) = list.row_at_index(opening) {
             list.select_row(Some(&row));
@@ -2015,14 +2405,21 @@ impl App {
             match component {
                 Component::Prefix(prefix) => {
                     walked.push(prefix.as_os_str());
+                    // Rooted right here, because `H:` on its own does not mean
+                    // the top of that drive: it means wherever that drive was
+                    // last left, which is a relative path. Browsing to one
+                    // works, since reading it still finds the right folder,
+                    // but every entry under it is relative too and no URI can
+                    // be made from those.
+                    walked.push(std::path::MAIN_SEPARATOR_STR);
                     levels.push((
                         prefix.as_os_str().to_string_lossy().to_string(),
                         walked.clone(),
                     ));
                 }
                 Component::RootDir => {
-                    walked.push(std::path::MAIN_SEPARATOR_STR);
                     if levels.is_empty() {
+                        walked.push(std::path::MAIN_SEPARATOR_STR);
                         levels.push(("/".to_string(), walked.clone()));
                     }
                 }
@@ -2121,7 +2518,55 @@ impl App {
     /// Guessing from the last input was unpredictable: the same button opened
     /// different things depending on what you had touched. The system dialog
     /// is still reachable, from a pointer-only button in the footer.
+    /// Where a video comes from: a folder on this machine, or an address.
+    ///
+    /// A step of its own rather than opening the browser straight away,
+    /// because the two are not the same kind of thing. Walking folders finds
+    /// what is here; an address reaches what is not, and no amount of
+    /// browsing would ever lead to it.
     fn choose_video(self: &Rc<Self>) {
+        let (page, list, back, _header) = list_page("Choose a Video", true);
+
+        for (label, value) in [
+            (
+                "Browse for a File",
+                "On this machine or a shared network drive",
+            ),
+            (
+                "Enter a URL",
+                "A link to a video, such as one from a media server",
+            ),
+        ] {
+            list.append(&menu_row(label, value, true));
+        }
+
+        {
+            let app = self.clone();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                match row.index() {
+                    0 => app.browse_for_file(),
+                    1 => app.show_paste_uri(),
+                    _ => {}
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| app.show_menu());
+        }
+
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        *self.screen.borrow_mut() = Screen::VideoSource;
+        self.window.set_child(Some(&page));
+        if let Some(row) = list.row_at_index(0) {
+            list.select_row(Some(&row));
+            row.grab_focus();
+        }
+    }
+
+    /// Opens the file browser where browsing last stopped.
+    fn browse_for_file(self: &Rc<Self>) {
         let (remembered, last_video) = {
             let config = self.config.borrow();
             (config.last_folder.clone(), config.last_video.clone())
@@ -2532,6 +2977,7 @@ impl App {
         cancel.add_css_class("tp-button");
         let quit = gtk::Button::with_label("Close");
         quit.add_css_class("tp-button");
+        quit.add_css_class("tp-cancel");
         buttons.append(&cancel);
         buttons.append(&quit);
         page.append(&buttons);
@@ -2579,6 +3025,12 @@ impl App {
         label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         label.set_justify(gtk::Justification::Center);
         label.set_hexpand(true);
+        // So a path or a URL that went wrong can be copied out and pasted
+        // somewhere useful, which is most of what anyone wants from an error.
+        // Not focusable: the selection is for a pointer, and leaving it in the
+        // focus order would put a stop between the message and the way out.
+        label.set_selectable(true);
+        label.set_can_focus(false);
         page.append(&label);
 
         // Only an unopenable video named on the command line ends the session:
@@ -2705,6 +3157,19 @@ fn logo_image(scale: f64) -> gtk::Image {
 
 /// Uppercased here rather than with the `text-transform` CSS property,
 /// which needs a newer GTK than this project's baseline.
+/// Whether a scrap of clipboard text is worth offering as something to open.
+///
+/// Deliberately shallow: it is looking for a mistake worth not making, not
+/// deciding whether the thing exists. A sentence someone happened to copy is
+/// rejected, an address or a path is offered, and being wrong costs a
+/// selected field the next keystroke replaces.
+fn looks_openable(text: &str) -> bool {
+    if text.is_empty() || text.lines().count() > 1 {
+        return false;
+    }
+    text.contains("://") || text.starts_with("\\\\") || std::path::Path::new(text).is_absolute()
+}
+
 fn heading_label(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(&text.to_uppercase()));
     label.add_css_class("tp-title");
@@ -2916,6 +3381,19 @@ fn style_css(scale: f64) -> String {
         .tp-hint {{ font-size: {hint}px; opacity: 0.7; }}
         .tp-button, .tp-play {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
         .tp-play {{ font-weight: bold; }}
+        /* Backing out, on every screen that offers it. A literal red for the
+           same reason the highlight is literal: a theme name that does not
+           exist makes the whole declaration fail to parse. */
+        .tp-cancel {{
+            background-image: none;
+            background-color: #c01c28;
+            color: #ffffff;
+        }}
+        .tp-cancel:hover {{ background-color: #a51d2d; }}
+        /* Beside a main action rather than being one: smaller type and far
+           less padding than the buttons it sits with, so it reads as a way to
+           reach something else rather than as the thing to press. */
+        .tp-secondary {{ font-size: {small}px; padding: {tight_v}px {tight_h}px; }}
         .tp-menu > row {{ border-radius: {radius}px; }}
         /* Gray rather than a theme color, so it lifts off the background in
            both light and dark without needing two rules. */
@@ -3005,6 +3483,27 @@ fn style_css(scale: f64) -> String {
            button reports the state as well as offering to change it. Opacity
            rather than color: the mark is an image, which a color cannot
            tint. */
+        /* Darkens the menu the browser opens over, so the panel reads as
+           being in front of it rather than beside it. */
+        .tp-scrim {{ background-color: rgba(0, 0, 0, 0.55); }}
+        /* Inset from the window edges, so the dimmed menu shows around all
+           four sides and the panel looks like a window over it. Literal
+           colors rather than theme names, for the reason given by the
+           highlight color below. */
+        .tp-modal {{
+            background-color: #fafafa;
+            border: 1px solid rgba(0, 0, 0, 0.2);
+            border-radius: {radius}px;
+            margin: {modal}px;
+            padding: {modal_pad}px;
+        }}
+        .tp-modal-dark {{
+            background-color: #1e1e1e;
+            border-color: rgba(255, 255, 255, 0.14);
+        }}
+        /* Taller than a stock entry: this is the one thing on its panel, and
+           it is read from the same distance as everything else. */
+        .tp-path {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
         .tp-subtitles-button {{ opacity: 0.45; }}
         .tp-subtitles-on {{ opacity: 1; }}
         .tp-subtitles-button:disabled {{ opacity: 0.2; }}
@@ -3050,6 +3549,9 @@ fn style_css(scale: f64) -> String {
         tracking = px(2.0).max(1),
         row = px(26.0),
         hint = px(20.0),
+        small = px(17.0),
+        tight_v = px(7.0),
+        tight_h = px(10.0),
         pad_v = px(16.0),
         pad_h = px(24.0),
         radius = px(8.0),
@@ -3066,6 +3568,8 @@ fn style_css(scale: f64) -> String {
         // highlighted row unreadable. Both foreground and background are
         // set for the same reason: overriding only the background left the
         // theme's white selection text on a pale color.
+        modal = px(48.0),
+        modal_pad = px(16.0),
         highlight = "#3584e4",
         video = crate::player::VIDEO_CSS_CLASS,
     )

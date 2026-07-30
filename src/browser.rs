@@ -108,3 +108,59 @@ pub fn start_location(remembered: Option<&Path>, last_video: Option<&Path>) -> P
         .or_else(|| glib::home_dir().into())
         .unwrap_or_else(|| PathBuf::from("/"))
 }
+
+/// Puts a separator back after a bare drive letter.
+///
+/// `H:` and `H:\` look alike and are not: the first is relative to whatever
+/// directory that drive was last left in, so paths built from it cannot be
+/// turned into URIs. Anything already rooted, and every path on Unix, is
+/// returned untouched.
+pub fn rooted(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut components = path.components();
+    let is_bare_drive = matches!(components.next(), Some(Component::Prefix(_)))
+        && !matches!(components.next(), Some(Component::RootDir));
+    if !is_bare_drive {
+        return path.to_path_buf();
+    }
+
+    let mut rooted = PathBuf::new();
+    for (index, component) in path.components().enumerate() {
+        rooted.push(component.as_os_str());
+        if index == 0 {
+            rooted.push(std::path::MAIN_SEPARATOR_STR);
+        }
+    }
+    rooted
+}
+
+#[cfg(test)]
+mod rooted_tests {
+    use super::*;
+
+    #[test]
+    fn leaves_rooted_paths_alone() {
+        for path in ["/home/scott/Videos", "/"] {
+            assert_eq!(rooted(Path::new(path)), PathBuf::from(path));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn roots_a_bare_drive() {
+        assert_eq!(rooted(Path::new("H:")), PathBuf::from(r"H:\"));
+        assert_eq!(
+            rooted(Path::new(r"H:Videos\Movies")),
+            PathBuf::from(r"H:\Videos\Movies")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn leaves_windows_roots_alone() {
+        for path in [r"H:\", r"H:\Videos", r"\\server\share\Videos"] {
+            assert_eq!(rooted(Path::new(path)), PathBuf::from(path));
+        }
+    }
+}
