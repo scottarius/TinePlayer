@@ -88,13 +88,14 @@ enum Screen {
 }
 
 /// Choices given on the command line, which skip the menu entirely.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Preset {
     /// Numbered as `--list-tracks` prints them, so 1 is the first track and
     /// 0 means none.
     pub primary: Option<u32>,
     pub secondary: Option<u32>,
-    pub subtitle: Option<u32>,
+    /// A number, a language code, or a subtitle file name beside the video.
+    pub subtitle: Option<String>,
 }
 
 /// Everything the menu can act on. Devices persist to the config file;
@@ -317,12 +318,33 @@ impl App {
 
                 // Only touched when asked for, so a video's remembered
                 // subtitle survives being launched with audio flags alone.
-                if let Some(choice) = preset.subtitle {
-                    let options = app.subtitle_options.borrow();
-                    *app.subtitle.borrow_mut() = (choice > 0)
-                        .then(|| options.get((choice - 1) as usize))
-                        .flatten()
-                        .map(|option| option.choice());
+                if let Some(spec) = preset.subtitle.as_deref() {
+                    // The languages actually going to the outputs, so a mode
+                    // like "primary_forced" means the same on the command line
+                    // as it does in the settings.
+                    let language_of = |index: Option<u32>| {
+                        index.and_then(|index| {
+                            app.tracks
+                                .borrow()
+                                .iter()
+                                .find(|track| track.index == index)
+                                .map(|track| track.language.clone())
+                        })
+                    };
+                    let primary = language_of(*app.primary_track.borrow());
+                    let secondary = language_of(*app.secondary_track.borrow());
+                    match crate::subtitles::resolve(
+                        spec,
+                        &app.subtitle_options.borrow(),
+                        primary.as_deref(),
+                        secondary.as_deref(),
+                    ) {
+                        Ok(choice) => *app.subtitle.borrow_mut() = choice,
+                        // Reported rather than obeyed silently: playing with
+                        // the wrong subtitles, or none, is not what was asked
+                        // for either way.
+                        Err(e) => eprintln!("{e}"),
+                    }
                 }
                 app.start_playback(app.restart);
             }
@@ -1042,7 +1064,7 @@ impl App {
             Setting::InterfaceScale => "Interface Size",
             Setting::PrimaryLanguage => "Primary Language Preference",
             Setting::SecondaryLanguage => "Secondary Language Preference",
-            Setting::SubtitleLanguage => "Subtitle Language",
+            Setting::SubtitleLanguage => "Subtitle Preference",
             Setting::SubtitleSize => "Subtitle Size",
             Setting::SubtitleFont => "Subtitle Font",
         };
@@ -1152,10 +1174,30 @@ impl App {
                 }
             }
             Setting::SubtitleLanguage => {
-                current = language_position(self.config.borrow().subtitle_language.as_deref());
-                entries.push(("None".to_string(), None));
+                // The automatic choices first, then the languages, in one
+                // list: they answer the same question, and following an
+                // output is the answer most people want.
+                let modes = crate::subtitles::MODES.len();
+                let setting = self
+                    .config
+                    .borrow()
+                    .subtitle_language
+                    .clone()
+                    .unwrap_or_else(|| crate::subtitles::DEFAULT_MODE.to_string());
+                current = crate::subtitles::MODES
+                    .iter()
+                    .position(|(value, _)| *value == setting)
+                    .or_else(|| {
+                        crate::languages::LANGUAGES
+                            .iter()
+                            .position(|(code, _, _)| *code == setting)
+                            .map(|position| modes + position)
+                    });
+                for (position, (_, label)) in crate::subtitles::MODES.iter().enumerate() {
+                    entries.push((label.to_string(), Some(position)));
+                }
                 for (position, (_, name, _)) in crate::languages::LANGUAGES.iter().enumerate() {
-                    entries.push((name.to_string(), Some(position)));
+                    entries.push((name.to_string(), Some(modes + position)));
                 }
             }
             Setting::SubtitleSize => {
@@ -1471,16 +1513,26 @@ impl App {
                 });
                 self.restyle(scale);
             }
-            Setting::PrimaryLanguage | Setting::SecondaryLanguage | Setting::SubtitleLanguage => {
+            Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let picked = choice
                     .and_then(|index| crate::languages::LANGUAGES.get(index))
                     .map(|(code, _, _)| code.to_string());
                 let mut config = self.config.borrow_mut();
-                match setting {
-                    Setting::PrimaryLanguage => config.primary_language = picked,
-                    Setting::SecondaryLanguage => config.secondary_language = picked,
-                    _ => config.subtitle_language = picked,
+                if setting == Setting::PrimaryLanguage {
+                    config.primary_language = picked;
+                } else {
+                    config.secondary_language = picked;
                 }
+                let _ = config.save();
+            }
+            Setting::SubtitleLanguage => {
+                let modes = crate::subtitles::MODES.len();
+                let picked = choice.map(|index| match index.checked_sub(modes) {
+                    Some(language) => crate::languages::LANGUAGES[language].0.to_string(),
+                    None => crate::subtitles::MODES[index].0.to_string(),
+                });
+                let mut config = self.config.borrow_mut();
+                config.subtitle_language = picked;
                 let _ = config.save();
             }
             Setting::SubtitleSize => {
@@ -1697,12 +1749,29 @@ impl App {
         // none rather than failing when play is pressed.
         let subtitle = match saved {
             Some(choice) => choice.subtitle,
-            None => subtitle_language.as_deref().and_then(|code| {
-                options
-                    .iter()
-                    .find(|option| crate::languages::matches(option.label(), code))
-                    .map(|option| option.choice())
-            }),
+            // Follows whichever audio is actually going to each output, not
+            // the language preference: the preference may have found nothing,
+            // and what is being heard is what subtitles have to match.
+            None => {
+                let language_of = |index: Option<u32>| {
+                    index.and_then(|index| {
+                        tracks
+                            .iter()
+                            .find(|track| track.index == index)
+                            .map(|track| track.language.as_str())
+                    })
+                };
+                crate::subtitles::automatic(
+                    &crate::subtitles::Auto::parse(
+                        subtitle_language
+                            .as_deref()
+                            .unwrap_or(crate::subtitles::DEFAULT_MODE),
+                    ),
+                    &options,
+                    language_of(known(primary)),
+                    language_of(known(secondary)),
+                )
+            }
         };
         *self.subtitle.borrow_mut() =
             subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
@@ -2070,8 +2139,8 @@ impl App {
                     true,
                 ),
                 (
-                    "Subtitle Language".to_string(),
-                    language(&config.subtitle_language, "None"),
+                    "Subtitle Preference".to_string(),
+                    crate::subtitles::describe(config.subtitle_language.as_deref()),
                     true,
                 ),
                 (

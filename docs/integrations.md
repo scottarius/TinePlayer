@@ -21,7 +21,7 @@ There are two ways to set it up depending on your preference:
 >
 > * On Kodi 21 and later, **Play using...** appears throughout.
 > * On Kodi 20 and earlier, it only appears under **Videos → Files**, not in
-> the libraries.
+>   the libraries.
 
 ### Automated Installation
 
@@ -74,7 +74,7 @@ Requirements for an Add-On to work with TinePlayer:
 * **It must provide the raw video file**, without conversion or transcoding,
   for direct play.
 * **It must provide an accessible path to the file.** Either as a local path, a
-  path on an accessible network share (SMB), or a direct link.
+  path on an accessible network share (SMB), or a direct link over HTTP.
 
 Tested Add-Ons:
 
@@ -88,9 +88,9 @@ your films and TV and streams them to clients over the network.
 
 ### Native
 
-Not yet supported, being investigated for a future release.
+Not yet supported, but being investigated for a future release.
 
-### Via Kodi Add-On
+### Integrate via Kodi Add-On
 
 Follow the steps above to set up Kodi handoff to TinePlayer and then install
 [Jellyfin for Kodi](https://jellyfin.org/docs/general/clients/kodi/).
@@ -104,33 +104,27 @@ During setup, choose an appropriate Playback Mode:
 ## Plex
 
 [Plex](https://www.plex.tv) is a media server with free and paid versions that
-catalogs your films and TV and streams them to clients over the network.
+catalogs your films and TV and streams them to clients over the network. Plex
+clients do not currently provide support for external player handoff, but can
+work via Kodi.
 
-### Native
-
-Not planned. Plex clients do not currently provide support for external player
-handoff.
-
-### Via Kodi Add-On
+### Integrate via Kodi Add-On
 
 Install [PlexKodiConnect](https://github.com/croneter/PlexKodiConnect/wiki) by
 its own instructions, then set up Kodi handoff as above.
 
 > [!IMPORTANT]
 > Kodi external player handoff only works with PKC when **Playback Mode** is
-> set to **Direct Paths**.
->
-> This means that media served from Plex can only be handed off to TinePlayer
-> if it's accessible locally, not over the internet.
+> set to **Direct Paths**. This means that media served from Plex can only be
+> handed off to TinePlayer if it's accessible locally, not over the internet.
 
 Direct Paths hands over the "local" path that the Plex server uses. This path
-will work as-is if Kodi is running on the same machine as the Plex server.
-
-Otherwise, the paths need to be mapped to a network path that's accessible from
-where Kodi is running in the PKC Add-On settings under **Customize Paths**:
+will work as-is if Kodi is running on the same machine as the Plex server. If
+not, the paths need to be mapped to a network path that's accessible from where
+Kodi is running in the PKC Add-On settings under **Customize Paths**:
 
 * Enable *Replace Plex paths with custom SMB paths*
-* Set the original path to what Plex sees, e.g. `/mnt/media/Movies`
+* Set the original path to what Plex uses, e.g. `/mnt/media/Movies`
 * Set the replacement to a path this machine can reach, e.g.
   `smb://server/media/Movies` or a mounted path such as `/mnt/nas/Movies`
 
@@ -138,9 +132,11 @@ On Windows, Kodi further replaces SMB paths with UNC paths automatically, so
 `smb://server/media/Movies` will become `\\server\media\Movies` when it's
 handed off to TinePlayer.
 
-How you make the media reachable is up to you - a mapped drive, a mounted
-share, whatever your system already uses. TinePlayer opens it like any other
-file.
+> [!NOTE]
+> How you make the media reachable is up to you - a mapped drive, a mounted
+> share, whatever your system already uses. TinePlayer opens it like any other
+> file.
 
-You must resync or repair the Kodi database for path replacements to take
-effect.
+> [!IMPORTANT]
+> You must resync or repair the Kodi database for path replacements to take
+> effect.

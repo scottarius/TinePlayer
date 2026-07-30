@@ -5,20 +5,20 @@ edited directly. It lives in the per-user config directory:
 * Linux: `~/.config/tineplayer/config.yaml`
 * Windows: `%LOCALAPPDATA%\tineplayer\config.yaml`
 
-| Setting                       | Key                  | Default     | Meaning                                                        |
-|-------------------------------|----------------------|-------------|----------------------------------------------------------------|
-| Theme                         | `theme`              | `auto`      | `auto`, `light` or `dark`                                      |
-| Interface Size                | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution |
-| Navigation Sounds             | `sounds`             | `true`      | Navigation clicks, `true` or `false`                           |
-| Primary Audio Device          | `primary_sink`       | Unset       | Primary output device name. Required                           |
-| Primary Language Preference   | `primary_language`   | Unset       | Preferred primary language, [see list below](#languages) <br/>If unset defaults to the first track |
-| Secondary Audio Device        | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only |
-| Secondary Language Preference | `secondary_language` | Unset       | Preferred secondary language, [see list below](#languages) <br/>If unset defaults to the second track |
-| Subtitle Language             | `subtitle_language`  | Unset       | Preferred subtitle language, [see list below](#languages) <br/>If unset shows no subtitles |
-| Subtitle Size                 | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's    |
-| Subtitle Font                 | `subtitle_font`      | `Sans Bold` | Font Family and style name, [see below](#subtitle-fonts)       |
-| Resume Threshold              | `resume_min_percent` | `5`         | How far in before stopping counts as somewhere to resume from, as a percentage of the running time <br/>Never less than 10 seconds |
-| Watched Threshold             | `watched_percent`    | `90`        | Past this percentage a video counts as watched, and its position is forgotten rather than saved |
+| Setting                                                  | Key                  | Default     | Meaning                                                                                                                                        |
+|----------------------------------------------------------|----------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| Theme                                                    | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                                                                      |
+| Interface Size                                           | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution                                                    |
+| Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
+| Primary Audio Device                                     | `primary_sink`       | Unset       | Primary output device name. Required                                                                                                           |
+| Primary Language Preference                              | `primary_language`   | Unset       | Preferred primary [language code](#languages) <br/>If unset defaults to the first track                                                        |
+| Secondary Audio Device                                   | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
+| Secondary Language Preference                            | `secondary_language` | Unset       | Preferred secondary [language code](#languages) <br/>If unset defaults to the second track                                                     |
+| [Subtitle Preference](#choosing-subtitles-automatically) | `subtitle_language`  | `primary_forced` | How a subtitle is chosen automatically: `none`, `primary_forced`, `primary`, `secondary_forced`, `secondary`, or a [language code](#languages) |
+| Subtitle Size                                            | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's                                                                                    |
+| [Subtitle Font](#subtitle-fonts)                         | `subtitle_font`      | `Sans Bold` | Font Family and style name                                                                                                                     |
+| Resume Threshold                                         | `resume_min_percent` | `5`         | How far in before stopping counts as somewhere to resume from, as a percentage of the running time <br/>Never less than 10 seconds             |
+| Watched Threshold                                        | `watched_percent`    | `90`        | Past this percentage a video counts as watched, and its position is forgotten rather than saved                                                |
 
 ## Example
 
@@ -59,10 +59,39 @@ TinePlayer writes a few keys of its own to the same file - `last_video`,
 `last_folder` and `fullscreen` - so it reopens where you left it. There is no
 need to set those by hand.
 
+## Choosing subtitles automatically
+
+`subtitle_language` decides what to show for a video you have not picked
+subtitles for yourself. A choice you make for a video is remembered and always
+wins over this.
+
+| Value                       | Chooses                                                         |
+|-----------------------------|-----------------------------------------------------------------|
+| `none`                      | nothing                                                         |
+| `primary_forced`            | forced only, preferring the primary output's language (default) |
+| `primary`                   | full subtitles in the primary output's language                 |
+| `secondary_forced`          | forced only, preferring the secondary output's language         |
+| `secondary`                 | full subtitles in the secondary output's language               |
+| [language code](#languages) | full subtitiles in a specific language                          |
+
+The language followed is the one actually playing on that output, not the
+Primary or Secondary Language Preference, so it stays right even when a
+preference matched nothing and the first track was used instead.
+
+Forced subtitles carry only what a viewer who understands the dialogue still
+needs: alien speech, foreign lines, signs. The forced modes prefer one output
+language but will fall back to the other, then to none.
+
+> [!NOTE]
+> Forced tracks are recognized by name, since the flag containers have for this
+> is usually not set and GStreamer does not expose it. A track titled `Forced`,
+> or a file named `Film.en.forced.srt`, is recognized; one that is forced in
+> fact but named something else is not.
+
 ## Subtitle fonts
 
-`subtitle_font` is a font family followed by optional style words. It carries no
-size; that is `subtitle_size`.
+`subtitle_font` is a font family followed by optional style words. It carries
+no size; that is `subtitle_size`.
 
 The generic families resolve on any system, whatever is actually installed:
 
@@ -143,7 +172,7 @@ Entries are keyed by the video's full path:
     "tracks": {
       "primary": 0,
       "secondary": 1,
-      "subtitle": { "Embedded": 2 }
+      "subtitle": { "External": "Example (2019).en.srt" }
     }
   }
 }
@@ -154,7 +183,7 @@ Entries are keyed by the video's full path:
 | `position_ns`          | Where playback stopped, in nanoseconds                                                                                     |
 | `tracks`               | The choices made for this video, or `null` if none have ever been made                                                     |
 | `primary`, `secondary` | Audio track for each output, counted from `0` <br/>`null` for no audio on that output                                      |
-| `subtitle`             | `{"Embedded": N}` for a track inside the video, `{"External": "path"}` for a subtitle file beside it, `null` for no subtitles |
+| `subtitle`             | `{"Embedded": N}` for a track inside the video, `{"External": "name"}` for a subtitle file beside it, `null` for no subtitles <br/>The file is stored by name, not path, so the choice survives the library moving |
 
 Track choices are kept per video rather than globally, because they are a
 property of the file rather than of the machine: returning to a film you were

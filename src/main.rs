@@ -57,10 +57,10 @@ struct Args {
     #[arg(long, value_name = "N")]
     secondary: Option<u32>,
 
-    /// Subtitles to show, numbered as `--list-tracks` shows them. 0 means
-    /// none.
-    #[arg(long, value_name = "N")]
-    subtitle: Option<u32>,
+    /// Subtitles to show: a number as `--list-tracks` shows them, a language
+    /// code, or the name of a subtitle file beside the video. 0 means none
+    #[arg(long, value_name = "SUBTITLE")]
+    subtitle: Option<String>,
 
     /// Print the file's audio tracks and subtitles with their numbers, then
     /// exit
@@ -250,7 +250,7 @@ fn main() -> std::process::ExitCode {
         .then_some(app::Preset {
             primary: args.primary,
             secondary: args.secondary,
-            subtitle: args.subtitle,
+            subtitle: args.subtitle.clone(),
         });
 
     let gtk_app = gtk::Application::builder()
@@ -282,7 +282,7 @@ fn main() -> std::process::ExitCode {
                 gtk_app,
                 config.clone(),
                 file.clone(),
-                preset,
+                preset.clone(),
                 restart,
                 fullscreen,
                 kodi,

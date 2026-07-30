@@ -59,8 +59,20 @@ primary_language: en
 # Falls back to the second audio track when unset.
 secondary_language: ru
 
-# Unset means no subtitles unless you pick them for a video.
-subtitle_language: ru
+# How a subtitle is chosen for a video you have not picked one for. Either one
+# of the automatic modes, or a language code to always prefer that language:
+#
+#   none              nothing
+#   primary_forced    forced subtitles, preferring the primary output's language
+#   primary           full subtitles in the primary output's language
+#   secondary_forced  forced subtitles, preferring the secondary output's language
+#   secondary         full subtitles in the secondary output's language
+#
+# The forced modes fall back to the other output's language; the full modes
+# do not.
+#
+# Defaults to primary_forced. A choice made for a video always wins over this.
+subtitle_language: primary_forced
 
 
 # --- Subtitles --------------------------------------------------------------

@@ -19,10 +19,10 @@ audio device, so people who speak different languages can watch it together.
 The room hears one language through the speakers; whoever is on headphones
 hears the other. Any two connected audio devices will do.
 
-That matters because there is something particular about hearing a film in
-your own language. The performances land, the jokes time correctly, and you
-follow the story without having to work at it. TinePlayer lets everyone
-watching have that experience together on the same screen.
+That matters because there is something particular about hearing a film in your
+own language. The performances land, the jokes time correctly, and you follow
+the story without having to work at it. TinePlayer lets everyone watching have
+that experience together on the same screen.
 
 ## Why another video player
 
@@ -32,21 +32,25 @@ the same time.
 
 ## How it works
 
-TinePlayer is built on [GStreamer](https://gstreamer.freedesktop.org/). A
-video file's audio tracks are already separate streams inside the container, so
-the file is demuxed once and each chosen track is piped to its own output
-device from a single pipeline, staying in sync because it is all one clock.
+TinePlayer is built on [GStreamer](https://gstreamer.freedesktop.org/). A video
+file's audio tracks are already separate streams inside the container, so the
+file is demuxed once and each chosen track is piped to its own output device
+from a single pipeline, staying in sync because it is all one clock.
 
 ## Features
 
-- Plays a video and two simultaneous audio tracks to separate output devices in sync
+- Plays a video and two simultaneous audio tracks to separate output devices in
+  sync
 - Targets HTPC and TV use, with a large interface and full gamepad support
-- Works with standard video containers: MKV, MP4, MPEG-TS (anything GStreamer supports)
+- Works with standard video containers: MKV, MP4, MPEG-TS (anything GStreamer
+  supports)
 - Resumes videos with remembered playback time and language/track selections
 - Displays subtitles with support for both embedded and external files
 - Selects tracks automatically from your preferred languages
-- Integrates with Kodi and reports playback progress, including libraries from add-ons like Jellyfin and Plex
-- Launches straight into playback from command-line arguments, for custom integrations
+- Integrates with Kodi and reports playback progress, including libraries from
+  add-ons like Jellyfin and Plex
+- Launches straight into playback from command-line arguments, for custom
+  integrations
 
 ## Requirements
 
@@ -56,10 +60,14 @@ device from a single pipeline, staying in sync because it is all one clock.
 
 ## Documentation
 
-- **[Building from source](docs/building.md)** - setup scripts and dependencies for each platform
-- **[Using TinePlayer](docs/usage.md)** - controls, keyboard and gamepad, command-line options
-- **[Configuration](docs/configuration.md)** - `config.yaml`, language preferences, saved playback resume data
-- **[Integrations](docs/integrations.md)** - integrating with other media players and libraries
+- **[Building from source](docs/building.md)** - setup scripts and dependencies
+  for each platform
+- **[Using TinePlayer](docs/usage.md)** - controls, keyboard and gamepad,
+  command-line options
+- **[Configuration](docs/configuration.md)** - `config.yaml`, language
+  preferences, saved playback resume data
+- **[Integrations](docs/integrations.md)** - integrating with other media
+  players and libraries
 
 ## Quick start
 
@@ -69,8 +77,8 @@ cargo build --release
 ./target/release/TinePlayer
 ```
 
-See [Building from source](docs/building.md) for what those scripts install, and
-for the Windows caveat about installing GTK separately.
+See [Building from source](docs/building.md) for what those scripts install,
+and for the Windows caveat about installing GTK separately.
 
 ## Compatibility
 
@@ -98,9 +106,9 @@ The OpenGL path used instead handles 1080p comfortably, including on a Pi 5.
 
 ## How this was built
 
-Written collaboratively with an AI assistant (Claude). While Claude wrote
-the bulk of the code, every architectural and design decision, and all 
-testing and verification, was done by hand.
+Written collaboratively with an AI assistant (Claude). While Claude wrote the
+bulk of the code, every architectural and design decision, and all testing and
+verification, was done by hand.
 
 ## License
 
@@ -108,7 +116,8 @@ TinePlayer's own code is MIT. See [LICENSE](./LICENSE).
 
 It builds on the following, none of which are vendored into this repository:
 
-- **GStreamer** ([LGPL 2.1](https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html))
+- **GStreamer** ([LGPL
+  2.1](https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html))
   and **GTK 4** (LGPL 2.1) are runtime dependencies, installed separately and
   linked dynamically.
 - **`gst-plugin-gtk4`** (MPL-2.0) provides the `gtk4paintablesink` element and

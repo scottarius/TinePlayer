@@ -130,8 +130,16 @@ pub fn build_pipeline(
 
     // A subtitle file beside the video is its own small source chain, fed
     // into the same overlay an embedded stream would use.
-    if let (Some(SubtitleChoice::External(file)), Some(overlay)) = (subtitle, overlay.as_ref()) {
-        attach_external_subtitle(&pipeline, overlay, file)?;
+    // Stored as a name, so the folder comes from the video itself. A source
+    // with no folder - anything opened by URL - has no subtitle files beside
+    // it to have chosen in the first place.
+    if let (Some(SubtitleChoice::External(name)), Some(overlay)) = (subtitle, overlay.as_ref()) {
+        let beside = source
+            .local()
+            .and_then(|video| video.parent())
+            .map(|folder| folder.join(name))
+            .ok_or_else(|| format!("Can't find {name}: it sits beside a local video"))?;
+        attach_external_subtitle(&pipeline, overlay, &beside)?;
     }
 
     // Grouped by track so that one decoded stream can feed two outputs
