@@ -48,6 +48,23 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
         .discover_uri(&uri)
         .map_err(|e| format!("Failed to probe {uri}: {e}"))?;
 
+    // Asking is not the same as being answered: a source that never replies
+    // still comes back here as `Ok`, carrying an info that reports a timeout
+    // and lists no streams at all. Taken at face value that looks like a
+    // playable file with nothing in it, which is how an unreachable address
+    // ended up in the menu instead of raising an error.
+    match info.result() {
+        pbutils::DiscovererResult::Ok => {}
+        // The streams are known even when something to decode them is not.
+        // The pipeline will say exactly what it cannot build, which is more
+        // use than a refusal here.
+        pbutils::DiscovererResult::MissingPlugins => {}
+        pbutils::DiscovererResult::Timeout => {
+            return Err(format!("Timed out reading {uri}. Nothing answered."));
+        }
+        other => return Err(format!("Couldn't read {uri}: {other:?}")),
+    }
+
     let mut subtitles = Vec::new();
     for (index, stream) in info.subtitle_streams().into_iter().enumerate() {
         // Blu-ray bitmap subtitles are listed by the container but no
