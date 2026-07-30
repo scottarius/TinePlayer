@@ -98,6 +98,21 @@ pub struct Preset {
     pub subtitle: Option<String>,
 }
 
+/// How this run was started, as against what it should play.
+///
+/// Grouped because they arrive together from the command line and are read
+/// together here, and because the list was going to keep growing.
+#[derive(Clone, Copy)]
+pub struct Launch {
+    /// Ignore any saved position and start from the beginning.
+    pub restart: bool,
+    pub fullscreen: bool,
+    /// Something else chose the video and is waiting for this playback.
+    pub external: bool,
+    /// That something else is Kodi, which can also be talked to.
+    pub kodi: bool,
+}
+
 /// Everything the menu can act on. Devices persist to the config file;
 /// the file and track choices last for the session.
 pub struct App {
@@ -147,13 +162,10 @@ pub struct App {
     scrub_seen: Cell<Option<std::time::Instant>>,
     /// Drives the controls readout while a file is playing.
     tick: RefCell<Option<glib::SourceId>>,
-    /// Launched by Kodi, which owns the choice of video and is waiting for
-    /// this process to exit. Set from `--kodi` alone and never inferred.
-    ///
-    /// True even when Kodi cannot be reached: the interface changes because
-    /// of who started us, which stays true whether or not its JSON-RPC socket
-    /// answers.
-    kodi: bool,
+    /// Something else chose the video and is waiting for this playback of it:
+    /// no browser, no drag and drop, no confirmation on the way out. Set by
+    /// `--external`, and by `--kodi`, which implies it.
+    external: bool,
     /// Whether the error on screen ended the session: a video named on the
     /// command line that could not be opened leaves nothing to go back to, so
     /// its button closes the player. Every other error returns to the menu.
@@ -171,10 +183,14 @@ impl App {
         config: Config,
         file: Option<Source>,
         preset: Option<Preset>,
-        restart: bool,
-        fullscreen: bool,
-        kodi: bool,
+        launch: Launch,
     ) {
+        let Launch {
+            restart,
+            fullscreen,
+            external,
+            kodi,
+        } = launch;
         let dark = appearance::apply_theme(config.theme);
         suppress_error_bell();
 
@@ -236,7 +252,7 @@ impl App {
             scrub_generation: Cell::new(0),
             scrub_seen: Cell::new(None),
             tick: RefCell::new(None),
-            kodi,
+            external,
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
         });
@@ -426,9 +442,9 @@ impl App {
         // mid-playback. Quicker than any picker when the file is already in
         // front of you in a file manager.
         //
-        // Left out under Kodi for the same reason the browser is: Kodi chose
+        // Left out for the same reason the browser is: something else chose
         // the video and is waiting for this playback of it to end.
-        if !self.kodi {
+        if !self.external {
             let app = self.clone();
             let drop = gtk::DropTarget::new(gtk::gio::File::static_type(), gdk::DragAction::COPY);
             drop.connect_drop(move |_, value, _, _| {
@@ -746,6 +762,16 @@ impl App {
     }
 
     fn stop_playback(&self) {
+        self.finish_playback(false);
+    }
+
+    /// Tears playback down, saving or clearing the resume position as it goes.
+    ///
+    /// `wait_for_kodi` holds on until the last progress report has actually
+    /// reached Kodi. That only matters when the process is about to end, since
+    /// the report goes out on a detached thread and exiting would take it
+    /// along; everywhere else it would be a stall for nothing.
+    fn finish_playback(&self, wait_for_kodi: bool) {
         if let Some(tick) = self.tick.borrow_mut().take() {
             tick.remove();
         }
@@ -754,6 +780,9 @@ impl App {
         }
         if let Some(playback) = self.playback.borrow_mut().take() {
             playback.stop();
+            if wait_for_kodi {
+                playback.finish_reporting();
+            }
         }
         self.window.set_title(Some("TinePlayer"));
     }
@@ -837,10 +866,9 @@ impl App {
                 "Video".to_string(),
                 self.file_label()
                     .unwrap_or_else(|| "Choose a video…".to_string()),
-                // Kodi chose the video and is waiting on this playback, so
-                // there is nothing to pick here. The row stays, to name what
-                // is about to play.
-                !self.kodi,
+                // Something else chose the video, so there is nothing to pick
+                // here. The row stays, to name what is about to play.
+                !self.external,
             ),
             (
                 "Primary Audio Device".to_string(),
@@ -1818,8 +1846,11 @@ impl App {
             readable(&source.uri()),
             readable(error)
         );
-        if self.kodi {
-            message.push_str("\n\nSee docs/integrations.md for setting up Kodi.");
+        // Whatever launched us handed over a path or URL this machine could
+        // not open, so what helps is knowing which paths and URLs work, rather
+        // than anything about the launcher itself.
+        if self.external {
+            message.push_str("\n\nSee docs/usage.md for the paths and URLs that can be played.");
         }
         self.show_error(&message, fatal);
     }
@@ -2335,7 +2366,16 @@ impl App {
         }
 
         let app = self.clone();
-        let on_ended = move || {
+        let on_ended = move |ended| {
+            // Something else picked this video and is waiting for the playback
+            // to finish, so reaching the end of it means there is nothing left
+            // to do and the menu would only be in the way. An error is not the
+            // same: quitting would take the reason off the screen with it.
+            if app.external && ended == crate::player::Ended::Finished {
+                app.finish_playback(true);
+                app.window.close();
+                return;
+            }
             app.stop_playback();
             app.show_menu();
         };
@@ -2435,12 +2475,12 @@ impl App {
     /// modal dialog: it has to be readable at the same distance as
     /// everything else and navigable without a pointer.
     ///
-    /// Skipped entirely under Kodi, which closes straight away. The question
-    /// guards against losing your place by accident, and under Kodi there is
-    /// nothing to lose - the position has already gone back to its library -
-    /// while Kodi itself is sitting hidden waiting for this process to end.
+    /// Skipped when something else launched us, which closes straight away.
+    /// The question guards against losing your place by accident, and there is
+    /// nothing to lose here: the launcher is waiting for this process to end,
+    /// and under Kodi the position has already gone back to its library.
     fn show_confirm_quit(self: &Rc<Self>) {
-        if self.kodi {
+        if self.external {
             self.window.close();
             return;
         }

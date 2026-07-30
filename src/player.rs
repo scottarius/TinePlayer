@@ -42,6 +42,20 @@ const SCRUB_RATES: [(Duration, f64); 4] = [
     (Duration::from_secs(6), 800.0),
 ];
 
+/// Why playback stopped on its own.
+///
+/// The two are worth telling apart because reaching the end is the ordinary
+/// close of a film, while failing partway leaves a reason someone needs to
+/// read. Anywhere that acts on the end of playback has to decide which it is
+/// looking at.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    /// The file played to its end.
+    Finished,
+    /// The pipeline reported an error partway through.
+    Failed,
+}
+
 /// An in-progress playback: the pipeline, plus the widget its video is
 /// drawn into. Single-threaded - every GTK callback runs on the main
 /// thread - so `Rc`/`Cell` rather than `Arc`/atomics.
@@ -67,6 +81,10 @@ pub struct Playback {
     finished: Cell<bool>,
     /// Dropping this removes the bus watch, so it has to outlive playback.
     bus_watch: RefCell<Option<gst::bus::BusWatchGuard>>,
+    /// The final report to Kodi, still in flight. Kept so an exit can wait for
+    /// it: the thread is detached, and a process that ends first takes the
+    /// request with it.
+    final_report: RefCell<Option<std::thread::JoinHandle<()>>>,
     /// Where seeking is heading.
     ///
     /// Repeated skips accumulate against this rather than against
@@ -113,7 +131,7 @@ impl Playback {
         resume_ns: Option<u64>,
         key: String,
         kodi_file: String,
-        on_ended: impl Fn() + 'static,
+        on_ended: impl Fn(Ended) + 'static,
     ) -> Result<Rc<Self>, String> {
         let pipeline = build_pipeline(source, primary_track, secondary_track, subtitle, config)?;
 
@@ -139,6 +157,7 @@ impl Playback {
             reached_eos: Cell::new(false),
             finished: Cell::new(false),
             bus_watch: RefCell::new(None),
+            final_report: RefCell::new(None),
             seek_target: Cell::new(None),
             seeking: Cell::new(false),
             seek_queued: Cell::new(false),
@@ -157,11 +176,11 @@ impl Playback {
                 match msg.view() {
                     MessageView::Eos(_) => {
                         playback.reached_eos.set(true);
-                        on_ended();
+                        on_ended(Ended::Finished);
                     }
                     MessageView::Error(err) => {
                         eprintln!("Error: {} ({:?})", err.error(), err.debug());
-                        on_ended();
+                        on_ended(Ended::Failed);
                     }
                     // Posted when a flushing seek has finished settling.
                     // Also fires after the initial preroll, which harmlessly
@@ -456,7 +475,7 @@ impl Playback {
             if !self.kodi_file.is_empty()
                 && let Some(duration) = self.pipeline.query_duration::<gst::ClockTime>()
             {
-                crate::kodi::report_position(
+                *self.final_report.borrow_mut() = crate::kodi::report_position(
                     &self.kodi_file,
                     duration.nseconds(),
                     duration.nseconds(),
@@ -479,5 +498,14 @@ impl Playback {
 
         let _ = self.pipeline.set_state(gst::State::Null);
         self.bus_watch.borrow_mut().take();
+    }
+
+    /// Waits for the last report to Kodi to finish, for a caller that is about
+    /// to end the process. Bounded by the socket timeout in [`crate::kodi`],
+    /// and does nothing at all when Kodi is not involved.
+    pub fn finish_reporting(&self) {
+        if let Some(handle) = self.final_report.borrow_mut().take() {
+            let _ = handle.join();
+        }
     }
 }

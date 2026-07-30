@@ -1,13 +1,46 @@
 # Integrations
 
-TinePlayer can be launched by other applications, so you keep the benefits of
-their library browsing with easy handoff to TinePlayer for playback.
+TinePlayer can be launched by another application to play a video, handing
+control back when playback ends. A media center does this to keep its own
+library browsing while TinePlayer handles playback, but a launcher does not
+have to be a library: a script, a file manager, or a keyboard shortcut works
+the same way.
+
+Launch the executable by passing the video and the `--external` flag:
+
+### Linux
+
+```sh
+TinePlayer "/home/you/Videos/film.mkv" --external --fullscreen
+```
+
+### Windows
+
+```powershell
+launch-tineplayer.cmd "H:\Videos\film.mkv" --external --fullscreen
+```
+
+On Windows, using `launch-tineplayer.cmd` rather than the exe directly starts
+TinePlayer from its own folder, avoiding any working directory issues with
+loading conflicting libraries. See [the launch script
+usage](usage.md#launch-script).
+
+Passing `--external` puts TinePlayer into an integration mode, where it plays
+only the video provided (file browser is disabled) and exits immediately after
+the video finishes to return control to the launching application.
+
+Additionally, the `--primary`, `--secondary` and `--subtitle` arguments can be
+supplied to skip the menu entirely and go directly to playback. See [the
+command line](usage.md#command-line).
+
+Below are some supported integrations and how to set them up.
 
 ## Kodi
 
 [Kodi](https://kodi.tv) is a media center application: it catalogs your films
 and TV files with artwork and plays them on a television. It can hand playback
-to TinePlayer rather than playing video itself.
+to TinePlayer rather than playing video itself, and TinePlayer will report
+watch percentage back to Kodi.
 
 There are two ways to set it up depending on your preference:
 

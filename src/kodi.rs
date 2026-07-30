@@ -212,16 +212,23 @@ pub fn current_item() -> Option<Item> {
 /// interface. Past [`WATCHED_PERCENT`] the video is marked watched and its
 /// resume point cleared, which is what Kodi's own player does - leaving a
 /// resume point a few seconds from the end would offer to resume the credits.
-pub fn report_position(file: &str, position_ns: u64, duration_ns: u64) {
+/// The handle is returned so a caller that is about to exit can wait for the
+/// report to land. Ignoring it keeps the old fire-and-forget behavior, which is
+/// what every call during playback wants.
+pub fn report_position(
+    file: &str,
+    position_ns: u64,
+    duration_ns: u64,
+) -> Option<std::thread::JoinHandle<()>> {
     if duration_ns == 0 {
-        return;
+        return None;
     }
     let file = file.to_string();
     let position = position_ns as f64 / 1_000_000_000.0;
     let total = duration_ns as f64 / 1_000_000_000.0;
     let watched = position / total * 100.0 >= WATCHED_PERCENT;
 
-    std::thread::spawn(move || {
+    Some(std::thread::spawn(move || {
         let params = if watched {
             serde_json::json!({
                 "file": file,
@@ -237,5 +244,5 @@ pub fn report_position(file: &str, position_ns: u64, duration_ns: u64) {
             })
         };
         let _ = call("Files.SetFileDetails", params);
-    });
+    }))
 }

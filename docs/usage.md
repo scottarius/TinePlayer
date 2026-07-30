@@ -29,6 +29,24 @@ video, the output devices, the audio track for each, and the subtitles. The
 settings menu contains more advanced settings and preferences. See
 [Configuration](configuration.md).
 
+## Video sources
+
+A video can be given as a path or as a URL.
+
+| Given                       | Example                        | Notes                                              |
+|-----------------------------|--------------------------------|----------------------------------------------------|
+| A file on this machine      | `~/Videos/film.mkv`            |                                                    |
+| A network share, by path    | `\\server\media\film.mkv`      | Whatever this machine can already open: a UNC path or mapped drive on Windows, a mounted path on Linux |
+| `http://` or `https://`     | `http://server/media/film.mkv` | A direct link to the file, including one from a media server |
+| `smb://`                    | `smb://server/media/film.mkv`  | Linux only, and only where the share is already reachable. Windows should use the UNC path instead |
+
+A share opened by path is an ordinary file as far as TinePlayer is concerned,
+which makes it the most dependable option: the machine has already handled
+reaching the share and any credentials it needed.
+
+Note that [external subtitle files](#subtitles) are only found for videos opened
+by path.
+
 ## Controls
 
 Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse,
@@ -108,19 +126,20 @@ playback if required options are provided.
 
 Track numbers are those `--list-tracks` prints.
 
-| Option            | Meaning                                                                                                  |
-|-------------------|----------------------------------------------------------------------------------------------------------|
-| `FILE`            | The video to play: a path, or a URL such as `http://…` or `smb://…`.                                     |
-| `--primary <N>`   | Audio track for the primary output. `0` for no audio there                                               |
-| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there                                             |
-| `--subtitle <S>`  | Subtitles to show, see [Choosing subtitles on the command line](#choosing-subtitles-on-the-command-line) |
-| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers, then exit                                |
-| `--restart`       | Start video from the beginning, ignoring any saved position                                              |
-| `--fullscreen`    | Start fullscreen                                                                                         |
-| `--windowed`      | Start windowed, overriding a remembered fullscreen preference                                            |
-| `--kodi`          | Used by [the Kodi integration](integrations.md#kodi)                                                     |
-| `-V`, `--version` | Print the version                                                                                        |
-| `-h`, `--help`    | Print help                                                                                               |
+| Option            | Meaning                                                                                                                                  |
+|-------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `FILE`            | The video to play, see [Video sources](#video-sources)                                                                                   |
+| `--primary <N>`   | Audio track for the primary output. `0` for no audio there                                                                               |
+| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there                                                                             |
+| `--subtitle <S>`  | Subtitles to show, see [Choosing subtitles on the command line](#choosing-subtitles-on-the-command-line)                                 |
+| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers, then exit                                                                |
+| `--restart`       | Start video from the beginning, ignoring any saved position                                                                              |
+| `--fullscreen`    | Start fullscreen                                                                                                                         |
+| `--windowed`      | Start windowed, overriding a remembered fullscreen preference                                                                            |
+| `--external`      | Used for launching from another application, see [Integrations](integrations.md)                                                         |
+| `--kodi`          | Launched by Kodi: Sync the resume position with its library. Implies `--external`
+| `-V`, `--version` | Print the version                                                                                                                        |
+| `-h`, `--help`    | Print help                                                                                                                               |
 
 ```sh
 TinePlayer --list-tracks video.mkv

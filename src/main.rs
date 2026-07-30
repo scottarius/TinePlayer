@@ -79,8 +79,16 @@ struct Args {
     #[arg(long, conflicts_with = "fullscreen")]
     windowed: bool,
 
+    /// Play only the video given and nothing else: no file browser, and no
+    /// confirmation on the way out
+    ///
+    /// For launching from another application, which chose the video and is
+    /// waiting for this playback of it to finish. Implied by --kodi.
+    #[arg(long)]
+    external: bool,
+
     /// Launched by Kodi: take the resume position from its library and hand
-    /// it back, and leave choosing the video to Kodi
+    /// it back. Implies --external
     ///
     /// Set by the entry Kodi's playercorefactory.xml adds. It is never
     /// inferred, because being launched by Kodi and being on a television are
@@ -224,6 +232,13 @@ fn main() -> std::process::ExitCode {
         };
     }
 
+    // Nothing to fall back on: the whole point of the mode is that something
+    // else chose the video, and with no browser there is no way to pick one.
+    if (args.external || args.kodi) && source.is_none() {
+        eprintln!("--external needs a video to play");
+        return std::process::ExitCode::FAILURE;
+    }
+
     // Deliberately not fatal. A missing file used to end the process here,
     // which is invisible when something else launched the player: the window
     // never appears and there is no terminal to read the reason from. The
@@ -274,6 +289,9 @@ fn main() -> std::process::ExitCode {
                 })
                 .flatten()
         });
+        // Kodi is one launcher among others, so it turns the general mode on
+        // and adds only the parts that are about Kodi itself.
+        let external = args.external || args.kodi;
         let restart = args.restart;
         let fullscreen = (args.fullscreen || config.fullscreen) && !args.windowed;
         let kodi = args.kodi;
@@ -283,9 +301,12 @@ fn main() -> std::process::ExitCode {
                 config.clone(),
                 file.clone(),
                 preset.clone(),
-                restart,
-                fullscreen,
-                kodi,
+                app::Launch {
+                    restart,
+                    fullscreen,
+                    external,
+                    kodi,
+                },
             );
         });
     }
