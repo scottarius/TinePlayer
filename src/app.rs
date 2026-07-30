@@ -133,7 +133,7 @@ pub struct App {
     /// that finishing with it returns where it came from.
     from_settings: Cell<bool>,
     /// Whether the dark theme is in force, so switching away from it can be
-    /// recognised.
+    /// recognized.
     dark: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
@@ -338,7 +338,7 @@ impl App {
         controller.connect_key_pressed(move |_, key, _, _| {
             let playing = app.playback.borrow().is_some();
             match key {
-                // Only claimed during playback — the menus need Space for
+                // Only claimed during playback - the menus need Space for
                 // activating whatever row has focus.
                 gdk::Key::space if playing => {
                     if let Some(playback) = app.playback.borrow().as_ref() {
@@ -736,8 +736,8 @@ impl App {
     ///
     /// Under Kodi its library is the authority, so playback starts from the
     /// position Kodi's own interface was just showing and the two never
-    /// visibly disagree. Its answer stands even when it holds no resume point
-    /// — a film Kodi considers unwatched starts at the beginning rather than
+    /// visibly disagree. Its answer stands even when it holds no resume point:
+    /// a film Kodi considers unwatched starts at the beginning rather than
     /// wherever our own file happens to remember. Only a Kodi that does not
     /// answer at all falls back to `positions.json`.
     ///
@@ -975,7 +975,7 @@ impl App {
             let app = self.clone();
             list.connect_row_activated(move |_, row| {
                 // A row drawn insensitive is stating something rather than
-                // offering it — the video row under Kodi, or a track row with
+                // offering it - the video row under Kodi, or a track row with
                 // no file yet. Only the row's contents carry that; the
                 // ListBoxRow that GTK wraps them in stays sensitive, and would
                 // otherwise still take a click or Enter.
@@ -1044,7 +1044,7 @@ impl App {
         let (page, list, back, _header) = list_page(title, true);
 
         // Entries are (display text, choice). `None` means the "None"
-        // option, which every list offers except the primary device — an
+        // option, which every list offers except the primary device - an
         // output has to exist for anything to play.
         let mut entries: Vec<(String, Option<usize>)> = Vec::new();
         // The choice already in force, so the list opens on it rather than
@@ -1224,7 +1224,7 @@ impl App {
     }
 
     /// Arrow keys don't move focus out of a ListBox, so the boundary
-    /// between the list and the button below it has to be bridged by hand —
+    /// between the list and the button below it has to be bridged by hand -
     /// otherwise the button is unreachable without a pointer. Movements
     /// that would go past either end are swallowed, which also stops GTK
     /// reporting them as failed navigation.
@@ -1567,8 +1567,8 @@ impl App {
         chooser.add_filter(&all);
 
         let app = self.clone();
-        // Where this was opened from, so cancelling returns there rather than
-        // dropping to the menu. Reached from the browser, cancelling should
+        // Where this was opened from, so canceling returns there rather than
+        // dropping to the menu. Reached from the browser, canceling should
         // leave you in the folder you were looking at.
         let from_browser = *self.screen.borrow() == Screen::Browser;
         let folder = self.config.borrow().last_folder.clone();
@@ -1671,7 +1671,7 @@ impl App {
             // saved pair is taken as it stands rather than filled in.
             Some(choice) => (choice.primary, choice.secondary),
             // Otherwise the preferred languages decide, falling back to the
-            // old behaviour of the first track and a different one.
+            // old behavior of the first track and a different one.
             None => (
                 by_language(&primary_language).or_else(|| tracks.first().map(|t| t.index)),
                 by_language(&secondary_language).or_else(|| tracks.get(1).map(|t| t.index)),
@@ -1722,7 +1722,7 @@ impl App {
     /// Worth a screen rather than a line on stderr: when something else
     /// launched the player there is no terminal to read, and the window
     /// closing again immediately is all anyone sees. That is exactly the case
-    /// most likely to fail, because a media centre can hand over a path to a
+    /// most likely to fail, because a media center can hand over a path to a
     /// machine other than this one.
     fn show_source_error(self: &Rc<Self>, source: &Source) {
         let mut message = format!(
@@ -1736,12 +1736,12 @@ impl App {
             Source::File(_) => message.push_str(
                 "The file isn't there, or this computer can't reach it.
 
-                 If a media centre started playback, its media may be on                  another machine, and the path it handed over has to be one                  this computer can reach too.",
+                 If a media center started playback, its media may be on                  another machine, and the path it handed over has to be one                  this computer can reach too.",
             ),
             Source::Remote(_) => message.push_str(
                 "The server didn't answer, or sent something that couldn't be                  played.
 
-                 If a media centre started playback, check that its server is                  running and that it is set to play the original file rather                  than converting it.",
+                 If a media center started playback, check that its server is                  running and that it is set to play the original file rather                  than converting it.",
             ),
         }
         if self.kodi {
@@ -2362,13 +2362,13 @@ See docs/integrations.md for setting up Kodi.",
         }
     }
 
-    /// Centred rather than top-aligned, and a full screen rather than a
+    /// Centered rather than top-aligned, and a full screen rather than a
     /// modal dialog: it has to be readable at the same distance as
     /// everything else and navigable without a pointer.
     ///
     /// Skipped entirely under Kodi, which closes straight away. The question
     /// guards against losing your place by accident, and under Kodi there is
-    /// nothing to lose — the position has already gone back to its library —
+    /// nothing to lose - the position has already gone back to its library -
     /// while Kodi itself is sitting hidden waiting for this process to end.
     fn show_confirm_quit(self: &Rc<Self>) {
         if self.kodi {
@@ -2436,8 +2436,8 @@ See docs/integrations.md for setting up Kodi.",
         label.set_max_width_chars(48);
         page.append(&label);
 
-        // Under Kodi there is no menu worth returning to — it chose the video
-        // and is waiting for this process to end — so the way out is out.
+        // Under Kodi there is no menu worth returning to - it chose the video
+        // and is waiting for this process to end - so the way out is out.
         let back = gtk::Button::with_label(if self.kodi { "Close" } else { "Back" });
         back.add_css_class("tp-button");
         back.set_halign(gtk::Align::Center);
@@ -2498,7 +2498,7 @@ fn list_page_with(
     // Its own box rather than sizing the widgets themselves: a button adds
     // padding and borders to whatever minimum it is given, so the arrow and
     // the mark never agree on a size. An empty box takes exactly the size the
-    // stylesheet asks for, and the child sits centred inside it.
+    // stylesheet asks for, and the child sits centered inside it.
     let slot = gtk::Box::builder()
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
@@ -2571,9 +2571,9 @@ fn heading_label(text: &str) -> gtk::Label {
 /// bundled theme has 157 icons and none of them mean fullscreen. The nearest,
 /// `window-maximize-symbolic`, is a small square that reads as "maximize".
 ///
-/// Drawn twice in each direction, once in each theme's foreground colour,
+/// Drawn twice in each direction, once in each theme's foreground color,
 /// because an embedded image cannot be recoloured the way a symbolic icon is.
-/// A single compromise grey read poorly against both.
+/// A single compromise gray read poorly against both.
 pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
     const ENTER_LIGHT: &[u8] = include_bytes!("../data/fullscreen-light.png");
     const ENTER_DARK: &[u8] = include_bytes!("../data/fullscreen-dark.png");
@@ -2596,7 +2596,7 @@ pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image 
 
 fn back_button() -> gtk::Button {
     // An icon rather than a text glyph: a "‹" character sits off the
-    // vertical centre because it's positioned by font metrics rather than
+    // vertical center because it's positioned by font metrics rather than
     // by the icon's own bounding box.
     let button = gtk::Button::from_icon_name("go-previous-symbolic");
     button.add_css_class("tp-back");
@@ -2658,7 +2658,7 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
 
 /// A browser row: an icon from the desktop's own set, then the name.
 ///
-/// Icons rather than emoji, because emoji depend on a colour font being
+/// Icons rather than emoji, because emoji depend on a color font being
 /// installed. The Pi has none, so a folder character rendered as an empty box
 /// with the codepoint inside it.
 fn browser_row(icon: &str, text: &str) -> gtk::Box {
@@ -2689,7 +2689,7 @@ fn chooser_row(text: &str) -> gtk::Label {
     label
 }
 
-/// GTK rings the system bell when a keyboard move can't go anywhere — at
+/// GTK rings the system bell when a keyboard move can't go anywhere - at
 /// the ends of a list, which happens constantly when navigating by
 /// arrow key or D-pad. The application provides its own click instead.
 fn suppress_error_bell() {
@@ -2755,12 +2755,12 @@ fn style_css(scale: f64) -> String {
         .tp-button, .tp-play {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
         .tp-play {{ font-weight: bold; }}
         .tp-menu > row {{ border-radius: {radius}px; }}
-        /* Grey rather than a theme colour, so it lifts off the background in
+        /* Gray rather than a theme color, so it lifts off the background in
            both light and dark without needing two rules. */
         .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
         .tp-menu > row:selected:hover {{ background-color: {highlight}; }}
         .tp-menu > row.tp-section-start {{ margin-top: {section}px; }}
-        /* The selected row keeps the same colours whether or not the list
+        /* The selected row keeps the same colors whether or not the list
            holds focus, and is simply dimmed when it doesn't. Fading the
            whole row rather than clearing its background keeps the position
            visible while the Play button or another window is active, and
@@ -2780,8 +2780,8 @@ fn style_css(scale: f64) -> String {
         .tp-menu:focus-within > row:selected {{ opacity: 1; }}
         /* background-image has to be cleared too: themes draw button
            backgrounds with a gradient image, which covers any
-           background-color set underneath it. The label is coloured
-           separately because themes set button text colour directly. */
+           background-color set underneath it. The label is colored
+           separately because themes set button text color directly. */
         button:focus {{
             background-image: none;
             background-color: {highlight};
@@ -2819,7 +2819,7 @@ fn style_css(scale: f64) -> String {
             background-color: {highlight};
             opacity: 1;
         }}
-        /* Laid over the picture, so it sets its own colours rather than
+        /* Laid over the picture, so it sets its own colors rather than
            inheriting theme ones that may be light. */
         .tp-controls {{
             background-color: rgba(0, 0, 0, 0.75);
@@ -2891,12 +2891,12 @@ fn style_css(scale: f64) -> String {
         back_icon = px(22.0),
         row_icon = px(22.0),
         bar = px(6.0),
-        // A literal colour rather than a theme name: GTK's named colours
+        // A literal color rather than a theme name: GTK's named colors
         // differ between themes and libadwaita, and an undefined one makes
-        // the whole declaration fail to parse — which silently leaves the
+        // the whole declaration fail to parse - which silently leaves the
         // highlighted row unreadable. Both foreground and background are
         // set for the same reason: overriding only the background left the
-        // theme's white selection text on a pale colour.
+        // theme's white selection text on a pale color.
         highlight = "#3584e4",
         video = crate::player::VIDEO_CSS_CLASS,
     )

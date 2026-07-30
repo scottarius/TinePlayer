@@ -1,8 +1,8 @@
 //! What is being played: a file on disk, or something remote.
 //!
 //! GStreamer works in URIs throughout, so a local file is just one kind of
-//! source rather than the only kind. Keeping the distinction explicit — rather
-//! than passing a `PathBuf` around and hoping it never holds a URL — is what
+//! source rather than the only kind. Keeping the distinction explicit - rather
+//! than passing a `PathBuf` around and hoping it never holds a URL - is what
 //! makes the difference visible at the places it actually matters: finding
 //! subtitle files sitting beside a video, and the built-in browser, neither of
 //! which mean anything for a remote source.
@@ -102,7 +102,7 @@ impl Source {
     /// versions still resolve. A remote source has only its URI, which is
     /// weaker: a Jellyfin URL carries an access token that changes when it is
     /// regenerated, and its entry is orphaned when it does. Launchers that can
-    /// name something stabler are preferred — see `kodi::Item::key`.
+    /// name something stabler are preferred - see `kodi::Item::key`.
     pub fn key(&self) -> String {
         match self {
             Self::File(path) => path.to_string_lossy().to_string(),

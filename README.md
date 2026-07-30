@@ -1,20 +1,36 @@
-# TinePlayer
+<h1 align="center">
+  <img src="data/tineplayer.png" width="96" alt=""><br>
+  TinePlayer
+</h1>
+
+<p align="center">
+  Watch together, in different languages.
+</p>
+
+<p align="center">
+  <a href="https://github.com/scottarius/TinePlayer/actions/workflows/ci.yml"><img src="https://github.com/scottarius/TinePlayer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational" alt="Windows and Linux">
+  <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20GStreamer-orange" alt="Rust and GStreamer">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+</p>
 
 Play one video with two audio tracks at the same time, each sent to a different
 audio device, so people who speak different languages can watch it together.
 The room hears one language through the speakers; whoever is on headphones
 hears the other. Any two connected audio devices will do.
 
-There is something particular about hearing a film in your own language. The
-performances land, the jokes time correctly, and you follow the story without
-having to work at it. TinePlayer lets everyone watching have that at the same
-time, on the same screen.
+That matters because there is something particular about hearing a film in
+your own language. The performances land, the jokes time correctly, and you
+follow the story without having to work at it. TinePlayer lets everyone
+watching have that experience together on the same screen.
 
-## Why
+## Why another video player
 
 Most video players decode exactly one audio track per playback session, and
 none of them can route two different tracks to two different output devices at
 the same time.
+
+## How it works
 
 TinePlayer is built on [GStreamer](https://gstreamer.freedesktop.org/). A
 video file's audio tracks are already separate streams inside the container, so
@@ -23,23 +39,14 @@ device from a single pipeline, staying in sync because it is all one clock.
 
 ## Features
 
-- Built primarily for use on an HTPC and TV, but works just as well on a computer
-- Plays a video and two audio tracks at once, each to its own output device, all in sync
-- Works with standard video containers: MKV, MP4, MPEG-TS, and anything else
-  GStreamer supports
-- Remembers the playback position, output devices, track selection, and subtitle choice for each video when resuming
-- Interface large enough to use from the couch, with full gamepad support
-- Supports subtitles, either embedded in the video or from an external subtitle file beside it
-- Preferred language settings per audio track and for subtitles, used to pick tracks
-  automatically from what's available
-- A built-in gamepad enabled file browser for choosing videos
-- Command-line arguments to bypass the UI and launch straight into video playback
-
-## Known issues
-
-- Blu-ray PGS subtitles cannot be shown: GStreamer ships no decoder for them,
-  so they are left out of the list rather than drawn as nothing.
-- No packaged downloads yet, so it has to be built from source.
+- Plays a video and two simultaneous audio tracks to separate output devices in sync
+- Targets HTPC and TV use, with a large interface and full gamepad support
+- Works with standard video containers: MKV, MP4, MPEG-TS (anything GStreamer supports)
+- Resumes videos with remembered playback time and language/track selections
+- Displays subtitles with support for both embedded and external files
+- Selects tracks automatically from your preferred languages
+- Integrates with Kodi and reports playback progress, including libraries from add-ons like Jellyfin and Plex
+- Launches straight into playback from command-line arguments, for custom integrations
 
 ## Requirements
 
@@ -49,9 +56,9 @@ device from a single pipeline, staying in sync because it is all one clock.
 
 ## Documentation
 
-- **[Building from source](docs/building.md)** — setup scripts and dependencies for each platform
-- **[Using TinePlayer](docs/usage.md)** — controls, keyboard and gamepad, command-line options
-- **[Configuration](docs/configuration.md)** — `config.yaml`, language preferences, saved playback resume data
+- **[Building from source](docs/building.md)** - setup scripts and dependencies for each platform
+- **[Using TinePlayer](docs/usage.md)** - controls, keyboard and gamepad, command-line options
+- **[Configuration](docs/configuration.md)** - `config.yaml`, language preferences, saved playback resume data
 - **[Integrations](docs/integrations.md)** - integrating with other media players and libraries
 
 ## Quick start
@@ -86,7 +93,7 @@ Both Wayland and X11 sessions are supported; the backend is chosen at runtime.
 expected to work, but has not been run there. Reports welcome.
 
 One consequence of that baseline: the GTK 4.14+ `dmabuf` zero-copy rendering
-path is not used, so newer systems do not gain that particular optimisation.
+path is not used, so newer systems do not gain that particular optimization.
 The OpenGL path used instead handles 1080p comfortably, including on a Pi 5.
 
 ## How this was built

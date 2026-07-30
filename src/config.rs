@@ -128,7 +128,7 @@ impl Config {
         let config: Config = serde_yaml::from_str(&text)
             .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
 
-        // Only primary_sink is required — secondary_sink is optional (a
+        // Only primary_sink is required - secondary_sink is optional (a
         // single-output setup is valid), so it's not validated here.
         if config.primary_sink.as_deref().unwrap_or("").is_empty() {
             return Err(format!("Missing 'primary_sink' in {}.", path.display()));
@@ -161,7 +161,7 @@ impl Config {
 }
 
 /// Resume positions are state rather than settings, so they live in the
-/// per-user data directory — but for the same reason as the config, they
+/// per-user data directory - but for the same reason as the config, they
 /// must not be relative to the working directory.
 pub fn positions_path() -> PathBuf {
     app_dir(glib::user_data_dir()).join("positions.json")
@@ -257,7 +257,7 @@ fn update(key: &str, edit: impl FnOnce(&mut Resume)) {
 /// Position stored in nanoseconds.
 ///
 /// The key identifies the video: a local file's path, a remote source's URI,
-/// or — better than either — an id from whatever launched us. See
+/// or - better than either - an id from whatever launched us. See
 /// `Source::key` and `kodi::Item::key`.
 pub fn save_position(key: &str, position_ns: u64) {
     update(key, |entry| entry.position_ns = position_ns);

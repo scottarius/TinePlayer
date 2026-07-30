@@ -11,7 +11,7 @@ rem report the problem. Kodi does exactly this. Moving to TinePlayer's own
 rem folder first is enough for the right copies to win.
 rem
 rem The player is run rather than started in the background, so a launcher that
-rem waits for it — Kodi does — sees a process that lives as long as the film.
+rem waits for it - Kodi does - sees a process that lives as long as the film.
 
 rem Locations are worked out from this script's own folder (%~dp0), so nothing
 rem has to be substituted in and the file works wherever TinePlayer is kept.

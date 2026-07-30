@@ -4,7 +4,7 @@ version = "0.6.0"
 edition = "2024"
 
 # The crate keeps its lowercase name for crates.io conventions, while the
-# executable is capitalised to match how the application presents itself.
+# executable is capitalized to match how the application presents itself.
 [[bin]]
 name = "TinePlayer"
 path = "src/main.rs"
@@ -21,7 +21,7 @@ path = "src/main.rs"
 # Building against the oldest of those still runs on all the newer ones:
 # GTK 4.x and GStreamer 1.x are both API/ABI stable within their major
 # version, and the version *features* on these crates only gate whether we
-# may call newer APIs — they don't restrict what runtime we work against.
+# may call newer APIs - they don't restrict what runtime we work against.
 # (Already demonstrated: these bindings target GStreamer 1.18 and run fine
 # against 1.22 and 1.28.)
 #
@@ -35,14 +35,14 @@ path = "src/main.rs"
 # the last one that explicitly supports building with no GTK version
 # features at all; 0.14+ default to `gtk_v4_10`. It targets gtk4 0.9 and
 # gstreamer 0.23, so the rest of the GStreamer stack is pinned to 0.23 to
-# match — mixing 0.23 and 0.25 in one dependency graph would produce two
+# match - mixing 0.23 and 0.25 in one dependency graph would produce two
 # incompatible sets of GStreamer types that can't be passed between the
 # plugin and our own pipeline code.
 #
 # Known cost of this baseline: the `dmabuf` zero-copy path needs GTK 4.14,
 # so newer systems don't get it (the GL path below is used instead, which
 # handles 1080p fine). gst-plugin-gtk4 0.13.7 also warns on GTK >= 4.13
-# that alpha-channel frames may render incorrectly — irrelevant for opaque
+# that alpha-channel frames may render incorrectly - irrelevant for opaque
 # video, but worth remembering if transparent overlays are ever composited
 # into the video frames themselves.
 
@@ -58,7 +58,7 @@ serde_yaml = "0.9.34"
 gtk = { package = "gtk4", version = "0.9" }
 
 # Statically linked into this binary rather than installed as a shared
-# GStreamer plugin — gtk4paintablesink isn't packaged for Debian or shipped
+# GStreamer plugin - gtk4paintablesink isn't packaged for Debian or shipped
 # with the GStreamer Windows installer, so depending on it as a normal crate
 # avoids making users build and install a plugin separately per platform.
 # Platform GL features are added per-target below; without them the sink

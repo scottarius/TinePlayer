@@ -63,7 +63,7 @@
            when the player exits it writes a bookmark saying "watched" or
            nothing at all. At the default of 10 seconds that means anything
            played for more than a moment is marked fully watched and loses its
-           resume point — overwriting the real position, because Kodi writes it
+           resume point - overwriting the real position, because Kodi writes it
            after the player has exited.
 
            Out of reach, Kodi writes nothing and leaves the position TinePlayer

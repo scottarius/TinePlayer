@@ -2,31 +2,25 @@
 
 Run it from the command line with or without arguments, or by double-clicking the executable.
 
-**Linux**
+### Linux
 
 ```sh
 ./target/release/TinePlayer
 ./target/release/TinePlayer ~/Videos/film.mkv --fullscreen
 ```
 
-**Windows**
+### Windows
 
 ```powershell
 .\target\release\TinePlayer.exe
 .\target\release\TinePlayer.exe "H:\Videos\film.mkv" --fullscreen
 ```
 
-**Windows, via launch script**
-
+#### Launch script
+Useful for launching from another app or integration that has a different working directory if library conflicts cause errors. 
 ```powershell
 .\launch-tineplayer.cmd "H:\Videos\film.mkv" --fullscreen
 ```
-
-Point anything that starts TinePlayer on your behalf at `launch-tineplayer.cmd`
-rather than at the executable - a media center, a shortcut, a script. Started
-from another program's folder, TinePlayer can pick up the wrong libraries and
-fail silently; the script starts it from its own folder, passing arguments
-through unchanged.
 
 Everything required for video playback is chosen from the main screen: the video, the output devices, the audio
 track for each, and the subtitles. The settings menu contains more advanced settings and preferences. See [Configuration](configuration.md).
@@ -44,6 +38,32 @@ Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse, tho
 | <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback |
 | <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
 | <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
+
+## Subtitles
+
+Subtitles come from two places: tracks inside the video, and subtitle files
+sitting beside it. Both appear in one list on the main screen, chosen
+separately from the audio - so subtitles can be a third language, or the
+same as one of the two being heard.
+
+External files are matched by name. Anything that starts with the video's name
+and ends in `.srt`, `.ass`, `.ssa` or `.vtt` is offered, and whatever sits
+between the two becomes its label:
+
+| File beside `Film (2019).mkv` | Listed as  |
+|-------------------------------|------------|
+| `Film (2019).en.srt`          | `en`       |
+| `Film (2019).en.hi.srt`       | `en.hi`    |
+| `Film (2019).srt`             | `External` |
+
+Your choice is remembered per video. For a video you have not played before,
+`subtitle_language` picks one automatically, and `subtitle_size` and
+`subtitle_font` control how they look - see
+[Configuration](configuration.md).
+
+> [!NOTE]
+> * Blu-ray PGS subtitles will not be shown as GStreamer ships no decoder for them natively.
+> * A video played from a media server integration offers only the embedded subtitles.
 
 ## Command line
 

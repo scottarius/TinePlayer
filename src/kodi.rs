@@ -31,7 +31,7 @@ const TIMEOUT: Duration = Duration::from_millis(1500);
 /// How much of a video has to be watched before Kodi is told it was.
 ///
 /// Kodi's own threshold is `playcountminimumpercent` in `advancedsettings.xml`,
-/// which cannot be read over JSON-RPC — it is absent from `Settings.GetSettings`
+/// which cannot be read over JSON-RPC - it is absent from `Settings.GetSettings`
 /// even at expert level, because it is not a settings-menu item. This is Kodi's
 /// default for it, so the two agree unless someone has changed theirs.
 const WATCHED_PERCENT: f64 = 90.0;
@@ -41,7 +41,7 @@ const WATCHED_PERCENT: f64 = 90.0;
 /// Everything here comes from asking Kodi what it is playing, never from the
 /// argument we were launched with. Kodi resolves a `plugin://` item to a real
 /// stream URL before handing it over, so the argument is good for playback and
-/// useless for identity — it is not what Kodi knows the item by, and looking it
+/// useless for identity - it is not what Kodi knows the item by, and looking it
 /// up by that URL fails. Asking sidesteps the whole problem, and works the same
 /// whether the item came from a local folder or an add-on.
 pub struct Item {
@@ -49,7 +49,7 @@ pub struct Item {
     pub kind: String,
     /// Kodi's own database id, unique within `kind`.
     pub id: i64,
-    /// The path Kodi knows the item by — a local path, or the `plugin://` URL
+    /// The path Kodi knows the item by - a local path, or the `plugin://` URL
     /// an add-on resolved. Progress is written back against this, not against
     /// the URL we play.
     pub file: String,
@@ -70,13 +70,13 @@ impl Item {
     ///
     /// Kodi's own id, rather than the URL we were handed. An add-on's stream
     /// URL can carry an access token that changes when it is regenerated, and
-    /// the same film is a `plugin://` path to Kodi and an HTTP URL to us — so
+    /// the same film is a `plugin://` path to Kodi and an HTTP URL to us - so
     /// the URL is the one thing here that is not stable.
     ///
     /// Known limitation, accepted deliberately: these ids belong to Kodi's
     /// database, and anything that rebuilds the library renumbers them. A
-    /// library-syncing add-on taking over — PlexKodiConnect and Jellyfin for
-    /// Kodi both do, and cannot coexist — reassigns every id, after which an
+    /// library-syncing add-on taking over - PlexKodiConnect and Jellyfin for
+    /// Kodi both do, and cannot coexist - reassigns every id, after which an
     /// entry filed here points at whatever film inherited its number. The
     /// alternative was `uniqueid` (an IMDb or TMDB id), which survives that and
     /// matches the same film across sources, but is absent for anything the
@@ -113,7 +113,7 @@ fn call(method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
     //
     // An error object rather than a result is a perfectly ordinary answer from
     // a Kodi that is older, or does not have the file, and is not ours to
-    // report — `get("result")` simply comes back empty.
+    // report - `get("result")` simply comes back empty.
     let mut reply = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -132,8 +132,8 @@ fn call(method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
 
 /// The item Kodi is playing through us, if it will say.
 ///
-/// Kodi has exactly one video player slot — `GetActivePlayers` appends at most
-/// one entry of type `video` — and it launched us and is blocked waiting for
+/// Kodi has exactly one video player slot - `GetActivePlayers` appends at most
+/// one entry of type `video` - and it launched us and is blocked waiting for
 /// this process to exit. So a single video player reporting itself `external`
 /// is necessarily this playback. That is a structural guarantee rather than a
 /// guess between candidates.
@@ -144,7 +144,7 @@ fn call(method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
 pub fn current_item() -> Option<Item> {
     // Kodi registers the player around the same moment it starts us, so a first
     // look can genuinely be too early. Cheap to look again; giving up here just
-    // means falling back to local behaviour for the whole session.
+    // means falling back to local behavior for the whole session.
     for attempt in 0..3 {
         if attempt > 0 {
             std::thread::sleep(Duration::from_millis(300));
@@ -210,7 +210,7 @@ pub fn current_item() -> Option<Item> {
 /// Runs on a thread and reports nothing back: this is called while a film is
 /// playing, and a stalled socket must never be able to stutter playback or the
 /// interface. Past [`WATCHED_PERCENT`] the video is marked watched and its
-/// resume point cleared, which is what Kodi's own player does — leaving a
+/// resume point cleared, which is what Kodi's own player does - leaving a
 /// resume point a few seconds from the end would offer to resume the credits.
 pub fn report_position(file: &str, position_ns: u64, duration_ns: u64) {
     if duration_ns == 0 {

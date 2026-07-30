@@ -60,7 +60,7 @@ fn click_wav() -> Vec<u8> {
 
 /// Holds one pre-rolled pipeline for the lifetime of the application.
 ///
-/// The obvious implementation — build a pipeline per click — is far too
+/// The obvious implementation - build a pipeline per click - is far too
 /// slow to sit in a key handler: resolving the output device alone starts
 /// and stops a GStreamer device monitor, and doing that per keystroke added
 /// something close to a second of input lag. Everything expensive happens

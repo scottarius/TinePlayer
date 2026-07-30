@@ -2,7 +2,7 @@
 //!
 //! Polled from the GTK main loop rather than run on its own thread, so the
 //! handler runs where every other input handler does and needs no
-//! synchronisation with the widgets it drives.
+//! synchronization with the widgets it drives.
 //!
 //! Nothing here refers to a particular controller. Devices are discovered by
 //! gilrs and iterated as a set, so one connected halfway through a session
@@ -14,7 +14,7 @@ use gilrs::{Axis, Button, EventType, Gilrs};
 use gtk::glib;
 
 /// What a control does, rather than which control it was. Keyboard and
-/// gamepad both reduce to these so neither owns the behaviour.
+/// gamepad both reduce to these so neither owns the behavior.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Up,

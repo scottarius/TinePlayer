@@ -44,7 +44,7 @@ struct Targets {
 
 /// Builds the playback pipeline for `source`.
 ///
-/// The source may be a local file or a remote URL — everything below treats
+/// The source may be a local file or a remote URL - everything below treats
 /// them alike, since `urisourcebin` hides the difference.
 ///
 /// `decodebin3` rather than a named demuxer, which is what makes this
@@ -325,16 +325,16 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     // preroll before the change completes. With two audio sinks on separate
     // devices plus the video sink, a flushing seek left those state changes
     // permanently ASYNC on Linux: pausing after a seek never completed, and
-    // playback stopped for good. Measured directly — with this set, resuming
+    // playback stopped for good. Measured directly - with this set, resuming
     // returns Success and position advances again; without it, the pipeline
     // reports Playing while no buffers reach either sink.
     //
     // Correct as well as expedient: preroll is the video sink's job here, and
-    // the audio sinks still honour `sync`, so they stay in step.
+    // the audio sinks still honor `sync`, so they stay in step.
     //
     // Linux-only, matching the forced clock below. Windows is verified
     // working as it is, and this pipeline has a history of platform-specific
-    // sink behaviour that punishes changing both at once.
+    // sink behavior that punishes changing both at once.
     if cfg!(target_os = "linux") && sink.find_property("async").is_some() {
         sink.set_property("async", false);
     }
@@ -414,7 +414,7 @@ fn connect_pad_added(
 ) {
     decode.connect_pad_added(move |_, pad| {
         // `pad-added` fires for every pad an element gains, in either
-        // direction — including the sink pad requested to link the source in.
+        // direction - including the sink pad requested to link the source in.
         // Only decoded output is of interest here.
         if pad.direction() != gst::PadDirection::Src {
             return;

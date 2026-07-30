@@ -1,4 +1,4 @@
-//! Desktop-session display detection — Linux-only. On Windows this whole
+//! Desktop-session display detection - Linux-only. On Windows this whole
 //! concept doesn't apply: there's a single desktop and GTK finds it without
 //! any env-var plumbing.
 //!

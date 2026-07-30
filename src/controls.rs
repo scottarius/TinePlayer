@@ -37,7 +37,7 @@ pub struct Controls {
     /// which is what stops repeated seeks from hiding the strip three seconds
     /// after the *first* one.
     ///
-    /// Preferred over cancelling the timer by id: a source that has already
+    /// Preferred over canceling the timer by id: a source that has already
     /// fired cannot be removed, and trying logs a GLib critical.
     generation: Rc<Cell<u64>>,
     /// Kept so the fullscreen mark can be redrawn when the state changes.

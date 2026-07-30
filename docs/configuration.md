@@ -48,8 +48,8 @@ Device names are the ones the settings menu lists, which are also what
 platform: `Speakers (Realtek High Definition Audio)` on Windows looks nothing
 like the example above.
 
-TinePlayer writes a few keys of its own to the same file — `last_video`,
-`last_folder` and `fullscreen` — so it reopens where you left it. There is no
+TinePlayer writes a few keys of its own to the same file - `last_video`,
+`last_folder` and `fullscreen` - so it reopens where you left it. There is no
 need to set those by hand.
 
 ## Subtitle fonts
@@ -79,7 +79,7 @@ Naming a family directly also works, where it is installed:
 | `Segoe UI Semibold`    | Windows                   |
 
 Style words are `Light`, `Medium`, `Semibold`, `Bold`, `Black`, `Italic`,
-`Oblique` and `Condensed`, and they combine — `Noto Sans Condensed Bold Italic`
+`Oblique` and `Condensed`, and they combine - `Noto Sans Condensed Bold Italic`
 is valid.
 
 A family that isn't installed is quietly substituted rather than reported, so
@@ -154,8 +154,9 @@ property of the file rather than of the machine: returning to a film you were
 halfway through restores the languages you picked for it, not the ones you last
 used on something else.
 
-Note that tracks are counted from `0` here, one lower than the numbering
-`--list-tracks` prints and `--primary` takes, where `0` means no audio.
+> [!NOTE]
+> Tracks are counted from `0` here, one lower than the numbering
+> `--list-tracks` prints and `--primary` takes, where `0` means no audio.
 
 A saved position under ten seconds is treated as no position at all - stopping
 a few seconds in is a false start rather than a place you left off.

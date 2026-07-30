@@ -26,8 +26,11 @@ the environment variables needed to build. Open a new terminal afterwards so
 those take effect.
 
 GStreamer's Windows distribution bundles GTK 4 and glib alongside GStreamer, so
-it supplies every native dependency in one place. **Don't install GTK
-separately** (with gvsbuild, for instance): a second GTK brings a second copy
-of glib, and mixing one library's headers with the other's build tools fails to
-build. Everything must be an MSVC build to match Rust's MSVC toolchain, because
-MSYS2/MinGW builds use a different ABI and will not link.
+it supplies every native dependency in one place.
+
+> [!WARNING]
+> **Don't install GTK separately** (with gvsbuild, for instance). A second GTK
+> brings a second copy of glib, and mixing one library's headers with the
+> other's build tools fails to build. Everything must be an MSVC build to match
+> Rust's MSVC toolchain, because MSYS2/MinGW builds use a different ABI and
+> will not link.

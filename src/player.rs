@@ -43,11 +43,11 @@ const SCRUB_RATES: [(Duration, f64); 4] = [
 ];
 
 /// An in-progress playback: the pipeline, plus the widget its video is
-/// drawn into. Single-threaded — every GTK callback runs on the main
-/// thread — so `Rc`/`Cell` rather than `Arc`/atomics.
+/// drawn into. Single-threaded - every GTK callback runs on the main
+/// thread - so `Rc`/`Cell` rather than `Arc`/atomics.
 pub struct Playback {
     pipeline: gst::Pipeline,
-    /// How this video's position is filed — a Kodi id when Kodi launched us,
+    /// How this video's position is filed - a Kodi id when Kodi launched us,
     /// otherwise derived from the source itself.
     key: String,
     /// The path Kodi knows the item by, for reporting progress back to it.
@@ -59,7 +59,7 @@ pub struct Playback {
     /// Set when the pipeline reports end-of-stream, so teardown clears the
     /// saved resume position instead of saving one at the very end.
     reached_eos: Cell<bool>,
-    /// Guards against saving twice — teardown can be reached from both the
+    /// Guards against saving twice - teardown can be reached from both the
     /// window closing and playback ending on its own.
     finished: Cell<bool>,
     /// Dropping this removes the bus watch, so it has to outlive playback.
@@ -68,7 +68,7 @@ pub struct Playback {
     ///
     /// Repeated skips accumulate against this rather than against
     /// `query_position`, which after a flushing seek still reports the old
-    /// position for a moment — so asking the pipeline each time makes a
+    /// position for a moment - so asking the pipeline each time makes a
     /// second skip undo the first.
     seek_target: Cell<Option<gst::ClockTime>>,
     /// A flushing seek is in flight. Issuing another before the pipeline has
@@ -76,7 +76,7 @@ pub struct Playback {
     seeking: Cell<bool>,
     /// A seek arrived mid-seek and still needs performing.
     seek_queued: Cell<bool>,
-    /// Where scrubbing has travelled to, before any seek is issued.
+    /// Where scrubbing has traveled to, before any seek is issued.
     ///
     /// Holding a direction moves this and nothing else, so the timeline runs
     /// ahead while the pipeline carries on playing undisturbed. One seek is
@@ -240,7 +240,7 @@ impl Playback {
     /// Notes that a direction is being held. Moves nothing by itself.
     ///
     /// Whether this is a tap or a hold is not yet knowable, and guessing is
-    /// what made the old behaviour unpleasant: it jumped ten seconds on press
+    /// what made the old behavior unpleasant: it jumped ten seconds on press
     /// and then had to take it back. Nothing moves until either enough time
     /// passes to call it a hold, or the release arrives and calls it a tap.
     pub fn scrub_input(&self, seconds: f64) {
@@ -314,16 +314,16 @@ impl Playback {
     }
 
     /// Performs the one seek the gesture asked for: to wherever scrubbing
-    /// travelled, or one step along if it turned out to be a tap.
+    /// traveled, or one step along if it turned out to be a tap.
     pub fn commit_scrub(&self) {
         let scrubbed = self.scrubbed.replace(false);
         let direction = self.scrub_direction.replace(0.0);
         let origin = self.scrub_origin.take();
-        let travelled = self.scrub.take();
+        let traveled = self.scrub.take();
         self.scrub_started.set(None);
 
         let target = if scrubbed {
-            travelled
+            traveled
         } else {
             origin.map(|origin| self.offset(origin, STEP_SECONDS * direction))
         };
@@ -420,7 +420,7 @@ impl Playback {
 
     /// Tells Kodi where playback has reached, if Kodi launched us.
     ///
-    /// Called often — on a timer, and whenever playback pauses or stops — so
+    /// Called often - on a timer, and whenever playback pauses or stops - so
     /// that a film abandoned without closing the player cleanly still leaves
     /// Kodi's library close to right. The call itself is made on a thread and
     /// cannot block playback.

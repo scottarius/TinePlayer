@@ -81,7 +81,7 @@ jobs:
           rustup default $env:RUST_VERSION
 
       # Runs the same script the README tells people to run, so CI fails if
-      # that script is wrong — matching how the Linux job treats install.sh.
+      # that script is wrong - matching how the Linux job treats install.sh.
       #
       # The version is named explicitly because winget always serves the
       # current release. There is no equivalent on the Linux side: apt on a

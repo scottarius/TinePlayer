@@ -90,13 +90,13 @@ struct Args {
 }
 
 /// `dtsdec` (wraps libdca) produces silent output on this platform's
-/// GStreamer build — confirmed by testing the same real DTS track through
+/// GStreamer build - confirmed by testing the same real DTS track through
 /// `avdec_dca` (libav's DTS decoder) directly, which decodes it correctly.
 /// Both decode without error or warning; `dtsdec` just doesn't produce
 /// audible output. Lowering its rank makes decodebin's auto-selection skip
 /// it in favor of `avdec_dca` instead. Linux-validated as working (the
 /// original Pi testing used `dtsdec` successfully), so this is Windows-only
-/// — not changing behavior on a platform we know is fine.
+/// - not changing behavior on a platform we know is fine.
 #[cfg(target_os = "windows")]
 fn disable_broken_dtsdec() {
     if let Some(factory) = gstreamer::ElementFactory::find("dtsdec") {
@@ -128,7 +128,7 @@ fn attach_parent_console() {}
 /// GStreamer build ships no EGL support so the GL path is unavailable.
 ///
 /// Measured before suppressing it: memory and handle counts stay flat over
-/// minutes of playback, so the failed unref is releasing nothing — it's
+/// minutes of playback, so the failed unref is releasing nothing - it's
 /// noise from upstream rather than a leak.
 ///
 /// The filter is deliberately narrow: only this exact message, only from
@@ -205,7 +205,7 @@ fn main() -> std::process::ExitCode {
     // gtk4paintablesink is statically linked into this binary rather than
     // installed as a shared GStreamer plugin (it isn't packaged for Debian
     // or shipped with the GStreamer Windows installer), so it has to be
-    // registered explicitly — GStreamer's normal plugin scan won't find it.
+    // registered explicitly - GStreamer's normal plugin scan won't find it.
     gstgtk4::plugin_register_static().expect("Failed to register gtk4paintablesink");
 
     let source = args.file.as_deref().map(source::Source::parse);

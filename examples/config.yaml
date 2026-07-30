@@ -69,8 +69,8 @@ subtitle_language: ru
 # one number holds on any display.
 subtitle_size: 12
 
-# Font family and style, without a size. The generic families — Sans, Serif,
-# Monospace — resolve on any system whatever is installed. A family that is not
+# Font family and style, without a size. The generic families - Sans, Serif,
+# Monospace - resolve on any system whatever is installed. A family that is not
 # installed is quietly substituted rather than reported.
 subtitle_font: Sans Bold
 

@@ -152,7 +152,7 @@ fn system_prefers_light() -> bool {
 ///
 /// Asked over D-Bus rather than through GSettings because the portal is the
 /// cross-desktop answer, and works when GNOME's schemas are not installed at
-/// all — as on the Raspberry Pi's labwc session.
+/// all - as on the Raspberry Pi's labwc session.
 #[cfg(not(target_os = "windows"))]
 fn portal_color_scheme() -> Option<u32> {
     use gtk::gio;
