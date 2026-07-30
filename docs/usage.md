@@ -129,20 +129,21 @@ playback if required options are provided.
 
 Track numbers are those `--list-tracks` prints.
 
-| Option            | Meaning                                                                                                                                  |
-|-------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| `FILE`            | The video to play, see [Video sources](#video-sources)                                                                                   |
-| `--primary <N>`   | Audio track for the primary output. `0` for no audio there                                                                               |
-| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there                                                                             |
-| `--subtitle <S>`  | Subtitles to show, see [Choosing subtitles on the command line](#choosing-subtitles-on-the-command-line)                                 |
-| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers, then exit                                                                |
-| `--restart`       | Start video from the beginning, ignoring any saved position                                                                              |
-| `--fullscreen`    | Start fullscreen                                                                                                                         |
-| `--windowed`      | Start windowed, overriding a remembered fullscreen preference                                                                            |
-| `--external`      | Used for launching from another application, see [Integrations](integrations.md)                                                         |
-| `--kodi`          | Launched by Kodi: Sync the resume position with its library. Implies `--external`
-| `-V`, `--version` | Print the version                                                                                                                        |
-| `-h`, `--help`    | Print help                                                                                                                               |
+| Option            | Meaning                                                                                                  |
+|-------------------|----------------------------------------------------------------------------------------------------------|
+| `FILE`            | The video to play, see [Video sources](#video-sources)                                                   |
+| `--primary <N>`   | Audio track for the primary output. `0` for no audio there                                               |
+| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there                                             |
+| `--subtitle <S>`  | Subtitles to show, see [Choosing subtitles on the command line](#choosing-subtitles-on-the-command-line) |
+| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers                                           |
+| `--restart`       | Start video from the beginning, ignoring any saved position                                              |
+| `--forget`        | Forget the saved positions and track choices. Pass a FILE to limit to a single video                     |
+| `--fullscreen`    | Start fullscreen                                                                                         |
+| `--windowed`      | Start windowed, overriding a remembered fullscreen preference                                            |
+| `--external`      | Used for launching from another application, see [Integrations](integrations.md)                         |
+| `--kodi`          | Used by [Kodi Integration](integrations.md#kodi), Implies `--external`                                   |
+| `-V`, `--version` | Print the version                                                                                        |
+| `-h`, `--help`    | Print help                                                                                               |
 
 ```sh
 TinePlayer --list-tracks video.mkv

@@ -39,37 +39,46 @@ use config::Config;
     name = "TinePlayer",
     about = "Play a video with two audio tracks routed to two output devices.",
     long_about = "Play a video with two audio tracks routed to two output devices, \
-                  so two people can watch together in different languages.\n\n\
-                  Run with no arguments to pick everything in the window."
+                  so two people can watch together in different languages.",
+    // The stock layout with one addition: an opening blank line, so the text
+    // does not start hard against the command that asked for it. It has to
+    // come from `before_help`, since clap trims leading whitespace from both
+    // `long_about` and the template itself.
+    before_help = " ",
+    before_long_help = " ",
+    help_template = "{before-help}{about-with-newline}\n\
+                     {usage-heading} {usage}\n\n\
+                     {all-args}{after-help}"
 )]
 struct Args {
-    /// Video to play: a file, or a URL that GStreamer can open (`http://`,
-    /// `smb://`). Omit it to choose one in the window.
+    /// The video to play: a path, or a URL such as http:// or smb://
     file: Option<String>,
 
-    /// Audio track for the Primary output, numbered as `--list-tracks`
-    /// shows them. 0 means no audio on this output.
+    /// Audio track for the primary output. 0 for no audio there
     #[arg(long, value_name = "N")]
     primary: Option<u32>,
 
-    /// Audio track for the Secondary output, numbered as `--list-tracks`
-    /// shows them. 0 means no audio on this output.
+    /// Audio track for the secondary output. 0 for no audio there
     #[arg(long, value_name = "N")]
     secondary: Option<u32>,
 
-    /// Subtitles to show: a number as `--list-tracks` shows them, a language
-    /// code, or the name of a subtitle file beside the video. 0 means none
-    #[arg(long, value_name = "SUBTITLE")]
+    /// Subtitles to show: a track number, a language code, a subtitle file
+    /// name beside the video, or a preference name. 0 for none
+    #[arg(long, value_name = "S")]
     subtitle: Option<String>,
 
-    /// Print the file's audio tracks and subtitles with their numbers, then
-    /// exit
+    /// Print the file's audio tracks and subtitles with their numbers
     #[arg(long)]
     list_tracks: bool,
 
-    /// Start from the beginning, ignoring any saved resume position
+    /// Start video from the beginning, ignoring any saved position
     #[arg(long)]
     restart: bool,
+
+    /// Forget the saved positions and track choices. Pass a FILE to limit to
+    /// a single video
+    #[arg(long)]
+    forget: bool,
 
     /// Start fullscreen
     #[arg(long)]
@@ -79,20 +88,21 @@ struct Args {
     #[arg(long, conflicts_with = "fullscreen")]
     windowed: bool,
 
-    /// Play only the video given and nothing else: no file browser, and no
-    /// confirmation on the way out
-    ///
-    /// For launching from another application, which chose the video and is
-    /// waiting for this playback of it to finish. Implied by --kodi.
+    /// Used for launching from another application. See docs/integrations.md
+    // Something else chose the video and is waiting for this playback of it to
+    // finish, so only that video is played: no file browser, no confirmation
+    // on the way out, and it exits when the video ends. Implied by --kodi.
+    // Kept as a comment rather than help text: the documentation covers it,
+    // and two accounts of the same flag drift apart.
     #[arg(long)]
     external: bool,
 
-    /// Launched by Kodi: take the resume position from its library and hand
-    /// it back. Implies --external
-    ///
-    /// Set by the entry Kodi's playercorefactory.xml adds. It is never
-    /// inferred, because being launched by Kodi and being on a television are
-    /// separate facts.
+    /// Launched by Kodi: sync the resume position with its library. Implies
+    /// --external
+    // Set by the entry Kodi's playercorefactory.xml adds. It is never
+    // inferred, because being launched by Kodi and being on a television are
+    // separate facts - which is a reason for the flag rather than anything a
+    // user needs told, so it is not help text.
     #[arg(long)]
     kodi: bool,
 }
@@ -168,6 +178,30 @@ fn silence_upstream_unref_spam() {
     );
 }
 
+/// Drops what is remembered about a video, or about all of them.
+///
+/// Named for what a person means by it rather than for the file it edits: the
+/// position, and the tracks and subtitle chosen last time. Saying how many
+/// were forgotten matters more than it looks, since the alternative is a
+/// command that prints nothing and leaves you wondering whether it ran.
+fn forget(source: Option<&source::Source>) -> Result<String, String> {
+    let Some(source) = source else {
+        let count = config::remembered();
+        config::clear_all_resume()?;
+        return Ok(match count {
+            0 => "Nothing was remembered.".to_string(),
+            1 => "Forgot 1 video.".to_string(),
+            _ => format!("Forgot {count} videos."),
+        });
+    };
+
+    Ok(if config::forget(&source.key()) {
+        format!("Forgot {}.", source.label())
+    } else {
+        format!("Nothing was remembered about {}.", source.label())
+    })
+}
+
 fn list_tracks(source: &source::Source) -> Result<(), String> {
     let media = probe::probe_media(source)?;
 
@@ -217,6 +251,21 @@ fn main() -> std::process::ExitCode {
     gstgtk4::plugin_register_static().expect("Failed to register gtk4paintablesink");
 
     let source = args.file.as_deref().map(source::Source::parse);
+
+    // Before the checks below, so forgetting a video works whether or not it
+    // is still there to play.
+    if args.forget {
+        return match forget(source.as_ref()) {
+            Ok(said) => {
+                println!("{said}");
+                std::process::ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
 
     if args.list_tracks {
         let Some(source) = source.as_ref() else {

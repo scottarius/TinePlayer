@@ -47,7 +47,11 @@ path = "src/main.rs"
 # into the video frames themselves.
 
 [dependencies]
-clap = { version = "4.6.4", features = ["derive"] }
+# wrap_help so help text is wrapped to the real terminal width, with
+# continuation lines indented under their option. Without it clap assumes 100
+# columns and a narrower console breaks each description mid-sentence against
+# the left margin.
+clap = { version = "4.6.4", features = ["derive", "wrap_help"] }
 gilrs = "0.11"
 glib = "0.20"
 gstreamer = "0.23"

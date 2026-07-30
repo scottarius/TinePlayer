@@ -328,6 +328,23 @@ pub fn clear_position(key: &str) {
     update(key, |entry| entry.position_ns = 0);
 }
 
+/// Forgets one video outright: its position and its track choices, rather
+/// than only the position. Reports whether there was anything to forget, so a
+/// caller can tell "done" from "there was nothing there".
+pub fn forget(key: &str) -> bool {
+    let mut entries = load_all();
+    let had = entries.remove(key).is_some();
+    if had {
+        save_all(&entries);
+    }
+    had
+}
+
+/// How many videos are remembered.
+pub fn remembered() -> usize {
+    load_all().len()
+}
+
 /// Forgets every remembered position and track choice.
 pub fn clear_all_resume() -> Result<(), String> {
     let path = positions_path();
