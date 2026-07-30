@@ -752,7 +752,8 @@ impl App {
             return item.resume_ns;
         }
         let key = self.storage_key()?;
-        crate::config::load_resume(&key).and_then(|resume| resume.resume_position())
+        crate::config::load_resume(&key)
+            .and_then(|resume| resume.resume_position(self.config.borrow().resume_min_percent()))
     }
 
     /// How this video's position and track choices are filed.

@@ -17,6 +17,8 @@ edited directly. It lives in the per-user config directory:
 | Subtitle Language             | `subtitle_language`  | Unset       | Preferred subtitle language, [see list below](#languages) <br/>If unset shows no subtitles |
 | Subtitle Size                 | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's    |
 | Subtitle Font                 | `subtitle_font`      | `Sans Bold` | Font Family and style name, [see below](#subtitle-fonts)       |
+| Resume Threshold              | `resume_min_percent` | `5`         | How far in before stopping counts as somewhere to resume from, as a percentage of the running time <br/>Never less than 10 seconds |
+| Watched Threshold             | `watched_percent`    | `90`        | Past this percentage a video counts as watched, and its position is forgotten rather than saved |
 
 ## Example
 
@@ -47,6 +49,11 @@ Device names are the ones the settings menu lists, which are also what
 `primary_sink` and `secondary_sink` are matched against. They differ by
 platform: `Speakers (Realtek High Definition Audio)` on Windows looks nothing
 like the example above.
+
+The two thresholds match what media servers do: Jellyfin resumes past 5% and
+counts 90% as watched, and Plex and Kodi also treat 90% as watched. Raise
+`resume_min_percent` if you often start something, change your mind, and would
+rather it began again next time.
 
 TinePlayer writes a few keys of its own to the same file - `last_video`,
 `last_folder` and `fullscreen` - so it reopens where you left it. There is no

@@ -53,6 +53,9 @@ pub struct Playback {
     /// The path Kodi knows the item by, for reporting progress back to it.
     /// Empty when Kodi is not involved.
     kodi_file: String,
+    /// The share of a video that counts as watched, from the config, so a
+    /// position near the end is dropped rather than saved.
+    watched_percent: f64,
     picture: gtk::Picture,
     playing: Cell<bool>,
     last_toggle: Cell<Instant>,
@@ -126,6 +129,7 @@ impl Playback {
             pipeline: pipeline.clone(),
             key,
             kodi_file,
+            watched_percent: config.watched_percent(),
             picture: gtk::Picture::builder()
                 .paintable(&paintable)
                 .css_classes([VIDEO_CSS_CLASS])
@@ -461,7 +465,15 @@ impl Playback {
         } else if let Some(position) = self.pipeline.query_position::<gst::ClockTime>()
             && position.nseconds() > 0
         {
-            save_position(&self.key, position.nseconds());
+            save_position(
+                &self.key,
+                position.nseconds(),
+                self.pipeline
+                    .query_duration::<gst::ClockTime>()
+                    .map(|d| d.nseconds())
+                    .unwrap_or(0),
+                self.watched_percent,
+            );
             self.report_to_kodi();
         }
 

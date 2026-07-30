@@ -75,6 +75,19 @@ subtitle_size: 12
 subtitle_font: Sans Bold
 
 
+# --- Resuming ------------------------------------------------------------
+
+# How far into a video you have to be for stopping to count as a place to
+# resume from, as a percentage of its running time. Below this it is treated as
+# a false start. Never less than ten seconds, however short the video.
+resume_min_percent: 5
+
+# Past this percentage a video counts as watched: its position is forgotten
+# rather than saved, so it starts from the beginning next time instead of
+# dropping you back into the ending.
+watched_percent: 90
+
+
 # --- Written automatically --------------------------------------------------
 #
 # TinePlayer adds these itself so it reopens where you left off. They are listed

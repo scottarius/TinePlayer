@@ -72,6 +72,15 @@ pub struct Config {
     /// Unset means no subtitles unless chosen for the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_language: Option<String>,
+    /// How far in before stopping counts as a place to resume from, as a
+    /// share of the running time. Unset means
+    /// [`DEFAULT_RESUME_MIN_PERCENT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_min_percent: Option<f64>,
+    /// The share past which a video counts as watched, so its position is
+    /// dropped rather than saved. Unset means [`DEFAULT_WATCHED_PERCENT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watched_percent: Option<f64>,
     /// Reopened on the next run, so the menu comes back where you left it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_video: Option<PathBuf>,
@@ -103,6 +112,8 @@ impl Default for Config {
             primary_language: None,
             secondary_language: None,
             subtitle_language: None,
+            resume_min_percent: None,
+            watched_percent: None,
             last_video: None,
             fullscreen: false,
             sounds: default_sounds(),
@@ -137,6 +148,20 @@ impl Config {
         Ok(config)
     }
 
+    /// Clamped, because a share outside 0-100 has no meaning and a bad value
+    /// in the file should not make videos unresumable.
+    pub fn resume_min_percent(&self) -> f64 {
+        self.resume_min_percent
+            .unwrap_or(DEFAULT_RESUME_MIN_PERCENT)
+            .clamp(0.0, 100.0)
+    }
+
+    pub fn watched_percent(&self) -> f64 {
+        self.watched_percent
+            .unwrap_or(DEFAULT_WATCHED_PERCENT)
+            .clamp(0.0, 100.0)
+    }
+
     pub fn save(&self) -> Result<(), String> {
         let path = config_path();
         let text = serde_yaml::to_string(self).map_err(|e| e.to_string())?;
@@ -167,10 +192,22 @@ pub fn positions_path() -> PathBuf {
     app_dir(glib::user_data_dir()).join("positions.json")
 }
 
-/// Below this, a stored position is treated as no position at all. Stopping
-/// a few seconds in is a false start rather than a place you left off, and
-/// offering to resume from it is noise.
-const RESUME_THRESHOLD_NS: u64 = 10_000_000_000;
+/// How far in a video has to be before stopping counts as a place you left
+/// off, as a share of its running time.
+///
+/// Every media server does this, because a minute into a three hour film is a
+/// false start rather than progress. Jellyfin uses 5%, which is what this
+/// matches; Kodi uses a flat 180 seconds, which is harsh on anything short.
+pub const DEFAULT_RESUME_MIN_PERCENT: f64 = 5.0;
+
+/// The floor under that share, for videos short enough that 5% is seconds.
+/// Also the whole rule for an entry saved before durations were recorded.
+const RESUME_MIN_NS: u64 = 10_000_000_000;
+
+/// Past this share, a video counts as watched rather than part-way through,
+/// and its position is dropped instead of saved. Jellyfin, Plex and Kodi all
+/// use 90%, and so does what we report to Kodi - see `kodi::WATCHED_PERCENT`.
+pub const DEFAULT_WATCHED_PERCENT: f64 = 90.0;
 
 /// What is remembered about a video between runs: where you stopped, and
 /// which track was going to which output.
@@ -191,6 +228,11 @@ pub struct Resume {
     /// tracks at all, and silently overwrote the real one.
     #[serde(default)]
     pub tracks: Option<TrackChoice>,
+    /// The video's running time, so the thresholds above can be shares of it
+    /// rather than flat seconds. Zero for an entry written before this was
+    /// recorded, or a source that could not say how long it was.
+    #[serde(default)]
+    pub duration_ns: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -205,8 +247,18 @@ pub struct TrackChoice {
 
 impl Resume {
     /// Where playback should pick up, if anywhere.
-    pub fn resume_position(&self) -> Option<u64> {
-        (self.position_ns >= RESUME_THRESHOLD_NS).then_some(self.position_ns)
+    ///
+    /// Only the near-the-start rule lives here. The other end is applied when
+    /// saving: a position past [`WATCHED_PERCENT`] is never written, so an
+    /// entry that exists is one worth offering.
+    pub fn resume_position(&self, min_percent: f64) -> Option<u64> {
+        let minimum = if self.duration_ns > 0 {
+            let share = (self.duration_ns as f64 * min_percent / 100.0) as u64;
+            share.max(RESUME_MIN_NS)
+        } else {
+            RESUME_MIN_NS
+        };
+        (self.position_ns >= minimum).then_some(self.position_ns)
     }
 }
 
@@ -259,8 +311,18 @@ fn update(key: &str, edit: impl FnOnce(&mut Resume)) {
 /// The key identifies the video: a local file's path, a remote source's URI,
 /// or - better than either - an id from whatever launched us. See
 /// `Source::key` and `kodi::Item::key`.
-pub fn save_position(key: &str, position_ns: u64) {
-    update(key, |entry| entry.position_ns = position_ns);
+/// `duration_ns` may be zero when the source could not say how long it is,
+/// which only costs the percentage rules; the floor still applies.
+pub fn save_position(key: &str, position_ns: u64, duration_ns: u64, watched_percent: f64) {
+    // Watched to the end in all but name. Kodi and the media servers stop
+    // offering to resume here, and a position a few minutes from the credits
+    // is worse than none: it sends you back into the ending you just watched.
+    let finished =
+        duration_ns > 0 && position_ns as f64 >= duration_ns as f64 * watched_percent / 100.0;
+    update(key, |entry| {
+        entry.position_ns = if finished { 0 } else { position_ns };
+        entry.duration_ns = duration_ns;
+    });
 }
 
 /// Called when a file plays to the end. Only the position is forgotten: the
