@@ -142,9 +142,22 @@ impl Controls {
     }
 
     /// Any pointer movement over the video brings the strip up.
+    ///
+    /// Movement means the pointer actually moved. A motion event is not proof
+    /// of that: a pointer resting over the window still produces them, and
+    /// each one would restart the countdown, so the strip stayed up forever
+    /// with the mouse anywhere over the application. Seen on the Pi, where
+    /// they arrive steadily; not on Windows, which is why it looked
+    /// intermittent rather than constant.
     pub fn connect_motion(&self, handler: impl Fn() + 'static) {
         let motion = gtk::EventControllerMotion::new();
-        motion.connect_motion(move |_, _, _| handler());
+        let last = Cell::new((f64::NAN, f64::NAN));
+        motion.connect_motion(move |_, x, y| {
+            if last.replace((x, y)) == (x, y) {
+                return;
+            }
+            handler();
+        });
         self.root.add_controller(motion);
     }
 
