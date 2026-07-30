@@ -30,6 +30,7 @@ pub enum Action {
     PageDown,
     PlayPause,
     Fullscreen,
+    Subtitles,
 }
 
 /// 60Hz. Polling has to be fast enough that a press feels immediate, and this
@@ -103,6 +104,7 @@ fn button_action(button: Button) -> Option<Action> {
         Button::South => Some(Action::Activate),
         Button::East => Some(Action::Back),
         Button::North => Some(Action::Fullscreen),
+        Button::West => Some(Action::Subtitles),
         // Shoulder buttons jump a screenful, which is what makes a folder of
         // a hundred films navigable one press at a time.
         Button::LeftTrigger => Some(Action::PageUp),

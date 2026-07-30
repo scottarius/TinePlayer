@@ -231,7 +231,10 @@ fn build_video_branch(
         return Ok((queue, None));
     }
 
-    let overlay = make("subtitleoverlay")?;
+    let overlay = gst::ElementFactory::make("subtitleoverlay")
+        .name("suboverlay")
+        .build()
+        .map_err(|_| "Missing GStreamer element \"subtitleoverlay\". Check the install.")?;
     overlay.set_property("font-desc", font);
     // Converted again afterwards: the overlay may hand on a different format
     // from the one it was given.

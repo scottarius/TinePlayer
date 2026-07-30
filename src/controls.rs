@@ -28,6 +28,9 @@ pub struct Controls {
     elapsed: gtk::Label,
     duration: gtk::Label,
     position: gtk::Scale,
+    /// Insensitive until something tells it a subtitle track exists, since
+    /// most files reach playback with none selected.
+    subtitles: gtk::Button,
     fullscreen: gtk::Button,
     /// Set while the readout is being written, so the scale's own change
     /// signal is not mistaken for someone dragging it.
@@ -77,6 +80,16 @@ impl Controls {
         fullscreen.add_css_class("tp-transport-button");
         fullscreen.set_can_focus(false);
 
+        // A bundled image rather than a themed icon name: no subtitle glyph
+        // ships with GTK on Windows, and a missing icon draws as a
+        // broken-image box.
+        let subtitles = gtk::Button::new();
+        subtitles.set_child(Some(&crate::app::subtitles_image(scale)));
+        subtitles.add_css_class("tp-transport-button");
+        subtitles.add_css_class("tp-subtitles-button");
+        subtitles.set_can_focus(false);
+        subtitles.set_sensitive(false);
+
         let row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(16)
@@ -86,6 +99,7 @@ impl Controls {
         row.append(&elapsed);
         row.append(&position);
         row.append(&duration);
+        row.append(&subtitles);
         row.append(&fullscreen);
 
         // Slides up rather than appearing, which reads as deliberate at a
@@ -109,6 +123,7 @@ impl Controls {
             elapsed,
             duration,
             position,
+            subtitles,
             fullscreen,
             updating: Cell::new(false),
             generation: Rc::new(Cell::new(0)),
@@ -128,6 +143,22 @@ impl Controls {
 
     pub fn connect_fullscreen(&self, handler: impl Fn() + 'static) {
         self.fullscreen.connect_clicked(move |_| handler());
+    }
+
+    pub fn connect_subtitles(&self, handler: impl Fn() + 'static) {
+        self.subtitles.connect_clicked(move |_| handler());
+    }
+
+    /// Reflects what subtitles are doing: unavailable when the file has none
+    /// selected, and dimmed while they are switched off, so the button says
+    /// which state you are in rather than only offering a change.
+    pub fn set_subtitles(&self, available: bool, showing: bool) {
+        self.subtitles.set_sensitive(available);
+        if available && showing {
+            self.subtitles.add_css_class("tp-subtitles-on");
+        } else {
+            self.subtitles.remove_css_class("tp-subtitles-on");
+        }
     }
 
     /// Fires with the fraction of the file that was clicked or dragged to.
@@ -164,14 +195,37 @@ impl Controls {
     /// Double-clicking the picture toggles fullscreen, as it does in most
     /// players. Bubble phase, so a click landing on one of the controls
     /// belongs to that control and never reaches here.
-    pub fn connect_double_click(&self, handler: impl Fn() + 'static) {
+    ///
+    /// The strip is excluded by hand, because that only covers the buttons.
+    /// Its background is not a widget that handles clicks, so a double click
+    /// on the bar between the controls reaches the picture underneath and
+    /// used to toggle fullscreen: an easy thing to hit while aiming for the
+    /// scrubber, and a jarring result.
+    pub fn connect_double_click(self: &Rc<Self>, handler: impl Fn() + 'static) {
+        let controls = self.clone();
         let gesture = gtk::GestureClick::new();
-        gesture.connect_pressed(move |_, presses, _, _| {
-            if presses == 2 {
-                handler();
+        gesture.connect_pressed(move |_, presses, x, y| {
+            if presses != 2 || controls.over_strip(x, y) {
+                return;
             }
+            handler();
         });
         self.root.add_controller(gesture);
+    }
+
+    /// Whether a point, in the coordinates of the widget the video sits in,
+    /// falls on the control strip while it is up. Nothing is "on" a strip
+    /// that is hidden, so those clicks belong to the picture.
+    fn over_strip(&self, x: f64, y: f64) -> bool {
+        if !self.strip.is_child_revealed() {
+            return false;
+        }
+        let area = self.strip.allocation();
+        let (left, top) = (f64::from(area.x()), f64::from(area.y()));
+        x >= left
+            && x < left + f64::from(area.width())
+            && y >= top
+            && y < top + f64::from(area.height())
     }
 
     pub fn set_fullscreen(&self, fullscreen: bool) {

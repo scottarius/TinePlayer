@@ -420,6 +420,12 @@ impl App {
                     app.toggle_fullscreen();
                     glib::Propagation::Stop
                 }
+                // Only during playback: there is nothing to turn off from a
+                // menu, and the choosers want the letter for type-ahead.
+                gdk::Key::c | gdk::Key::C if playing => {
+                    app.toggle_subtitles();
+                    glib::Propagation::Stop
+                }
                 // Last, so it can't shadow the keys above: anything else
                 // during playback summons the timeline without claiming the
                 // key.
@@ -669,6 +675,9 @@ impl App {
             Action::PageDown => self.move_selection(PAGE_ROWS),
             Action::Back => self.go_back(),
             Action::Fullscreen => self.toggle_fullscreen(),
+            // Ignored outside playback, matching the keyboard: there is
+            // nothing to turn off from a menu.
+            Action::Subtitles => self.toggle_subtitles(),
         }
     }
 
@@ -759,6 +768,20 @@ impl App {
             return;
         }
         widget.activate();
+    }
+
+    /// Turns subtitles on or off for the playback in progress, and brings the
+    /// strip up so the change is visible: the letters dim or light, which is
+    /// the only confirmation when the moment has no subtitle to draw anyway.
+    fn toggle_subtitles(&self) {
+        let Some(playback) = self.playback.borrow().clone() else {
+            return;
+        };
+        let showing = playback.toggle_subtitles();
+        if let Some(controls) = self.controls.borrow().as_ref() {
+            controls.set_subtitles(playback.has_subtitles(), showing);
+        }
+        self.wake_controls();
     }
 
     fn stop_playback(&self) {
@@ -2424,6 +2447,11 @@ impl App {
                 }
                 {
                     let app = self.clone();
+                    controls.connect_subtitles(move || app.toggle_subtitles());
+                }
+                controls.set_subtitles(playback.has_subtitles(), playback.subtitles_showing());
+                {
+                    let app = self.clone();
                     controls.connect_double_click(move || app.toggle_fullscreen());
                 }
                 {
@@ -2692,6 +2720,22 @@ fn heading_label(text: &str) -> gtk::Label {
 /// Drawn twice in each direction, once in each theme's foreground color,
 /// because an embedded image cannot be recoloured the way a symbolic icon is.
 /// A single compromise gray read poorly against both.
+/// The subtitle mark for the control bar.
+///
+/// One white version rather than a light and a dark one: unlike the menus,
+/// the control strip draws its own dark background whatever the theme is, so
+/// there is nothing for a second version to adapt to.
+pub fn subtitles_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/subtitles.png");
+
+    let image = gtk::Image::new();
+    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
+        image.set_paintable(Some(&texture));
+    }
+    image.set_pixel_size((26.0 * scale).round() as i32);
+    image
+}
+
 pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
     const ENTER_LIGHT: &[u8] = include_bytes!("../data/fullscreen-light.png");
     const ENTER_DARK: &[u8] = include_bytes!("../data/fullscreen-dark.png");
@@ -2957,6 +3001,13 @@ fn style_css(scale: f64) -> String {
             padding: 0px {crumb_pad}px;
         }}
         .tp-transport-button:hover {{ background-color: rgba(255, 255, 255, 0.15); }}
+        /* Faded while subtitles are off and solid while they are on, so the
+           button reports the state as well as offering to change it. Opacity
+           rather than color: the mark is an image, which a color cannot
+           tint. */
+        .tp-subtitles-button {{ opacity: 0.45; }}
+        .tp-subtitles-on {{ opacity: 1; }}
+        .tp-subtitles-button:disabled {{ opacity: 0.2; }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
         /* Reads as a path rather than a row of buttons, until one takes

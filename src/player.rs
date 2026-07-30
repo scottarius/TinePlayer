@@ -500,6 +500,40 @@ impl Playback {
         self.bus_watch.borrow_mut().take();
     }
 
+    /// Whether this playback has subtitles to turn on and off at all.
+    ///
+    /// The overlay is only built when a subtitle was chosen, so its absence is
+    /// the same question as "was anything selected".
+    pub fn has_subtitles(&self) -> bool {
+        self.pipeline.by_name("suboverlay").is_some()
+    }
+
+    /// Turns subtitles on or off mid-playback, returning whether they are now
+    /// showing. Does nothing, and reports false, when there are none.
+    ///
+    /// `subtitleoverlay`'s property is `silent`, and its blurb reads "Whether
+    /// to show subtitles", which is backwards: silent means *not* drawn. It
+    /// takes effect on the next frame, so nothing is rebuilt or re-prerolled
+    /// and the picture never stutters.
+    pub fn toggle_subtitles(&self) -> bool {
+        let Some(overlay) = self.pipeline.by_name("suboverlay") else {
+            return false;
+        };
+        // Named for what the property means rather than what it is called.
+        // Flipping it makes the new state the opposite of this, which is the
+        // same value again: what was hidden is now showing.
+        let was_hidden = overlay.property::<bool>("silent");
+        overlay.set_property("silent", !was_hidden);
+        was_hidden
+    }
+
+    /// Whether subtitles are currently drawn.
+    pub fn subtitles_showing(&self) -> bool {
+        self.pipeline
+            .by_name("suboverlay")
+            .is_some_and(|overlay| !overlay.property::<bool>("silent"))
+    }
+
     /// Waits for the last report to Kodi to finish, for a caller that is about
     /// to end the process. Bounded by the socket timeout in [`crate::kodi`],
     /// and does nothing at all when Kodi is not involved.

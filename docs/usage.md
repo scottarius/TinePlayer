@@ -61,6 +61,7 @@ though everything is also mouse interactable.
 | <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback |
 | <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
 | <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
+| <kbd>C</kbd> | X / Square | Show or hide subtitles, during playback |
 
 ## Subtitles
 
