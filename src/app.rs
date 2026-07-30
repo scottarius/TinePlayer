@@ -153,6 +153,10 @@ pub struct App {
     /// of who started us, which stays true whether or not its JSON-RPC socket
     /// answers.
     kodi: bool,
+    /// Whether the error on screen ended the session: a video named on the
+    /// command line that could not be opened leaves nothing to go back to, so
+    /// its button closes the player. Every other error returns to the menu.
+    error_is_fatal: Cell<bool>,
     /// What Kodi says it is playing through us: its title, database id, resume
     /// point, and the path to report progress against. Fetched once at startup,
     /// because it cannot change while we are the player. `None` when Kodi was
@@ -232,6 +236,7 @@ impl App {
             scrub_seen: Cell::new(None),
             tick: RefCell::new(None),
             kodi,
+            error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
         });
 
@@ -291,8 +296,8 @@ impl App {
         }
 
         let unopenable = match &file {
-            Some(source) if !app.set_file(source) => Some(source.clone()),
-            _ => None,
+            Some(source) => app.set_file(source).err().map(|e| (source.clone(), e)),
+            None => None,
         };
 
         // Command-line track choices go straight to playback, but only when
@@ -324,7 +329,7 @@ impl App {
             // Nothing to choose from if the video could not be read, so the
             // reason is shown instead of an empty menu.
             _ => match &unopenable {
-                Some(source) => app.show_source_error(source),
+                Some((source, error)) => app.show_source_error(source, error, true),
                 None => app.show_menu(),
             },
         }
@@ -415,10 +420,9 @@ impl App {
                 };
                 app.stop_playback();
                 let source = Source::File(path);
-                if app.set_file(&source) {
-                    app.show_menu();
-                } else {
-                    app.show_source_error(&source);
+                match app.set_file(&source) {
+                    Ok(()) => app.show_menu(),
+                    Err(e) => app.show_source_error(&source, &e, false),
                 }
                 true
             });
@@ -442,9 +446,9 @@ impl App {
             }
             Screen::Chooser => self.leave_chooser(),
             Screen::Confirm => self.show_settings(),
-            // Under Kodi an error is the end of the road: it chose the video,
-            // so there is nothing to go back to and pick instead.
-            Screen::Error if self.kodi => self.window.close(),
+            // Nothing to go back to when the video we were started for could
+            // not be opened.
+            Screen::Error if self.error_is_fatal.get() => self.window.close(),
             Screen::Browser | Screen::Settings | Screen::Error | Screen::ConfirmQuit => {
                 self.show_menu()
             }
@@ -1587,10 +1591,9 @@ impl App {
                 // way.
                 Some(path) => {
                     let source = Source::File(path);
-                    if app.set_file(&source) {
-                        app.show_menu();
-                    } else {
-                        app.show_source_error(&source);
+                    match app.set_file(&source) {
+                        Ok(()) => app.show_menu(),
+                        Err(e) => app.show_source_error(&source, &e, false),
                     }
                 }
                 None => match folder.as_deref().filter(|_| from_browser) {
@@ -1607,7 +1610,7 @@ impl App {
     /// A file played before comes back with the tracks it was played with;
     /// otherwise the first track goes to the primary output and a different
     /// one to the secondary, which is the whole point of the application.
-    fn set_file(self: &Rc<Self>, source: &Source) -> bool {
+    fn set_file(self: &Rc<Self>, source: &Source) -> Result<(), String> {
         let media = match crate::probe::probe_media(source) {
             Ok(media) => media,
             Err(e) => {
@@ -1618,7 +1621,7 @@ impl App {
                 *self.secondary_track.borrow_mut() = None;
                 *self.subtitle.borrow_mut() = None;
                 *self.file.borrow_mut() = None;
-                return false;
+                return Err(e);
             }
         };
         // Kodi's one video player slot is necessarily this playback while it
@@ -1714,44 +1717,41 @@ impl App {
             config.last_video = Some(path.to_path_buf());
             let _ = config.save();
         }
-        true
+        Ok(())
     }
 
-    /// Says, on screen, that a video could not be opened.
+    /// Says, on screen, why a video could not be opened.
     ///
     /// Worth a screen rather than a line on stderr: when something else
     /// launched the player there is no terminal to read, and the window
     /// closing again immediately is all anyone sees. That is exactly the case
-    /// most likely to fail, because a media center can hand over a path to a
-    /// machine other than this one.
-    fn show_source_error(self: &Rc<Self>, source: &Source) {
+    /// most likely to fail, because a media center can hand over a path or a
+    /// URL that means nothing on this machine.
+    ///
+    /// The message GStreamer gave is shown as it stands. It is more specific
+    /// than anything that could be inferred from the kind of source - an
+    /// unmounted share, a refused connection and a missing file all arrive
+    /// here, and guessing between them would sometimes be wrong.
+    fn show_source_error(self: &Rc<Self>, source: &Source, error: &str, fatal: bool) {
+        // Percent escaping is how a URI carries a space; it is not how anyone
+        // wants to read a path. Decoded for display only - what gets opened is
+        // still the escaped form. Anything that is not valid escaping is left
+        // alone rather than mangled.
+        let readable = |text: &str| {
+            glib::Uri::unescape_string(text, None)
+                .map(|decoded| decoded.to_string())
+                .unwrap_or_else(|| text.to_string())
+        };
+
         let mut message = format!(
-            "Couldn't open:
-{}
-
-",
-            source.uri()
+            "Couldn't open:\n{}\n\n{}",
+            readable(&source.uri()),
+            readable(error)
         );
-        match source {
-            Source::File(_) => message.push_str(
-                "The file isn't there, or this computer can't reach it.
-
-                 If a media center started playback, its media may be on                  another machine, and the path it handed over has to be one                  this computer can reach too.",
-            ),
-            Source::Remote(_) => message.push_str(
-                "The server didn't answer, or sent something that couldn't be                  played.
-
-                 If a media center started playback, check that its server is                  running and that it is set to play the original file rather                  than converting it.",
-            ),
-        }
         if self.kodi {
-            message.push_str(
-                "
-
-See docs/integrations.md for setting up Kodi.",
-            );
+            message.push_str("\n\nSee docs/integrations.md for setting up Kodi.");
         }
-        self.show_error(&message);
+        self.show_error(&message, fatal);
     }
 
     // --- Browsing ------------------------------------------------------
@@ -1830,10 +1830,9 @@ See docs/integrations.md for setting up Kodi.",
                     Some(path) if path.is_dir() => app.show_browser(path, None),
                     Some(path) => {
                         let source = Source::File(path.to_path_buf());
-                        if app.set_file(&source) {
-                            app.show_menu();
-                        } else {
-                            app.show_source_error(&source);
+                        match app.set_file(&source) {
+                            Ok(()) => app.show_menu(),
+                            Err(e) => app.show_source_error(&source, &e, false),
                         }
                     }
                     // Up: to the parent, or to the drive list when there is
@@ -2358,7 +2357,7 @@ See docs/integrations.md for setting up Kodi.",
                 self.set_nav(None, &[], &[]);
                 *self.screen.borrow_mut() = Screen::Playing;
             }
-            Err(e) => self.show_error(&format!("Couldn't play that file.\n\n{e}")),
+            Err(e) => self.show_error(&format!("Couldn't play that file.\n\n{e}"), false),
         }
     }
 
@@ -2419,33 +2418,42 @@ See docs/integrations.md for setting up Kodi.",
         cancel.grab_focus();
     }
 
-    fn show_error(self: &Rc<Self>, message: &str) {
+    fn show_error(self: &Rc<Self>, message: &str, fatal: bool) {
+        self.error_is_fatal.set(fatal);
+
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(32)
-            .halign(gtk::Align::Center)
+            .halign(gtk::Align::Fill)
             .valign(gtk::Align::Center)
+            .margin_start(48)
+            .margin_end(48)
             .build();
 
         page.append(&heading_label("Something went wrong"));
 
+        // Given the window's width rather than a fixed column: these messages
+        // carry paths and URLs, which are long, and wrapping them into a
+        // narrow strip makes them harder to read than they need to be.
         let label = gtk::Label::new(Some(message));
         label.add_css_class("tp-hint");
         label.set_wrap(true);
+        label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         label.set_justify(gtk::Justification::Center);
-        label.set_max_width_chars(48);
+        label.set_hexpand(true);
         page.append(&label);
 
-        // Under Kodi there is no menu worth returning to - it chose the video
-        // and is waiting for this process to end - so the way out is out.
-        let back = gtk::Button::with_label(if self.kodi { "Close" } else { "Back" });
+        // Only an unopenable video named on the command line ends the session:
+        // it was the whole reason the player was started, and under a launcher
+        // there is no menu behind it worth returning to.
+        let back = gtk::Button::with_label(if fatal { "Close" } else { "Back" });
         back.add_css_class("tp-button");
         back.set_halign(gtk::Align::Center);
         page.append(&back);
 
         let app = self.clone();
         back.connect_clicked(move |_| {
-            if app.kodi {
+            if app.error_is_fatal.get() {
                 app.window.close();
             } else {
                 app.show_menu();
