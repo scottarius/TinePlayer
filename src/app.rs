@@ -191,6 +191,7 @@ impl App {
         file: Option<Source>,
         preset: Option<Preset>,
         launch: Launch,
+        config_problem: Option<String>,
     ) {
         let Launch {
             restart,
@@ -374,9 +375,16 @@ impl App {
             }
             // Nothing to choose from if the video could not be read, so the
             // reason is shown instead of an empty menu.
-            _ => match &unopenable {
-                Some((source, error)) => app.show_source_error(source, error, true),
-                None => app.show_menu(),
+            //
+            // The video comes first when both went wrong: it is what someone
+            // asked for, and settings that failed to load can be seen for
+            // themselves in the menu behind.
+            _ => match (&unopenable, &config_problem) {
+                (Some((source, error)), _) => app.show_source_error(source, error, true),
+                // Not fatal: Back lands in the menu, which is where the
+                // settings would be put right.
+                (None, Some(problem)) => app.show_error(problem, false),
+                (None, None) => app.show_menu(),
             },
         }
 

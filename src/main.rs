@@ -299,10 +299,15 @@ fn main() -> std::process::ExitCode {
         eprintln!("File not found: {}", source.label());
     }
 
-    // Loading is allowed to fail: an unconfigured install just opens the
-    // menu with its outputs unset, rather than refusing to launch. Output
-    // devices are a menu row, so there's no separate setup step to reach.
-    let config = Config::load().unwrap_or_default();
+    // Never refuses to launch: an unconfigured install just opens the menu
+    // with its outputs unset, and one whose settings could not be read opens
+    // on defaults and says so. Output devices are a menu row, so there is no
+    // separate setup step to reach, and refusing would put the only place to
+    // fix it out of reach.
+    let (config, config_problem) = Config::load();
+    if let Some(problem) = config_problem.as_deref() {
+        eprintln!("{problem}");
+    }
 
     // Set before GTK initializes: it reads these to find the compositor,
     // and a process launched over SSH or spawned by another application
@@ -356,6 +361,7 @@ fn main() -> std::process::ExitCode {
                     external,
                     kodi,
                 },
+                config_problem.clone(),
             );
         });
     }

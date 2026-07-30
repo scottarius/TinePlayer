@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -125,24 +125,57 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn load() -> Result<Config, String> {
+    /// Reads the config, and says so when there was one it could not read.
+    ///
+    /// Never fails: an unreadable config leaves the application running on
+    /// defaults rather than refusing to start, since the settings menu is the
+    /// only place to put it right and refusing would put that out of reach.
+    /// The returned message is for telling the user, and is `None` both when
+    /// the file loaded and when there was no file at all - a first run is not
+    /// a problem to report.
+    pub fn load() -> (Config, Option<String>) {
         let path = config_path();
         if !path.exists() {
-            return Err(format!("No config found at {}.", path.display()));
+            return (Config::default(), None);
         }
 
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-        let config: Config = serde_yaml::from_str(&text)
-            .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) => {
+                return (
+                    Config::default(),
+                    Some(format!("Couldn't read {}.\n\n{e}", path.display())),
+                );
+            }
+        };
 
-        // Only primary_sink is required - secondary_sink is optional (a
-        // single-output setup is valid), so it's not validated here.
-        if config.primary_sink.as_deref().unwrap_or("").is_empty() {
-            return Err(format!("Missing 'primary_sink' in {}.", path.display()));
+        match serde_yaml::from_str(&text) {
+            // An unset output device is not a broken file. It is what an
+            // install that has not been through the menu yet looks like, and
+            // the menu shows "Not set" for it. Treating it as a failure threw
+            // away every other setting in the file along with it: languages,
+            // scale, subtitle font, all of it.
+            Ok(config) => (config, None),
+            Err(e) => {
+                // Saving anything would overwrite a file nobody has read yet,
+                // and the typo in it is the one thing that would explain what
+                // happened. Copied aside first, so it survives.
+                let kept = Self::preserve_unreadable(&path);
+                let mut message = format!(
+                    "Couldn't read your settings from {}.\n\n{e}\n\nTinePlayer has started with default settings.",
+                    path.display()
+                );
+                match kept {
+                    Ok(Some(backup)) => message.push_str(&format!(
+                        "\n\nThe file has been kept as {}.",
+                        backup.display()
+                    )),
+                    Ok(None) => {}
+                    Err(e) => message.push_str(&format!("\n\nIt could not be backed up: {e}")),
+                }
+                (Config::default(), Some(message))
+            }
         }
-
-        Ok(config)
     }
 
     /// Clamped, because a share outside 0-100 has no meaning and a bad value
@@ -157,6 +190,20 @@ impl Config {
         self.watched_percent
             .unwrap_or(DEFAULT_WATCHED_PERCENT)
             .clamp(0.0, 100.0)
+    }
+
+    /// Keeps a copy of a config that could not be parsed, before anything
+    /// saves over it. Returns where it went, or `None` if a copy was already
+    /// kept from an earlier run: the first one is the interesting one, and
+    /// overwriting it with a later copy of the same broken file gains
+    /// nothing.
+    fn preserve_unreadable(path: &Path) -> Result<Option<PathBuf>, String> {
+        let backup = path.with_extension("yaml.invalid");
+        if backup.exists() {
+            return Ok(None);
+        }
+        std::fs::copy(path, &backup).map_err(|e| e.to_string())?;
+        Ok(Some(backup))
     }
 
     pub fn save(&self) -> Result<(), String> {
