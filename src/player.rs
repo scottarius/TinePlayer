@@ -221,9 +221,16 @@ impl Playback {
         // up from depends on who launched us: under Kodi it is Kodi's library
         // that decides, not our own saved position.
         if let Some(ns) = resume_ns.filter(|ns| *ns > 0) {
+            // ACCURATE rather than KEY_UNIT: the latter lands on a keyframe,
+            // and with no snap direction that means the keyframe *before* the
+            // target. Keyframes are commonly several seconds apart, so
+            // resuming a little way into a video snapped back to the one at
+            // zero and started it over. Accurate seeking decodes forward from
+            // that keyframe to the exact position instead, which costs a
+            // moment once at startup and lands where the viewer actually was.
             pipeline
                 .seek_simple(
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
                     gst::ClockTime::from_nseconds(ns),
                 )
                 .map_err(|e| e.to_string())?;
@@ -320,15 +327,46 @@ impl Playback {
         gst::ClockTime::from_nseconds(target)
     }
 
-    /// Seeks to an absolute point, for the scrubber. Goes through the same
-    /// queue as everything else, so dragging cannot pile seeks onto a
-    /// pipeline still servicing the last one.
-    pub fn seek_to(&self, target: gst::ClockTime) {
+    /// Holds the picture still while the scrubber is being dragged, and lets
+    /// it go afterwards.
+    ///
+    /// Deliberately not `toggle_pause`: `playing` is left alone, so the
+    /// transport button keeps showing what playback will do when the drag
+    /// ends, and letting go resumes only if it was running to begin with.
+    /// Dragging a playhead while the film carries on underneath it is a fight
+    /// between the pointer and the clock.
+    pub fn hold_for_scrub(&self) {
+        let _ = self.pipeline.set_state(gst::State::Paused);
+    }
+
+    pub fn release_from_scrub(&self) {
+        if self.playing.get() {
+            let _ = self.pipeline.set_state(gst::State::Playing);
+        }
+    }
+
+    /// Notes where the scrubber has been dragged to, without moving the
+    /// pipeline yet.
+    ///
+    /// Separated from the seek itself so a drag can report where it is going
+    /// immediately while the expensive part waits for the pointer to settle.
+    /// The readout asks [`Self::position`], which prefers this target, so the
+    /// playhead follows the pointer instead of being dragged back to where
+    /// playback still is.
+    pub fn aim_at(&self, target: gst::ClockTime) {
         self.scrub.set(None);
         self.scrub_started.set(None);
         self.scrubbed.set(false);
         self.seek_target.set(Some(target));
+    }
 
+    /// Performs whatever [`Self::aim_at`] last recorded. Goes through the same
+    /// queue as everything else, so a drag cannot pile seeks onto a pipeline
+    /// still servicing the last one.
+    pub fn commit_seek(&self) {
+        if self.seek_target.get().is_none() {
+            return;
+        }
         if self.seeking.get() {
             self.seek_queued.set(true);
         } else {
@@ -367,9 +405,17 @@ impl Playback {
             return;
         };
 
-        // KEY_UNIT rather than ACCURATE: seeking to the nearest keyframe is
-        // near-instant, where an exact seek has to decode forward from one
-        // and stalls noticeably on a Pi.
+        // ACCURATE rather than KEY_UNIT. Landing on a keyframe is cheaper, but
+        // it lands on the keyframe *before* the target, so the playhead settles
+        // behind where it was sent - every time. How far behind depends on the
+        // encode: barely visible with keyframes two seconds apart, glaring with
+        // eight. SNAP_NEAREST was tried first and only halves it, because the
+        // nearest keyframe is still not the place that was asked for.
+        //
+        // The cost is decoding forward from that keyframe, which is why this
+        // was avoided originally. It is paid once per gesture rather than per
+        // press: holding a direction moves the target alone, and a single seek
+        // is issued when it settles.
         // Restarting each audio sink around the seek, which is a workaround
         // rather than a cure.
         //
@@ -394,7 +440,7 @@ impl Playback {
 
         let result = self
             .pipeline
-            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT, target);
+            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target);
 
         if cfg!(target_os = "linux") {
             for role in ["primary", "secondary"] {

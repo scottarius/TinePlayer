@@ -183,6 +183,16 @@ pub struct App {
     /// because it cannot change while we are the player. `None` when Kodi was
     /// not involved or did not answer, which is not an error.
     kodi_item: RefCell<Option<crate::kodi::Item>>,
+    /// Where playback had reached when it was last left, and the video it
+    /// belongs to. Offered as a resume point regardless of how far in it was,
+    /// unlike a position read back from disk.
+    ///
+    /// The saved-position rules exist to answer "were you part way through
+    /// this, days ago" - a minute into a long film is a false start rather
+    /// than progress. Within one session that question is already answered:
+    /// you were watching it a moment ago. Backing out to change a setting and
+    /// losing your place is the exact annoyance those rules guard against.
+    session_resume: RefCell<Option<(String, u64)>>,
     /// The screen a modal was opened from, so backing out of one returns
     /// there. Reached by shortcut as well as by row, so it cannot be assumed
     /// to be the step that offers them.
@@ -268,6 +278,7 @@ impl App {
             external,
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
+            session_resume: RefCell::new(None),
             origin: Cell::new(Screen::Menu),
         });
 
@@ -538,10 +549,7 @@ impl App {
         // and holding the read borrow across them panics.
         let screen = *self.screen.borrow();
         match screen {
-            Screen::Playing => {
-                self.stop_playback();
-                self.show_menu();
-            }
+            Screen::Playing => self.leave_playback(),
             Screen::Chooser => self.leave_chooser(),
             Screen::Confirm => self.show_settings(),
             // Nothing to go back to when the video we were started for could
@@ -556,15 +564,19 @@ impl App {
         }
     }
 
-    /// Refreshes the controls readout twice a second: often enough that the
-    /// clock never looks stuck, rare enough to be free.
+    /// Refreshes the controls readout ten times a second.
+    ///
+    /// Fast enough that the playhead slides rather than stepping: at twice a
+    /// second the jumps were plainly visible against a timeline the width of
+    /// the screen. It costs two pipeline queries a tick, which is nothing
+    /// next to decoding video.
     fn start_tick(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         // Ticks since Kodi was last told where playback had reached. Counted
         // here rather than given a timer of its own so that it stops when
         // playback does, without anything extra to tear down.
         let mut since_report = 0u32;
-        let source = glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             let Some(app) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
@@ -578,7 +590,7 @@ impl App {
                     since_report += 1;
                     // Every 30 seconds, so that a player killed outright still
                     // leaves Kodi's library close to where you actually got to.
-                    if since_report >= 60 {
+                    if since_report >= 300 {
                         since_report = 0;
                         playback.report_to_kodi();
                     }
@@ -844,6 +856,26 @@ impl App {
         self.finish_playback(false);
     }
 
+    /// Leaves playback for the menu, remembering where it had reached.
+    ///
+    /// What Escape, the stop button and the settings button all do, so that
+    /// stepping out to change something and coming back is one motion however
+    /// it was asked for.
+    fn leave_playback(self: &Rc<Self>) {
+        let position = self
+            .playback
+            .borrow()
+            .as_ref()
+            .and_then(|playback| playback.position())
+            .map(|position| position.nseconds())
+            .filter(|position| *position > 0);
+        if let Some((key, position)) = self.storage_key().zip(position) {
+            *self.session_resume.borrow_mut() = Some((key, position));
+        }
+        self.stop_playback();
+        self.show_menu();
+    }
+
     /// Tears playback down, saving or clearing the resume position as it goes.
     ///
     /// `wait_for_kodi` holds on until the last progress report has actually
@@ -878,10 +910,18 @@ impl App {
     /// The title comes from the same call, so it is refreshed here rather
     /// than costing a second round trip.
     fn resume_position(&self) -> Option<u64> {
+        let key = self.storage_key()?;
+        // Ahead of everything, including Kodi's library: this is where the
+        // viewer actually was, seconds ago, and no stored answer is better
+        // informed than that.
+        if let Some((remembered, position)) = self.session_resume.borrow().as_ref()
+            && *remembered == key
+        {
+            return Some(*position);
+        }
         if let Some(item) = self.kodi_item.borrow().as_ref() {
             return item.resume_ns;
         }
-        let key = self.storage_key()?;
         crate::config::load_resume(&key)
             .and_then(|resume| resume.resume_position(self.config.borrow().resume_min_percent()))
     }
@@ -2938,7 +2978,119 @@ impl App {
 
     // --- Playback ------------------------------------------------------
 
+    /// Shows the black video surface, then starts playback a frame later.
+    ///
+    /// Building the pipeline and seeking to a resume position both happen on
+    /// this thread, so nothing repaints until they finish. Swapping the window
+    /// first and letting one frame through means the menu disappears the
+    /// instant Play is pressed, and the wait happens against black - which is
+    /// what a video starting looks like anyway. Accurate seeking made this
+    /// worth doing: it decodes forward to the exact position, and on a long
+    /// film that is visible.
     fn start_playback(self: &Rc<Self>, restart: bool) {
+        if self.file.borrow().is_none() {
+            return;
+        }
+
+        let waiting = gtk::Box::builder()
+            .css_classes([crate::player::VIDEO_CSS_CLASS])
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        self.window.set_child(Some(&waiting));
+
+        // A timeout rather than an idle callback: idle can run before the
+        // frame it was queued behind has actually been drawn, which puts the
+        // block back where it started.
+        let app = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(16), move || {
+            app.begin_playback(restart);
+        });
+    }
+
+    /// Swaps the black surface for the video once a frame from the resume
+    /// point has actually been drawn, or after a moment if none ever is.
+    ///
+    /// Waiting on the reported position is not enough. A flushing seek updates
+    /// the pipeline's segment before the sink has rendered anything, so
+    /// position says "arrived" while the picture on screen is still the
+    /// opening frame from the preroll - which is exactly the flash this exists
+    /// to prevent. The paintable tells us when a frame is genuinely there.
+    ///
+    /// Not driven by the pipeline's asynchronous-done message either: that
+    /// fires for the preroll as well, so acting on it would reveal the picture
+    /// at precisely the wrong moment.
+    fn reveal_when_resumed(
+        self: &Rc<Self>,
+        widget: gtk::Overlay,
+        paintable: Option<gdk::Paintable>,
+        target: u64,
+    ) {
+        // Well inside a keyframe interval, and far enough from the opening
+        // frame that the two cannot be mistaken for each other.
+        const CLOSE_ENOUGH: u64 = 500_000_000;
+
+        let reveal = {
+            let app = self.clone();
+            let widget = widget.clone();
+            move || {
+                // Playback may have been left while waiting, in which case
+                // whatever replaced it should stay.
+                if *app.screen.borrow() == Screen::Playing {
+                    app.window.set_child(Some(&widget));
+                }
+            }
+        };
+
+        let Some(paintable) = paintable else {
+            reveal();
+            return;
+        };
+
+        let done = Rc::new(Cell::new(false));
+        let handler = Rc::new(RefCell::new(None));
+        {
+            let app = self.clone();
+            let reveal = reveal.clone();
+            let done = done.clone();
+            // Its own handle, so the outer one survives to be stored below.
+            let registered = handler.clone();
+            let id = paintable.connect_invalidate_contents(move |paintable| {
+                if done.get() {
+                    return;
+                }
+                let arrived = app
+                    .playback
+                    .borrow()
+                    .as_ref()
+                    .and_then(|playback| playback.position())
+                    .is_some_and(|position| position.nseconds() + CLOSE_ENOUGH >= target);
+                if !arrived {
+                    return;
+                }
+                done.set(true);
+                if let Some(id) = registered.borrow_mut().take() {
+                    paintable.disconnect(id);
+                }
+                reveal();
+            });
+            *handler.borrow_mut() = Some(id);
+        }
+
+        // A seek that fails, or a source that never produces another frame,
+        // would otherwise leave a black window and nothing to explain it.
+        glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
+            if done.replace(true) {
+                return;
+            }
+            if let Some(id) = handler.borrow_mut().take() {
+                paintable.disconnect(id);
+            }
+            reveal();
+        });
+    }
+
+    fn begin_playback(self: &Rc<Self>, restart: bool) {
         let Some(path) = self.file.borrow().clone() else {
             return;
         };
@@ -2972,15 +3124,18 @@ impl App {
             app.show_menu();
         };
 
+        // "Restart" means start from the beginning whoever is asking, so it
+        // beats both our saved position and Kodi's. Bound rather than passed
+        // inline because the reveal below waits for playback to reach it.
+        let resume = (!restart).then(|| self.resume_position()).flatten();
+
         let result = Playback::start(
             &path,
             primary,
             secondary,
             subtitle.as_ref(),
             &self.config.borrow(),
-            // "Restart" means start from the beginning whoever is asking, so
-            // it beats both our saved position and Kodi's.
-            (!restart).then(|| self.resume_position()).flatten(),
+            resume,
             self.storage_key().unwrap_or_default(),
             // Kodi's own path for the item, which is what it accepts progress
             // against. Empty when Kodi is not involved, which turns reporting
@@ -3018,7 +3173,24 @@ impl App {
                     let app = self.clone();
                     controls.connect_subtitles(move || app.toggle_subtitles());
                 }
-                controls.set_subtitles(playback.has_subtitles(), playback.subtitles_showing());
+                {
+                    // Under a launcher there is no menu worth returning to:
+                    // something else chose this video and is waiting for the
+                    // playback to end, which stopping is a way of saying.
+                    let app = self.clone();
+                    controls.connect_stop(move || {
+                        if app.external {
+                            app.finish_playback(true);
+                            app.window.close();
+                        } else {
+                            app.leave_playback();
+                        }
+                    });
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_settings(move || app.leave_playback());
+                }
                 {
                     let app = self.clone();
                     controls.connect_double_click(move || app.toggle_fullscreen());
@@ -3028,17 +3200,99 @@ impl App {
                     controls.connect_motion(move || app.wake_controls());
                 }
                 {
+                    // Dragging emits a value for every pointer movement, and
+                    // seeking on each one asks the pipeline to decode to a
+                    // position that is already out of date - which is what
+                    // made dragging unusable on a Pi. Only the latest target
+                    // is kept, and one timer does the work.
+                    //
+                    // That timer also decides when the drag is over, by asking
+                    // whether the pointer button is still down. A release
+                    // event is no use here: the scale claims the button
+                    // sequence for its own dragging, and a claimed sequence
+                    // stops reaching anything else, in any phase.
                     let app = self.clone();
+                    let pending: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
+                    let running = Rc::new(Cell::new(false));
+                    let scrubbing = Rc::new(Cell::new(false));
+
+                    // The end of a drag, taken from the raw event stream. Not
+                    // a gesture: GtkScale claims the button sequence while it
+                    // drags, and a claimed sequence never reaches another
+                    // gesture in any phase - watching for a release that way
+                    // saw the press and nothing after it. Asking the pointer
+                    // for its button state instead goes stale as soon as it
+                    // stops moving. A legacy controller is not a gesture, so
+                    // nothing can claim the event away from it.
+                    {
+                        let app = self.clone();
+                        let pending = pending.clone();
+                        let scrubbing = scrubbing.clone();
+                        let watcher = gtk::EventControllerLegacy::new();
+                        watcher.set_propagation_phase(gtk::PropagationPhase::Capture);
+                        watcher.connect_event(move |_, event| {
+                            if event.event_type() != gdk::EventType::ButtonRelease
+                                || !scrubbing.replace(false)
+                            {
+                                return glib::Propagation::Proceed;
+                            }
+                            if let Some(playback) = app.playback.borrow().as_ref() {
+                                if let Some(target) = pending.take() {
+                                    playback.aim_at(gstreamer::ClockTime::from_nseconds(target));
+                                    playback.commit_seek();
+                                }
+                                playback.release_from_scrub();
+                            }
+                            glib::Propagation::Proceed
+                        });
+                        self.window.add_controller(watcher);
+                    }
                     controls.connect_seek(move |fraction| {
                         let playback = app.playback.borrow().clone();
                         let Some(playback) = playback else { return };
                         let Some(duration) = playback.duration() else {
                             return;
                         };
-                        playback.seek_to(gstreamer::ClockTime::from_nseconds(
-                            (duration.nseconds() as f64 * fraction) as u64,
-                        ));
+
+                        let target = (duration.nseconds() as f64 * fraction) as u64;
+                        // Aimed at straight away, so the readout follows the
+                        // pointer rather than being pulled back to where
+                        // playback still is by the next tick.
+                        playback.aim_at(gstreamer::ClockTime::from_nseconds(target));
+                        pending.set(Some(target));
                         app.wake_controls();
+
+                        scrubbing.set(true);
+                        if running.replace(true) {
+                            return;
+                        }
+                        // Held still while the drag lasts, so the picture stays
+                        // where the pointer puts it instead of running on
+                        // underneath it.
+                        playback.hold_for_scrub();
+
+                        let app = app.clone();
+                        let pending = pending.clone();
+                        let running = running.clone();
+                        let scrubbing = scrubbing.clone();
+                        glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+                            let playback = app.playback.borrow().clone();
+                            let Some(playback) = playback else {
+                                running.set(false);
+                                return glib::ControlFlow::Break;
+                            };
+                            if let Some(target) = pending.take() {
+                                playback.aim_at(gstreamer::ClockTime::from_nseconds(target));
+                                playback.commit_seek();
+                            }
+                            if scrubbing.get() {
+                                return glib::ControlFlow::Continue;
+                            }
+                            // Releasing has already committed the last target
+                            // and let playback go.
+                            running.set(false);
+                            glib::ControlFlow::Break
+                        });
                     });
                 }
                 {
@@ -3052,14 +3306,29 @@ impl App {
                         }
                     });
                 }
-                self.window.set_child(Some(controls.widget()));
+                controls.set_subtitles(playback.has_subtitles(), playback.subtitles_showing());
                 controls.update(&playback);
                 controls.flash(false);
+                let widget = controls.widget().clone();
+                // Taken before the playback is moved into its cell, since the
+                // reveal below watches it for the first frame that lands.
+                let paintable = playback.widget().paintable();
                 *self.controls.borrow_mut() = Some(controls);
                 self.start_tick();
                 self.window
                     .set_title(Some(&self.file_label().unwrap_or_default()));
                 *self.playback.borrow_mut() = Some(playback);
+
+                // Held back until playback has actually reached the resume
+                // point. The pipeline prerolls before the seek completes, so
+                // revealing it straight away shows the opening frame and then
+                // jumps - which reads as a glitch rather than as resuming.
+                // Everything above has already happened; only what is on
+                // screen waits.
+                match resume {
+                    Some(target) => self.reveal_when_resumed(widget, paintable, target),
+                    None => self.window.set_child(Some(&widget)),
+                }
                 // Nothing to move a selection through here.
                 self.set_nav(None, &[], &[]);
                 *self.screen.borrow_mut() = Screen::Playing;
@@ -3446,6 +3715,21 @@ fn chooser_row(text: &str) -> gtk::Label {
 fn suppress_error_bell() {
     if let Some(settings) = gtk::Settings::default() {
         settings.set_gtk_error_bell(false);
+        // Clicking the timeline jumps to that point. Left to the platform
+        // default this differs by system: on macOS a click on the trough
+        // steps toward the pointer instead of going there, which reads as a
+        // seek that ignored where you clicked.
+        settings.set_gtk_primary_button_warps_slider(true);
+        // Holding the timeline still for a moment otherwise puts GtkRange into
+        // its fine-adjustment mode: the trough grows and the slider starts
+        // moving a fraction of the distance the pointer does. That is a useful
+        // affordance for choosing an exact value in a settings dialog, and a
+        // baffling one on a video timeline, where it looks like the playhead
+        // has come unstuck from the mouse. Nothing here wants a long press, so
+        // the threshold is put beyond reach rather than the behavior fought.
+        // An hour, not u32::MAX: the property has a range and refuses
+        // anything past it, which panics on the way up.
+        settings.set_gtk_long_press_time(60 * 60 * 1000);
     }
 }
 

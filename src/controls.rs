@@ -25,6 +25,8 @@ pub struct Controls {
     strip: gtk::Revealer,
     icon: gtk::Image,
     play: gtk::Button,
+    stop: gtk::Button,
+    settings: gtk::Button,
     elapsed: gtk::Label,
     duration: gtk::Label,
     position: gtk::Scale,
@@ -51,12 +53,24 @@ pub struct Controls {
 
 impl Controls {
     pub fn new(video: &gtk::Picture, scale: f64, dark: bool, fullscreen_now: bool) -> Rc<Self> {
-        let icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
+        // Pause, because playback begins playing. The readout corrects this
+        // on its first tick anyway, but half a second of the wrong icon is
+        // half a second of it looking stopped.
+        let icon = gtk::Image::from_icon_name("media-playback-pause-symbolic");
         icon.add_css_class("tp-transport");
         let play = gtk::Button::new();
         play.set_child(Some(&icon));
         play.add_css_class("tp-transport-button");
         play.set_can_focus(false);
+
+        // Beside play, because they are the same kind of thing: what playback
+        // is doing right now.
+        let stop_icon = gtk::Image::from_icon_name("media-playback-stop-symbolic");
+        stop_icon.add_css_class("tp-transport");
+        let stop = gtk::Button::new();
+        stop.set_child(Some(&stop_icon));
+        stop.add_css_class("tp-transport-button");
+        stop.set_can_focus(false);
 
         let elapsed = gtk::Label::new(Some("0:00"));
         elapsed.add_css_class("tp-time");
@@ -90,16 +104,28 @@ impl Controls {
         subtitles.set_can_focus(false);
         subtitles.set_sensitive(false);
 
+        // Away from the transport controls, beside the other things that are
+        // not about what playback is doing: it leaves playback rather than
+        // changing it.
+        let settings_icon = gtk::Image::from_icon_name("emblem-system-symbolic");
+        settings_icon.add_css_class("tp-transport");
+        let settings = gtk::Button::new();
+        settings.set_child(Some(&settings_icon));
+        settings.add_css_class("tp-transport-button");
+        settings.set_can_focus(false);
+
         let row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(16)
             .build();
         row.add_css_class("tp-controls");
         row.append(&play);
+        row.append(&stop);
         row.append(&elapsed);
         row.append(&position);
         row.append(&duration);
         row.append(&subtitles);
+        row.append(&settings);
         row.append(&fullscreen);
 
         // Slides up rather than appearing, which reads as deliberate at a
@@ -120,6 +146,8 @@ impl Controls {
             strip,
             icon,
             play,
+            stop,
+            settings,
             elapsed,
             duration,
             position,
@@ -139,6 +167,14 @@ impl Controls {
 
     pub fn connect_play_pause(&self, handler: impl Fn() + 'static) {
         self.play.connect_clicked(move |_| handler());
+    }
+
+    pub fn connect_stop(&self, handler: impl Fn() + 'static) {
+        self.stop.connect_clicked(move |_| handler());
+    }
+
+    pub fn connect_settings(&self, handler: impl Fn() + 'static) {
+        self.settings.connect_clicked(move |_| handler());
     }
 
     pub fn connect_fullscreen(&self, handler: impl Fn() + 'static) {
@@ -264,10 +300,13 @@ impl Controls {
         }
         self.updating.set(false);
 
+        // The icon names what pressing it will do, not what playback is
+        // currently doing: a transport button showing "play" while a film
+        // plays reads as a claim about the state, and the wrong one.
         self.icon.set_icon_name(Some(if playback.is_playing() {
-            "media-playback-start-symbolic"
-        } else {
             "media-playback-pause-symbolic"
+        } else {
+            "media-playback-start-symbolic"
         }));
     }
 
