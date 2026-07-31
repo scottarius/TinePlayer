@@ -157,7 +157,7 @@ Track numbers are those `--list-tracks` prints.
 | `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers                                           |
 | `--restart`       | Start video from the beginning, ignoring any saved position                                              |
 | `--forget`        | Forget the saved positions and track choices. Pass a FILE to limit to a single video                     |
-| `--fullscreen`    | Start fullscreen                                                                                         |
+| `--fullscreen`    | Start fullscreen. With `--external` it's fixed, see [below](#fixed-fullscreen)                           |
 | `--windowed`      | Start windowed, overriding a remembered fullscreen preference                                            |
 | `--external`      | Used for launching from another application, see [Integrations](integrations.md)                         |
 | `--kodi`          | Used by [Kodi Integration](integrations.md#kodi), Implies `--external`                                   |
@@ -168,3 +168,11 @@ Track numbers are those `--list-tracks` prints.
 TinePlayer --list-tracks video.mkv
 TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
 ```
+
+### Fixed fullscreen
+
+`--fullscreen` together with `--external` (or `--kodi`, which implies it) starts
+in fullscreen mode and disables toggling. Most integrations that ask for fullscreen
+are providing a fullscreen experience themselves and breaking out of that is a bad
+experience.
+

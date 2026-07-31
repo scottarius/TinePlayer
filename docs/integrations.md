@@ -29,6 +29,12 @@ Passing `--external` puts TinePlayer into an integration mode, where it plays
 only the video provided (file browser is disabled) and exits immediately after
 the video finishes to return control to the launching application.
 
+Adding `--fullscreen` to that, as above, also fixes it there for the whole
+run: the fullscreen buttons are hidden and the shortcuts for it do nothing, so
+a viewer cannot end up on the desktop behind a launcher that is waiting. See
+[Fixed fullscreen](usage.md#fixed-fullscreen). Leave `--fullscreen` off if you
+would rather the window stayed changeable.
+
 Additionally, the `--primary`, `--secondary` and `--subtitle` arguments can be
 supplied to skip the menu entirely and go directly to playback. See [the
 command line](usage.md#command-line).

@@ -350,6 +350,11 @@ fn main() -> std::process::ExitCode {
         let external = args.external || args.kodi;
         let restart = args.restart;
         let fullscreen = (args.fullscreen || config.fullscreen) && !args.windowed;
+        // Asked for fullscreen by something that is also waiting for this
+        // playback to end: it put the window where it wants it, and letting a
+        // viewer shrink it out from under the launcher helps nobody. A
+        // remembered preference does not count - only being told so here.
+        let locked_fullscreen = args.fullscreen && external;
         let kodi = args.kodi;
         gtk_app.connect_activate(move |gtk_app| {
             App::build(
@@ -360,6 +365,7 @@ fn main() -> std::process::ExitCode {
                 app::Launch {
                     restart,
                     fullscreen,
+                    locked_fullscreen,
                     external,
                     kodi,
                 },

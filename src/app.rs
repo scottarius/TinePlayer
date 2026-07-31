@@ -115,6 +115,10 @@ pub struct Launch {
     /// Ignore any saved position and start from the beginning.
     pub restart: bool,
     pub fullscreen: bool,
+    /// Fullscreen is not the viewer's to change: a launcher asked for it and
+    /// is waiting for this playback, so the controls for it are gone rather
+    /// than present and refusing.
+    pub locked_fullscreen: bool,
     /// Something else chose the video and is waiting for this playback.
     pub external: bool,
     /// That something else is Kodi, which can also be talked to.
@@ -174,6 +178,8 @@ pub struct App {
     /// no browser, no drag and drop, no confirmation on the way out. Set by
     /// `--external`, and by `--kodi`, which implies it.
     external: bool,
+    /// Whether fullscreen is fixed for this run. See [`Launch`].
+    locked_fullscreen: bool,
     /// Whether the error on screen ended the session: a video named on the
     /// command line that could not be opened leaves nothing to go back to, so
     /// its button closes the player. Every other error returns to the menu.
@@ -227,6 +233,7 @@ impl App {
         let Launch {
             restart,
             fullscreen,
+            locked_fullscreen,
             external,
             kodi,
         } = launch;
@@ -292,6 +299,7 @@ impl App {
             scrub_seen: Cell::new(None),
             tick: RefCell::new(None),
             external,
+            locked_fullscreen,
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
             session_resume: RefCell::new(None),
@@ -881,6 +889,9 @@ impl App {
     }
 
     fn toggle_fullscreen(&self) {
+        if self.locked_fullscreen {
+            return;
+        }
         let wanted = !self.window.is_fullscreen();
         if wanted {
             self.window.fullscreen();
@@ -1388,7 +1399,12 @@ impl App {
         // longer leaves it holding focus and lit up.
         fullscreen.set_focus_on_click(false);
         fullscreen.set_tooltip_text(Some("Toggle fullscreen"));
-        buttons.append(&fullscreen);
+        // Left out entirely when fullscreen is not this viewer's to change: a
+        // button that declines to do the one thing it offers is worse than no
+        // button.
+        if !self.locked_fullscreen {
+            buttons.append(&fullscreen);
+        }
         {
             let app = self.clone();
             fullscreen.connect_clicked(move |_| {
@@ -3468,6 +3484,7 @@ impl App {
                     self.scale.get(),
                     self.dark.get(),
                     self.window.is_fullscreen(),
+                    self.locked_fullscreen,
                     &outputs,
                 );
                 controls.set_levels(&levels);

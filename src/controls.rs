@@ -174,6 +174,7 @@ impl Controls {
         scale: f64,
         dark: bool,
         fullscreen_now: bool,
+        lock_fullscreen: bool,
         outputs: &[(&'static str, String)],
     ) -> Rc<Self> {
         // Pause, because playback begins playing. The readout corrects this
@@ -247,6 +248,9 @@ impl Controls {
         )));
         fullscreen.add_css_class("tp-transport-button");
         fullscreen.set_can_focus(false);
+        // Hidden rather than dimmed when fullscreen is fixed for this run:
+        // there is nothing to be waiting for, so nothing to grey out.
+        fullscreen.set_visible(!lock_fullscreen);
 
         // A bundled image rather than a themed icon name: no subtitle glyph
         // ships with GTK on Windows, and a missing icon draws as a
@@ -875,10 +879,14 @@ impl Controls {
         button.set_icon_name(name);
     }
 
+    /// A button worth landing on: one that is there and can act. Both, since
+    /// the fullscreen button is hidden outright on a run where fullscreen is
+    /// fixed, and a highlight on an invisible button would look like the row
+    /// had swallowed a press.
     fn usable(&self, index: usize) -> bool {
         self.order
             .get(index)
-            .is_some_and(|button| button.is_sensitive())
+            .is_some_and(|button| button.is_sensitive() && button.is_visible())
     }
 
     /// Moves to the next usable button in that direction, stopping at the
