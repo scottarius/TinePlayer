@@ -26,6 +26,12 @@ pub enum Action {
     /// The held direction was let go. Playback uses it to end a scrub; the
     /// menus ignore it.
     DirectionReleased,
+    /// The lower face button was let go. Only the controls listen for it,
+    /// where holding a button means something other than pressing it.
+    ActivateReleased,
+    /// The same for the upper face button, which is held to silence
+    /// everything and tapped to change the screen.
+    FullscreenReleased,
     PageUp,
     PageDown,
     PlayPause,
@@ -64,10 +70,21 @@ pub fn install<F: Fn(Action) + 'static>(handler: F) {
         // Draining the queue is also what keeps the button and axis state
         // below current, so it happens whether or not anything is mapped.
         while let Some(event) = gilrs.next_event() {
-            if let EventType::ButtonPressed(button, _) = event.event
-                && let Some(action) = button_action(button)
-            {
-                handler(action);
+            match event.event {
+                EventType::ButtonPressed(button, _) => {
+                    if let Some(action) = button_action(button) {
+                        handler(action);
+                    }
+                }
+                // Only the two that are held for meaning: a release for every
+                // button would be noise to filter.
+                EventType::ButtonReleased(Button::South, _) => {
+                    handler(Action::ActivateReleased);
+                }
+                EventType::ButtonReleased(Button::North, _) => {
+                    handler(Action::FullscreenReleased);
+                }
+                _ => {}
             }
         }
 

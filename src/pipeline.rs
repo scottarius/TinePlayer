@@ -300,12 +300,22 @@ fn build_audio_branch(
         let queue = make("queue")?;
         let convert = make("audioconvert")?;
         let resample = make("audioresample")?;
+        // Level and mute for this output alone, which is the point: two people
+        // on two devices need two settings. In the pipeline rather than on the
+        // sink, so it only ever affects this application - turning a film down
+        // must not turn the whole machine down.
+        let volume = gst::ElementFactory::make("volume")
+            .name(format!("{role}_volume"))
+            .build()
+            .map_err(|_| "Missing GStreamer element \"volume\". Check the install.".to_string())?;
+        volume.set_property("volume", config.volume(role));
+        volume.set_property("mute", config.muted(role));
         let sink = build_device_sink(role, config)?;
 
         pipeline
-            .add_many([&queue, &convert, &resample, &sink])
+            .add_many([&queue, &convert, &resample, &volume, &sink])
             .map_err(|e| e.to_string())?;
-        gst::Element::link_many([&queue, &convert, &resample, &sink])
+        gst::Element::link_many([&queue, &convert, &resample, &volume, &sink])
             .map_err(|_| format!("Failed to link {role} audio branch"))?;
         // Requests a src pad from the tee, or uses the queue's static one.
         head.link(&queue)

@@ -193,6 +193,22 @@ pub struct App {
     /// you were watching it a moment ago. Backing out to change a setting and
     /// losing your place is the exact annoyance those rules guard against.
     session_resume: RefCell<Option<(String, u64)>>,
+    /// Whether subtitles were switched off during this video, so leaving
+    /// playback and coming back does not turn them on again. Cleared when a
+    /// different video is loaded, or when a different subtitle is chosen -
+    /// picking one is asking to see it.
+    subtitles_hidden: Cell<bool>,
+    /// Whether a volume change is waiting to be written out. Dragging a slider
+    /// produces a change per pixel, and each one would otherwise be a write to
+    /// disk.
+    volume_save_pending: Cell<bool>,
+    /// The state of a hold on the gamepad's upper face button, which silences
+    /// everything rather than changing the screen. Kept here rather than in
+    /// the controls: it is about what a button meant, not about the strip,
+    /// and it works whether or not the strip is on screen.
+    fullscreen_hold: Cell<u64>,
+    fullscreen_holding: Cell<bool>,
+    fullscreen_held: Cell<bool>,
     /// The screen a modal was opened from, so backing out of one returns
     /// there. Reached by shortcut as well as by row, so it cannot be assumed
     /// to be the step that offers them.
@@ -279,6 +295,11 @@ impl App {
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
             session_resume: RefCell::new(None),
+            subtitles_hidden: Cell::new(false),
+            volume_save_pending: Cell::new(false),
+            fullscreen_hold: Cell::new(0),
+            fullscreen_holding: Cell::new(false),
+            fullscreen_held: Cell::new(false),
             origin: Cell::new(Screen::Menu),
         });
 
@@ -444,21 +465,15 @@ impl App {
                 // there is nothing highlighted to press, and Enter should not
                 // quietly become a second play/pause.
                 gdk::Key::Return | gdk::Key::KP_Enter if playing => {
-                    let on_buttons =
-                        app.controls.borrow().as_ref().is_some_and(|controls| {
-                            controls.row() == crate::controls::Row::Buttons
-                        });
+                    let on_buttons = app
+                        .controls
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|controls| controls.takes_activation());
                     if !on_buttons {
                         return glib::Propagation::Proceed;
                     }
-                    // Cloned out before pressing anything. Stop and settings
-                    // both tear playback down, which takes this same cell
-                    // mutably - and doing that while a read borrow is still
-                    // alive panics.
-                    let controls = app.controls.borrow().clone();
-                    if let Some(controls) = controls {
-                        controls.activate_focused();
-                    }
+                    app.press_activate();
                     glib::Propagation::Stop
                 }
                 gdk::Key::Up if playing => {
@@ -511,6 +526,12 @@ impl App {
                     app.toggle_subtitles();
                     glib::Propagation::Stop
                 }
+                // The same silence the volume button is held for, without
+                // having to reach the button first.
+                gdk::Key::m | gdk::Key::M if playing => {
+                    app.toggle_mute();
+                    glib::Propagation::Stop
+                }
                 // The shortcut GTK's own file chooser and every web browser use
                 // to reach an address bar, worth having from the menu which is
                 // otherwise two steps away from the panel.
@@ -551,8 +572,14 @@ impl App {
         {
             let app = self.clone();
             controller.connect_key_released(move |_, key, _, _| {
-                if matches!(key, gdk::Key::Left | gdk::Key::Right) {
-                    app.end_scrub();
+                match key {
+                    gdk::Key::Left | gdk::Key::Right => app.end_scrub(),
+                    // Where the press of a held button is finally acted on,
+                    // if holding it did not already mean something else.
+                    gdk::Key::Return | gdk::Key::KP_Enter if app.playback.borrow().is_some() => {
+                        app.release_activate()
+                    }
+                    _ => {}
                 }
             });
         }
@@ -687,6 +714,9 @@ impl App {
             Row::None => controls.set_row(Row::Buttons),
             Row::Buttons => controls.set_row(Row::Timeline),
             Row::Timeline => {}
+            // The panel opens upward out of its button, so up climbs the list
+            // of outputs and stops at the top of it.
+            Row::Volume => controls.move_output(-1),
         }
     }
 
@@ -699,6 +729,15 @@ impl App {
         match controls.row() {
             Row::Timeline => controls.set_row(Row::Buttons),
             Row::Buttons => controls.set_row(Row::None),
+            // Down the list of outputs, and off the bottom of it back to the
+            // button the panel came out of.
+            Row::Volume => {
+                if controls.at_last_output() {
+                    controls.set_row(Row::Buttons);
+                } else {
+                    controls.move_output(1);
+                }
+            }
             // Nothing is held, so there is nothing to put down - but the strip
             // may still be on screen from a seek or a moved mouse, and down
             // should be rid of that too.
@@ -710,18 +749,66 @@ impl App {
         }
     }
 
+    /// A press on whatever the strip has highlighted. The volume button is
+    /// held rather than pressed, so it waits for the release; everything else
+    /// acts at once, as it always has.
+    ///
+    /// Cloned out of the cell before anything is pressed: stop and settings
+    /// both tear playback down, which takes this same cell mutably, and doing
+    /// that while a read borrow is alive panics.
+    fn press_activate(self: &Rc<Self>) {
+        let controls = self.controls.borrow().clone();
+        let Some(controls) = controls else { return };
+        if controls.holds_press() {
+            controls.press_volume();
+        } else {
+            controls.activate_focused();
+        }
+    }
+
+    /// Letting go of a held button. Does the ordinary thing unless the hold
+    /// already did something else.
+    fn release_activate(self: &Rc<Self>) {
+        let controls = self.controls.borrow().clone();
+        let Some(controls) = controls else { return };
+        if controls.holds_press() && controls.release_volume() {
+            controls.activate_focused();
+        }
+    }
+
+    /// Writes the configuration out a second after the last volume change,
+    /// rather than on each one. The level itself takes effect immediately;
+    /// this is only about remembering it.
+    fn save_volume_soon(self: &Rc<Self>) {
+        if self.volume_save_pending.replace(true) {
+            return;
+        }
+        let app = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(1), move || {
+            app.volume_save_pending.set(false);
+            if let Err(e) = app.config.borrow().save() {
+                eprintln!("Could not save volume: {e}");
+            }
+        });
+    }
+
     /// Left and right: between the buttons while the button row is held,
     /// through the video everywhere else.
     fn controls_left_right(self: &Rc<Self>, direction: isize) {
         use crate::controls::Row;
-        let on_buttons = self
+        let row = self
             .controls
             .borrow()
             .as_ref()
-            .is_some_and(|controls| controls.row() == Row::Buttons);
-        if on_buttons {
+            .map(|controls| controls.row())
+            .unwrap_or(Row::None);
+        if row == Row::Buttons || row == Row::Volume {
             if let Some(controls) = self.controls.borrow().as_ref() {
-                controls.move_focus(direction);
+                if row == Row::Volume {
+                    controls.adjust_level(direction);
+                } else {
+                    controls.move_focus(direction);
+                }
             }
             return;
         }
@@ -853,14 +940,9 @@ impl App {
                     .controls
                     .borrow()
                     .as_ref()
-                    .is_some_and(|controls| controls.row() == crate::controls::Row::Buttons);
+                    .is_some_and(|controls| controls.takes_activation());
                 if on_buttons && action == Action::Activate {
-                    // Cloned out for the same reason the key handler does:
-                    // what this presses may tear playback down.
-                    let controls = self.controls.borrow().clone();
-                    if let Some(controls) = controls {
-                        controls.activate_focused();
-                    }
+                    self.press_activate();
                     return;
                 }
                 if let Some(playback) = self.playback.borrow().as_ref() {
@@ -870,6 +952,8 @@ impl App {
             }
             Action::Activate => self.activate_focused(),
             Action::PlayPause => {}
+            Action::ActivateReleased if self.playback.borrow().is_some() => self.release_activate(),
+            Action::ActivateReleased => {}
             Action::DirectionReleased => self.end_scrub(),
             Action::PageUp => self.move_selection(-PAGE_ROWS),
             Action::PageDown => self.move_selection(PAGE_ROWS),
@@ -890,7 +974,16 @@ impl App {
                     self.go_back();
                 }
             }
+            // During playback this button is held for silence and tapped for
+            // the screen, so the tap waits for the release to know which it
+            // was. Everywhere else there is nothing to silence and it acts at
+            // once, as it always has.
+            Action::Fullscreen if self.playback.borrow().is_some() => self.press_fullscreen(),
             Action::Fullscreen => self.toggle_fullscreen(),
+            Action::FullscreenReleased if self.playback.borrow().is_some() => {
+                self.release_fullscreen()
+            }
+            Action::FullscreenReleased => {}
             // Ignored outside playback, matching the keyboard: there is
             // nothing to turn off from a menu.
             Action::Subtitles => self.toggle_subtitles(),
@@ -994,10 +1087,49 @@ impl App {
             return;
         };
         let showing = playback.toggle_subtitles();
+        self.subtitles_hidden.set(!showing);
         if let Some(controls) = self.controls.borrow().as_ref() {
             controls.set_subtitles(playback.has_subtitles(), showing);
         }
         self.wake_controls();
+    }
+
+    /// Starts a hold on the upper face button. Nothing happens yet: what the
+    /// press meant is only known when it is let go, or when it has been down
+    /// long enough to have meant the other thing.
+    fn press_fullscreen(self: &Rc<Self>) {
+        if self.fullscreen_holding.replace(true) {
+            return;
+        }
+        self.fullscreen_held.set(false);
+        let mark = self.fullscreen_hold.get() + 1;
+        self.fullscreen_hold.set(mark);
+        let app = self.clone();
+        glib::timeout_add_local_once(crate::controls::HOLD, move || {
+            if app.fullscreen_hold.get() != mark {
+                return;
+            }
+            app.fullscreen_held.set(true);
+            app.toggle_mute();
+        });
+    }
+
+    /// Changes the screen, unless the hold already silenced everything.
+    fn release_fullscreen(self: &Rc<Self>) {
+        self.fullscreen_holding.set(false);
+        self.fullscreen_hold.set(self.fullscreen_hold.get() + 1);
+        if !self.fullscreen_held.replace(false) {
+            self.toggle_fullscreen();
+        }
+    }
+
+    /// Silences every output at once, or puts back what each was doing. The
+    /// same thing holding the volume button does, reached directly.
+    fn toggle_mute(&self) {
+        let controls = self.controls.borrow().clone();
+        if let Some(controls) = controls {
+            controls.toggle_hush();
+        }
     }
 
     fn stop_playback(&self) {
@@ -1859,6 +1991,9 @@ impl App {
                     .map(|o| o.choice());
                 drop(options);
                 *self.subtitle.borrow_mut() = picked;
+                // Choosing a subtitle is asking to see it, whatever the
+                // toggle was doing for the last one.
+                self.subtitles_hidden.set(false);
                 self.remember_tracks();
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
@@ -2000,6 +2135,9 @@ impl App {
         source: &Source,
         media: crate::probe::Media,
     ) -> Result<(), String> {
+        // A different video starts with its subtitles showing, whatever the
+        // last one was left doing.
+        self.subtitles_hidden.set(false);
         // Kodi's one video player slot is necessarily this playback while it
         // waits for us, but a session started by hand with --kodi could attach
         // to a *different* external player's item. Lengths agreeing is a cheap
@@ -3298,12 +3436,63 @@ impl App {
 
         match result {
             Ok(playback) => {
+                // Named by device rather than by role: "primary" and
+                // "secondary" mean something to the configuration and nothing
+                // to somebody trying to turn the headphones down.
+                let outputs: Vec<(&'static str, String)> = {
+                    let config = self.config.borrow();
+                    [
+                        ("primary", config.primary_sink.clone()),
+                        ("secondary", config.secondary_sink.clone()),
+                    ]
+                    .into_iter()
+                    .filter_map(|(role, name)| {
+                        name.filter(|_| playback.has_output(role))
+                            .map(|name| (role, name))
+                    })
+                    .collect()
+                };
+                let levels: Vec<(&str, f64, bool)> = outputs
+                    .iter()
+                    .map(|(role, _)| {
+                        (
+                            *role,
+                            playback.volume(role).unwrap_or(1.0),
+                            playback.muted(role),
+                        )
+                    })
+                    .collect();
+
                 let controls = Controls::new(
                     playback.widget(),
                     self.scale.get(),
                     self.dark.get(),
                     self.window.is_fullscreen(),
+                    &outputs,
                 );
+                controls.set_levels(&levels);
+                {
+                    // Kept in the configuration, so a level set once holds for
+                    // the next film: two outputs are rarely matched in
+                    // loudness, and correcting that every time would be a
+                    // chore rather than a control.
+                    let app = self.clone();
+                    controls.connect_volume(move |role, level, muted, persist| {
+                        if let Some(playback) = app.playback.borrow().as_ref() {
+                            playback.set_volume(role, level);
+                            playback.set_muted(role, muted);
+                        }
+                        if !persist {
+                            return;
+                        }
+                        {
+                            let mut config = app.config.borrow_mut();
+                            config.set_volume(role, level);
+                            config.set_muted(role, muted);
+                        }
+                        app.save_volume_soon();
+                    });
+                }
                 {
                     let app = self.clone();
                     controls.connect_play_pause(move || {
@@ -3462,6 +3651,11 @@ impl App {
                             controls.set_fullscreen(window.is_fullscreen());
                         }
                     });
+                }
+                // Carried across leaving playback and coming back, since the
+                // pipeline is rebuilt each time and starts with them on.
+                if self.subtitles_hidden.get() && playback.subtitles_showing() {
+                    playback.toggle_subtitles();
                 }
                 controls.set_subtitles(playback.has_subtitles(), playback.subtitles_showing());
                 controls.update(&playback);
@@ -4067,6 +4261,29 @@ fn style_css(scale: f64) -> String {
         .tp-selected {{
             background-color: {highlight};
             border-radius: {radius}px;
+        }}
+        /* Darker than the strip it sits on, so it reads as a panel laid over
+           the bar rather than as more of the bar. */
+        .tp-volume-panel {{
+            background-color: rgba(0, 0, 0, 0.75);
+            border-radius: {radius}px;
+            padding: {crumb_pad}px;
+            margin-bottom: {crumb_pad}px;
+            margin-right: {pad_h}px;
+        }}
+        /* Padded so the selection mark has room around a row rather than
+           sitting tight against the words. */
+        .tp-volume-panel > box {{
+            padding: {crumb_pad}px;
+            border-radius: {radius}px;
+        }}
+        .tp-volume-panel label {{ color: #ffffff; }}
+        /* The same size as the transport icons, which are drawn to be read
+           from a sofa rather than a desk. A button built from an icon name
+           has no image to class, so the size is set on the descendant. */
+        .tp-volume-panel button image {{
+            -gtk-icon-size: {icon}px;
+            color: #ffffff;
         }}
         /* The handle, not the whole bar: filling the trough drew over the
            very thing that says where playback is. */

@@ -72,6 +72,18 @@ pub struct Config {
     /// Prefer a described track on this output, for a viewer who is blind or
     /// has low vision. Per output rather than one setting for both, because
     /// two people who need description may not share a language.
+    /// Level for each output, 0.0 to 1.0, and whether it is silenced.
+    ///
+    /// Kept per output rather than per video: how loud the headphones are is a
+    /// property of the headphones, not of the film.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_volume: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_volume: Option<f64>,
+    #[serde(default)]
+    pub primary_muted: bool,
+    #[serde(default)]
+    pub secondary_muted: bool,
     #[serde(default)]
     pub primary_audio_description: bool,
     #[serde(default)]
@@ -118,6 +130,10 @@ impl Default for Config {
             subtitle_size: None,
             primary_language: None,
             secondary_language: None,
+            primary_volume: None,
+            secondary_volume: None,
+            primary_muted: false,
+            secondary_muted: false,
             primary_audio_description: false,
             secondary_audio_description: false,
             subtitle_language: None,
@@ -193,6 +209,41 @@ impl Config {
         self.resume_min_percent
             .unwrap_or(DEFAULT_RESUME_MIN_PERCENT)
             .clamp(0.0, 100.0)
+    }
+
+    /// Clamped, because a level outside 0 to 1 is either silence or
+    /// distortion, and a bad number in the file should not produce either.
+    pub fn volume(&self, role: &str) -> f64 {
+        let stored = match role {
+            "primary" => self.primary_volume,
+            _ => self.secondary_volume,
+        };
+        stored.unwrap_or(1.0).clamp(0.0, 1.0)
+    }
+
+    pub fn muted(&self, role: &str) -> bool {
+        match role {
+            "primary" => self.primary_muted,
+            _ => self.secondary_muted,
+        }
+    }
+
+    /// Rounded to a hundredth, which is finer than anyone can hear a
+    /// difference at and keeps the file readable: floating point otherwise
+    /// writes four fifths as 0.8499999999999999.
+    pub fn set_volume(&mut self, role: &str, level: f64) {
+        let level = (level.clamp(0.0, 1.0) * 100.0).round() / 100.0;
+        match role {
+            "primary" => self.primary_volume = Some(level),
+            _ => self.secondary_volume = Some(level),
+        }
+    }
+
+    pub fn set_muted(&mut self, role: &str, muted: bool) {
+        match role {
+            "primary" => self.primary_muted = muted,
+            _ => self.secondary_muted = muted,
+        }
     }
 
     pub fn watched_percent(&self) -> f64 {

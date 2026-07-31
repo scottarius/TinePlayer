@@ -52,18 +52,22 @@ by path.
 Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse,
 though everything is also mouse interactable.
 
-| Key | Gamepad | Action |
-| --- | --- | --- |
-| Arrow keys | D-pad or left stick | Navigate the menus |
-| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | Shoulder buttons | Jump a screenful, for long folders |
-| <kbd>Enter</kbd> | A / Cross | Select |
-| <kbd>Esc</kbd> | B / Circle | Back one menu; stop video playback |
-| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback |
-| <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | Tap to skip 10 seconds; hold to scrub |
-| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen |
-| <kbd>C</kbd> | X / Square | Show or hide subtitles, during playback |
-| <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser |
-| <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL |
+| Key | Gamepad | Action                                                                                  |
+| --- | --- |-----------------------------------------------------------------------------------------|
+| Arrow keys | D-pad or left stick | Navigate the menus                                                                      |
+| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | Shoulder buttons | Jump a screenful, for long folders                                                      |
+| <kbd>Enter</kbd> | A / Cross | Select                                                                                  |
+| <kbd>Esc</kbd> | B / Circle | Back one menu; stop video playback                                                      |
+| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback                                                                 |
+| <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | In Video: Tap to skip 10 seconds; hold to scrub, navigate playback controls if visible. |
+| <kbd>↑</kbd> | D-pad or left stick | In Video: Show or navigate the playback controls                                        |
+| <kbd>↓</kbd> | D-pad or left stick | In Video: Hide or navigate the playback controls                                        |
+| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen                                                                       |
+| <kbd>C</kbd> | X / Square | Show or hide subtitles, during playback                                                 |
+| <kbd>M</kbd> | Hold Y / Triangle | Mute or restore both outputs at once                                                    |
+| Hold <kbd>Enter</kbd> | Hold A / Cross | On the volume button: Mute or restore both outputs at once.                             |
+| <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser                                                                   |
+| <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL                                                                     |
 
 ## Subtitles
 

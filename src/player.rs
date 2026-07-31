@@ -327,6 +327,41 @@ impl Playback {
         gst::ClockTime::from_nseconds(target)
     }
 
+    /// Level and mute for one output, adjusted while playing.
+    ///
+    /// Each branch carries its own `volume` element, so the two outputs are
+    /// independent - which is the point, when two people are listening on
+    /// different devices. Nothing here touches the machine's own mixer.
+    pub fn set_volume(&self, role: &str, level: f64) {
+        if let Some(volume) = self.pipeline.by_name(&format!("{role}_volume")) {
+            volume.set_property("volume", level.clamp(0.0, 1.0));
+        }
+    }
+
+    pub fn volume(&self, role: &str) -> Option<f64> {
+        self.pipeline
+            .by_name(&format!("{role}_volume"))
+            .map(|volume| volume.property::<f64>("volume"))
+    }
+
+    pub fn set_muted(&self, role: &str, muted: bool) {
+        if let Some(volume) = self.pipeline.by_name(&format!("{role}_volume")) {
+            volume.set_property("mute", muted);
+        }
+    }
+
+    pub fn muted(&self, role: &str) -> bool {
+        self.pipeline
+            .by_name(&format!("{role}_volume"))
+            .is_some_and(|volume| volume.property::<bool>("mute"))
+    }
+
+    /// Whether this playback has an output for `role` at all: a single-device
+    /// setup has no secondary branch, and nothing to adjust.
+    pub fn has_output(&self, role: &str) -> bool {
+        self.pipeline.by_name(&format!("{role}_volume")).is_some()
+    }
+
     /// Holds the picture still while the scrubber is being dragged, and lets
     /// it go afterwards.
     ///

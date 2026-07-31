@@ -75,6 +75,20 @@ secondary_language: ru
 primary_audio_description: false
 secondary_audio_description: false
 
+# --- Volume ------------------------------------------------------------------
+#
+# Each output has its own level, because two of them are rarely matched: a pair
+# of headphones and a television are not the same loudness at the same setting,
+# and one person should be able to turn theirs down without touching the other.
+#
+# Set from the volume button during playback, and kept from one film to the
+# next, so these normally look after themselves. Levels run from 0.0 to 1.0.
+
+primary_volume: 1.0
+secondary_volume: 1.0
+primary_muted: false
+secondary_muted: false
+
 # How a subtitle is chosen for a video you have not picked one for. Either one
 # of the automatic modes, or a language code to always prefer that language:
 #

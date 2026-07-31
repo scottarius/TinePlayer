@@ -19,6 +19,9 @@ edited directly. It lives in the per-user config directory:
 | [Subtitle Font](#subtitle-fonts)                         | `subtitle_font`      | `Sans Bold` | Font Family and style name                                                                                                                     |
 | Resume Threshold                                         | `resume_min_percent` | `5`         | How far in before stopping counts as somewhere to resume from, as a percentage of the running time <br/>Never less than 10 seconds             |
 | Watched Threshold                                        | `watched_percent`    | `90`        | Past this percentage a video counts as watched, and its position is forgotten rather than saved                                                |
+| [Prefer Audio Description](#audio-description)           | `primary_audio_description` <br/>`secondary_audio_description` | `false` | Whether that output prefers a described track                                                              |
+| [Volume](#volumes)                                       | `primary_volume` <br/>`secondary_volume` | `1.0` | That output's level, from `0.0` to `1.0`                                                                                             |
+|                                                          | `primary_muted` <br/>`secondary_muted` | `false` | Whether that output is silenced                                                                                                        |
 
 ## Example
 
@@ -58,6 +61,14 @@ rather it began again next time.
 TinePlayer writes a few keys of its own to the same file - `last_video`,
 `last_folder` and `fullscreen` - so it reopens where you left it. There is no
 need to set those by hand.
+
+## Volumes
+
+Each output carries its own level and can be adjusted or muted independently.
+The volume settings persist between sessions. Holding or long-pressing the
+primary volume button will mute both immediately, and holding it again restores
+what each output was doing. Adjusting anything in the panel keeps the muted
+state instead, and your change applies from there.
 
 ## Audio description
 
