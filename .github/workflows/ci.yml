@@ -170,14 +170,22 @@ jobs:
           # GStreamer. macOS invites it from the other direction, because
           # GStreamer's own package ships no GTK at all - so both must come
           # from Homebrew, and this fails loudly if they ever stop doing.
-          gtk_prefix="$(pkg-config --variable=prefix gtk4)"
-          gst_prefix="$(pkg-config --variable=prefix gstreamer-1.0)"
-          echo "gtk4:      $gtk_prefix ($(pkg-config --modversion gtk4))"
-          echo "gstreamer: $gst_prefix ($(pkg-config --modversion gstreamer-1.0))"
-          if [ "$gtk_prefix" != "$gst_prefix" ]; then
-            echo "::error::GTK and GStreamer come from different prefixes, which means two copies of glib"
-            exit 1
-          fi
+          # Both must come from Homebrew. Compared against its prefix rather
+          # than against each other: Homebrew reports a per-formula Cellar
+          # path, so gtk4 and gstreamer never share one even when correctly
+          # installed side by side.
+          brew_prefix="$(brew --prefix)"
+          for package in gtk4 gstreamer-1.0 glib-2.0; do
+            prefix="$(pkg-config --variable=prefix "$package")"
+            echo "$package: $prefix ($(pkg-config --modversion "$package"))"
+            case "$prefix" in
+              "$brew_prefix"*) ;;
+              *)
+                echo "::error::$package comes from $prefix, outside Homebrew - which means a second copy of glib"
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Build
         run: cargo build --release --locked
