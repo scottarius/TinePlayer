@@ -3876,7 +3876,14 @@ fn style_css(scale: f64) -> String {
             background-color: rgba(0, 0, 0, 0.75);
             padding: {pad_v}px {pad_h}px;
         }}
-        .tp-time {{ font-size: {hint}px; color: #ffffff; }}
+        /* Tabular figures, so the digits are all one width. A proportional
+           1 is narrower than a 0, which makes a running clock twitch even
+           when the number of characters does not change. */
+        .tp-time {{
+            font-size: {hint}px;
+            color: #ffffff;
+            font-feature-settings: \"tnum\" 1;
+        }}
         .tp-transport {{ -gtk-icon-size: {icon}px; color: #ffffff; }}
         /* Flat over the picture: the strip already reads as a control bar,
            and button chrome on top of video looks like a mistake. */

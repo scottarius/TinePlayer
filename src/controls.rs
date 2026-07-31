@@ -29,6 +29,11 @@ pub struct Controls {
     settings: gtk::Button,
     elapsed: gtk::Label,
     duration: gtk::Label,
+    /// Whether the right-hand readout counts down instead of naming the
+    /// length. Starts off for every video: how long something is is the
+    /// question you have before you start, and how much is left is the one
+    /// you ask part way through.
+    remaining: Rc<Cell<bool>>,
     position: gtk::Scale,
     /// Insensitive until something tells it a subtitle track exists, since
     /// most files reach playback with none selected.
@@ -76,6 +81,18 @@ impl Controls {
         elapsed.add_css_class("tp-time");
         let duration = gtk::Label::new(Some("0:00"));
         duration.add_css_class("tp-time");
+        // Clicking it swaps between the length and what is left. The readout
+        // refreshes on the next tick a tenth of a second later, which is
+        // faster than the change can be seen.
+        let remaining = Rc::new(Cell::new(false));
+        {
+            let remaining = remaining.clone();
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| {
+                remaining.set(!remaining.get());
+            });
+            duration.add_controller(gesture);
+        }
 
         // A scale rather than a progress bar: with its value hidden it looks
         // much the same, and it can be clicked and dragged to seek.
@@ -150,6 +167,7 @@ impl Controls {
             settings,
             elapsed,
             duration,
+            remaining,
             position,
             subtitles,
             fullscreen,
@@ -281,13 +299,33 @@ impl Controls {
         let position = playback.position().unwrap_or(gst::ClockTime::ZERO);
         let total = playback.duration();
 
+        // Both readouts are held at the width of the longest they will get,
+        // so the timeline between them keeps its size. Without it the bar
+        // shrinks a little at 10:00 and again at an hour, and jitters as the
+        // digits change width while scrubbing.
+        let widest = total
+            .filter(|total| *total > gst::ClockTime::ZERO)
+            .map(|total| format_time(total).chars().count())
+            .unwrap_or(5)
+            .max(5) as i32;
+        if self.elapsed.width_chars() != widest {
+            self.elapsed.set_width_chars(widest);
+            // One wider, for the minus sign a countdown carries, so switching
+            // between the two does not resize anything either.
+            self.duration.set_width_chars(widest + 1);
+        }
+
         self.elapsed.set_text(&format_time(position));
 
         // Guarded, so writing the value back does not look like a drag.
         self.updating.set(true);
         match total {
             Some(total) if total > gst::ClockTime::ZERO => {
-                self.duration.set_text(&format_time(total));
+                self.duration.set_text(&if self.remaining.get() {
+                    format!("-{}", format_time(total.saturating_sub(position)))
+                } else {
+                    format_time(total)
+                });
                 self.position
                     .set_value(position.nseconds() as f64 / total.nseconds() as f64);
             }
