@@ -89,6 +89,16 @@ pub const HOLD: Duration = Duration::from_millis(600);
 /// level rather than overshoot it.
 const VOLUME_STEP: f64 = 0.05;
 
+/// Gives a control a name for anyone who cannot see the picture on it.
+///
+/// Every button in the strip is an icon and nothing else, which a screen
+/// reader announces as "button" and no more. The name is set here rather than
+/// as a tooltip: a tooltip is for a pointer hovering, and this interface is
+/// built to be driven without one.
+fn name_it(widget: &impl IsA<gtk::Accessible>, name: &str) {
+    widget.update_property(&[gtk::accessible::Property::Label(name)]);
+}
+
 pub struct Controls {
     root: gtk::Overlay,
     strip: gtk::Revealer,
@@ -187,6 +197,7 @@ impl Controls {
         play.set_child(Some(&icon));
         play.add_css_class("tp-transport-button");
         play.set_can_focus(false);
+        name_it(&play, "Play or pause");
 
         // go-* rather than media-seek-*: the seek glyphs are absent from the
         // GTK that ships with GStreamer on Windows, and a missing icon draws
@@ -198,6 +209,7 @@ impl Controls {
         skip_back.set_child(Some(&back_icon));
         skip_back.add_css_class("tp-transport-button");
         skip_back.set_can_focus(false);
+        name_it(&skip_back, "Skip back");
 
         let forward_icon = gtk::Image::from_icon_name("go-next-symbolic");
         forward_icon.add_css_class("tp-transport");
@@ -205,6 +217,7 @@ impl Controls {
         skip_forward.set_child(Some(&forward_icon));
         skip_forward.add_css_class("tp-transport-button");
         skip_forward.set_can_focus(false);
+        name_it(&skip_forward, "Skip forward");
 
         // Beside play, because they are the same kind of thing: what playback
         // is doing right now.
@@ -214,6 +227,7 @@ impl Controls {
         stop.set_child(Some(&stop_icon));
         stop.add_css_class("tp-transport-button");
         stop.set_can_focus(false);
+        name_it(&stop, "Stop");
 
         let elapsed = gtk::Label::new(Some("0:00"));
         elapsed.add_css_class("tp-time");
@@ -239,6 +253,7 @@ impl Controls {
         position.set_hexpand(true);
         position.set_can_focus(false);
         position.add_css_class("tp-progress");
+        name_it(&position, "Position");
 
         let fullscreen = gtk::Button::new();
         fullscreen.set_child(Some(&crate::app::fullscreen_image(
@@ -248,6 +263,7 @@ impl Controls {
         )));
         fullscreen.add_css_class("tp-transport-button");
         fullscreen.set_can_focus(false);
+        name_it(&fullscreen, "Toggle fullscreen");
         // Hidden rather than dimmed when fullscreen is fixed for this run:
         // there is nothing to be waiting for, so nothing to grey out.
         fullscreen.set_visible(!lock_fullscreen);
@@ -260,6 +276,7 @@ impl Controls {
         subtitles.add_css_class("tp-transport-button");
         subtitles.add_css_class("tp-subtitles-button");
         subtitles.set_can_focus(false);
+        name_it(&subtitles, "Show or hide subtitles");
         subtitles.set_sensitive(false);
 
         // A panel rather than a slider in the bar: two outputs need naming,
@@ -271,6 +288,7 @@ impl Controls {
         volume.set_child(Some(&volume_icon));
         volume.add_css_class("tp-transport-button");
         volume.set_can_focus(false);
+        name_it(&volume, "Volume");
 
         let panel = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -288,12 +306,16 @@ impl Controls {
             let mute = gtk::Button::from_icon_name("audio-volume-high-symbolic");
             mute.add_css_class("tp-transport-button");
             mute.set_can_focus(false);
+            // Named by device, since which output is being silenced is the
+            // whole question in a player with two of them.
+            name_it(&mute, &format!("Mute {name}"));
 
             let level = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
             level.set_draw_value(false);
             level.set_hexpand(true);
             level.set_can_focus(false);
             level.add_css_class("tp-progress");
+            name_it(&level, &format!("Volume, {name}"));
 
             let pair = gtk::Box::builder()
                 .orientation(gtk::Orientation::Horizontal)
@@ -342,6 +364,7 @@ impl Controls {
         settings.set_child(Some(&settings_icon));
         settings.add_css_class("tp-transport-button");
         settings.set_can_focus(false);
+        name_it(&settings, "Settings");
 
         // Two rows: where playback is, and what can be done to it. Separating
         // them is what lets a controller treat them differently - left and

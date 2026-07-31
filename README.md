@@ -15,25 +15,37 @@
 </p>
 
 Play one video with two audio tracks at the same time, each sent to a different
-audio device, so people who speak different languages can watch it together.
-The room hears one language through the speakers; whoever is on headphones
-hears the other. Any two connected audio devices will do.
+audio device, so people who speak different languages, or who need audio
+description, can watch it together. The room hears one track through the
+speakers; whoever is on headphones hears the other. Any two connected devices
+will do.
 
-That matters because there is something particular about hearing a film in your
-own language. The performances land, the jokes time correctly, and you follow
-the story without having to work at it. TinePlayer lets everyone watching have
-that experience together on the same screen.
-
-The same applies to an audio description track. Someone who is blind or has
-low vision can listen to the described version on headphones while everyone
-else hears the ordinary soundtrack, instead of the room choosing between the
-two. Any pair of tracks a file carries can be split this way.
+That matters because people experience a film differently - in different
+languages, described, subtitled, louder, quieter - and watching the way that
+works for you means the performances land, the jokes time correctly, and you
+don't have to work at it. Usually those differences mean watching apart, or one
+person making a concession. This is an attempt to let everyone have the film
+the way it works for them, at the same time, on the same screen, while still
+sharing the experience together.
 
 ## Why another video player
 
-Most video players decode exactly one audio track per playback session, and
-none of them can route two different tracks to two different output devices at
-the same time.
+Plenty of people have tried to rig this up themselves: the film on the
+television, the same film started again on a laptop or a phone with headphones
+in, and a count of three to start them together. It works for about a minute.
+Then one drifts, someone nudges it back, it drifts again, and every pause for
+the door or the kettle means lining both up by hand all over again. You end up
+watching the sync instead of the film.
+
+The other way around is worse. One person just goes without: reads subtitles
+they would rather not need, or misses the description, or listens in a
+language they have to work at. That is usually the option people settle on,
+because it is the one that does not need managing.
+
+Ordinary players cannot fix this, because choosing a track and choosing a
+speaker are two separate settings rather than a pair, and one copy of a player
+only ever plays one of them. This does it in one place: one film, playing
+once, with both soundtracks kept together because they never came apart.
 
 ## How it works
 
@@ -91,6 +103,36 @@ cargo build --release
 See [Building from source](docs/building.md) for what those scripts install,
 and for the Windows caveat about installing GTK separately.
 
+## Accessibility
+
+The interface is built to be driven without a mouse or a screen: everything is
+reachable by keyboard or gamepad, the type is large and scalable, and the selection mark is
+meant to be read from across a room. Audio description is a first-class
+feature rather than an afterthought, and can be sent to one output while the
+room hears the ordinary soundtrack.
+
+Subtitles are treated as an access feature rather than a translation one.
+Embedded tracks and files sitting beside the video appear in a single list, so
+an SDH or hard-of-hearing track is chosen the same way as any other, and a
+preference can pick one automatically for every video. Size and font are both
+configurable, sized against the video rather than the screen so they stay
+legible on a television.
+
+Screen readers are a work in progress. Some effort has gone into it and parts
+of the interface are usable, but it is not where it should be, and it has not
+been tested by anyone who relies on one. If that is you, [I would love to get
+feedback on how it can be better](https://github.com/scottarius/TinePlayer/issues).
+
+## Feedback
+
+If TinePlayer doesn't let everyone in your room watch the way each of them
+needs to, I want to hear about it: what gets in the way, whose experience it
+falls short for, what's missing or simply wrong.
+[Open an issue](https://github.com/scottarius/TinePlayer/issues) or
+[start a discussion](https://github.com/scottarius/TinePlayer/discussions).
+This only works if it suits everyone watching at once, and I genuinely want
+your feedback in order to make it better.
+
 ## Compatibility
 
 TinePlayer targets a deliberately conservative baseline of **GTK 4.6** and
@@ -130,8 +172,11 @@ It builds on the following, none of which are vendored into this repository:
 
 - **GStreamer** ([LGPL
   2.1](https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html))
-  and **GTK 4** (LGPL 2.1) are runtime dependencies, installed separately and
-  linked dynamically.
+  and **GTK 4** (LGPL 2.1) are runtime dependencies. A build from source uses
+  the copies already installed on the machine; a packaged build ships them
+  beside the executable, unmodified, with their license texts. They are loaded
+  as separate shared libraries in both cases, so they can be replaced with
+  your own build of the same version, which is what the LGPL asks for.
 - **`gst-plugin-gtk4`** (MPL-2.0) provides the `gtk4paintablesink` element and
   *is* statically linked into the binary, because it is not packaged by Debian
   or shipped with the GStreamer Windows installer. Depending on it as an
@@ -140,3 +185,8 @@ It builds on the following, none of which are vendored into this repository:
   affecting this project's own licensing; the plugin's source remains under
   MPL-2.0 and is available
   [upstream](https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs).
+
+Every Rust library compiled into TinePlayer, direct and transitive, is listed
+with its license in **[THIRD-PARTY.md](./THIRD-PARTY.md)**. Nearly all are MIT
+or Apache-2.0, and their notices travel with the application as those licenses
+ask.

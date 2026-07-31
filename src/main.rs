@@ -236,8 +236,31 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     Ok(())
 }
 
+/// Switches on GTK's accessibility backend, which Windows otherwise leaves
+/// off.
+///
+/// Without this a screen reader sees the window and nothing inside it: no
+/// buttons, no rows, no names, however carefully those names are set. GTK
+/// speaks to Windows through AccessKit, which ships beside it but is not
+/// selected unless asked for.
+///
+/// Left alone if the environment already names a backend, so anyone
+/// debugging accessibility can still choose one.
+#[cfg(target_os = "windows")]
+fn enable_accessibility() {
+    if std::env::var_os("GTK_A11Y").is_none() {
+        // Safe here and nowhere later: this runs before GTK starts and
+        // before any thread that might read the environment exists.
+        unsafe { std::env::set_var("GTK_A11Y", "accesskit") };
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn enable_accessibility() {}
+
 fn main() -> std::process::ExitCode {
     attach_parent_console();
+    enable_accessibility();
 
     let args = Args::parse();
 

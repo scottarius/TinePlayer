@@ -52,6 +52,10 @@ by path.
 Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse,
 though everything is also mouse interactable.
 
+> [!NOTE]
+> Screen reader support is minimal: the menus are named, the playback controls
+> are not reachable at all. See [Accessibility](../README.md#accessibility).
+
 | Key | Gamepad | Action                                                                                  |
 | --- | --- |-----------------------------------------------------------------------------------------|
 | Arrow keys | D-pad or left stick | Navigate the menus                                                                      |

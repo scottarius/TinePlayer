@@ -1524,7 +1524,11 @@ impl App {
         drop(config);
 
         for (label, value, enabled) in &rows {
-            list.append(&menu_row(label, value, *enabled));
+            append_named(
+                &list,
+                &menu_row(label, value, *enabled),
+                &row_name(label, value),
+            );
         }
 
         // Extra space above the rows that begin a group, so the primary and
@@ -1593,6 +1597,7 @@ impl App {
         // longer leaves it holding focus and lit up.
         fullscreen.set_focus_on_click(false);
         fullscreen.set_tooltip_text(Some("Toggle fullscreen"));
+        name_it(&fullscreen, "Toggle fullscreen");
         // Left out entirely when fullscreen is not this viewer's to change: a
         // button that declines to do the one thing it offers is worse than no
         // button.
@@ -1623,6 +1628,7 @@ impl App {
         gear.add_css_class("tp-gear");
         gear.set_focus_on_click(false);
         gear.set_tooltip_text(Some("Settings"));
+        name_it(&gear, "Settings");
         buttons.append(&gear);
         page.append(&buttons);
 
@@ -1878,7 +1884,7 @@ impl App {
         }
 
         for (text, _) in &entries {
-            list.append(&chooser_row(text));
+            append_named(&list, &chooser_row(text), text);
         }
 
         {
@@ -2943,7 +2949,17 @@ impl App {
         }
 
         for (label, icon, _) in &rows {
-            list.append(&browser_row(icon, label));
+            // Two dots read aloud as nothing at all, being punctuation. What
+            // it does is worth saying, and where it goes even more so.
+            let spoken = if label == ".." {
+                match parent.as_deref().and_then(|path| path.file_name()) {
+                    Some(name) => format!("Up to {}", name.to_string_lossy()),
+                    None => "Up to the list of drives".to_string(),
+                }
+            } else {
+                label.clone()
+            };
+            append_named(&list, &browser_row(icon, label), &spoken);
         }
 
         {
@@ -3102,7 +3118,7 @@ impl App {
         }
         let (page, list, back, _header) = list_page("Drives", true);
         for entry in &roots {
-            list.append(&chooser_row(&entry.label));
+            append_named(&list, &chooser_row(&entry.label), &entry.label);
         }
 
         {
@@ -3153,7 +3169,11 @@ impl App {
                 "A link to a video, such as one from a media server",
             ),
         ] {
-            list.append(&menu_row(label, value, true));
+            append_named(
+                &list,
+                &menu_row(label, value, true),
+                &row_name(label, value),
+            );
         }
 
         {
@@ -3321,7 +3341,11 @@ impl App {
         debug_assert_eq!(rows.len(), SETTINGS_ROWS);
 
         for (label, value, enabled) in &rows {
-            list.append(&menu_row(label, value, *enabled));
+            append_named(
+                &list,
+                &menu_row(label, value, *enabled),
+                &row_name(label, value),
+            );
         }
         // Swapped in over the ordinary rows built above, which keeps the row
         // count and the section and indent indices in one place rather than
@@ -4244,7 +4268,13 @@ impl App {
 fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let heading = heading_label(title);
     heading.set_xalign(0.0);
-    list_page_with(&heading, show_back)
+    let page = list_page_with(&heading, show_back);
+    // The list carries the page's title, so arriving on one says where you
+    // are before it says what row you are on. A reader gives the container's
+    // name, then the position, then the row - which is the whole context in
+    // one breath, and none of it read out unasked.
+    name_it(&page.1, title);
+    page
 }
 
 /// The same page with a heading of the caller's choosing, for the browser's
@@ -4395,12 +4425,41 @@ pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image 
     image
 }
 
+/// Appends a row to a list and gives it a name.
+///
+/// Focus lands on the row GTK wraps around the widget, not on the labels
+/// inside it, and GTK derives a name from a child label but not from a
+/// grandchild. A row built as a box of two labels therefore had no name, and
+/// a screen reader announced it as "3 of 6" and nothing more.
+fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) {
+    list.append(child);
+    if let Some(row) = child.as_ref().parent().and_downcast::<gtk::ListBoxRow>() {
+        name_it(&row, name);
+    }
+}
+
+/// How a settings row reads aloud: the setting, then what it is set to.
+fn row_name(label: &str, value: &str) -> String {
+    if value.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label}, {value}")
+    }
+}
+
+/// Gives a control a name for anyone who cannot see the picture on it. The
+/// same reasoning as the copy in `controls`, which names the playback strip.
+fn name_it(widget: &impl IsA<gtk::Accessible>, name: &str) {
+    widget.update_property(&[gtk::accessible::Property::Label(name)]);
+}
+
 fn back_button() -> gtk::Button {
     // An icon rather than a text glyph: a "‹" character sits off the
     // vertical center because it's positioned by font metrics rather than
     // by the icon's own bounding box.
     let button = gtk::Button::from_icon_name("go-previous-symbolic");
     button.add_css_class("tp-back");
+    name_it(&button, "Back");
     button.set_valign(gtk::Align::Center);
     button
 }
@@ -4437,6 +4496,9 @@ fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
 
     let switch = gtk::Switch::new();
     switch.set_active(on);
+    // A switch already reports whether it is on; without a name it reports
+    // that about nothing in particular.
+    name_it(&switch, label);
     switch.set_can_focus(false);
     switch.set_can_target(false);
     switch.set_valign(gtk::Align::Center);
@@ -4483,6 +4545,7 @@ fn slider_row(
     scale.set_can_focus(false);
     scale.set_value(now);
     scale.add_css_class("tp-progress");
+    name_it(&scale, label);
     row.append(&scale);
 
     // Fixed width, so the bar beside it does not shift as the reading goes
