@@ -27,7 +27,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
 # --- The executable Kodi will launch -----------------------------------
 $binary = Join-Path $root 'target\release\TinePlayer.exe'
@@ -53,12 +53,12 @@ $target = Join-Path $Userdata 'playercorefactory.xml'
 # Not the executable itself: Kodi starts external players from its own program
 # directory, and Windows searches there for DLLs before PATH. Kodi ships copies
 # of DLLs that GStreamer also ships, so launched directly TinePlayer loads the
-# wrong ones and dies before main(). launch-tineplayer.cmd moves to
+# wrong ones and dies before main(). launch-tineplayer-windows.cmd moves to
 # TinePlayer's directory first, and locates it relative to itself, so there is
 # nothing to substitute and nothing to keep in step.
-$launcher = Join-Path $root 'launch-tineplayer.cmd'
+$launcher = Join-Path $root 'launch-tineplayer-windows.cmd'
 if (-not (Test-Path $launcher)) {
-    throw "launch-tineplayer.cmd not found at $launcher. It ships alongside this script."
+    throw "launch-tineplayer-windows.cmd not found at $launcher. It ships at the top of the source tree."
 }
 
 # --- Build the file ----------------------------------------------------

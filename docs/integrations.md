@@ -17,10 +17,10 @@ TinePlayer "/home/you/Videos/film.mkv" --external --fullscreen
 ### Windows
 
 ```powershell
-launch-tineplayer.cmd "H:\Videos\film.mkv" --external --fullscreen
+launch-tineplayer-windows.cmd "H:\Videos\film.mkv" --external --fullscreen
 ```
 
-On Windows, using `launch-tineplayer.cmd` rather than the exe directly starts
+On Windows, using `launch-tineplayer-windows.cmd` rather than the exe directly starts
 TinePlayer from its own folder, avoiding any working directory issues with
 loading conflicting libraries. See [the launch script
 usage](usage.md#launch-script).
@@ -61,11 +61,11 @@ There are two ways to set it up depending on your preference:
 The easiest way. These scripts write the configuration file for you:
 
 ```sh
-./install-kodi.sh             # Linux
-./install-kodi.sh --default   # Linux, as default player
+./integrations/configure-kodi-linux.sh             # Linux
+./integrations/configure-kodi-linux.sh --default   # Linux, as default player
 
-.\install-kodi.ps1            # Windows
-.\install-kodi.ps1 -Default   # Windows, as default player
+.\integrations\configure-kodi-windows.ps1            # Windows
+.\integrations\configure-kodi-windows.ps1 -Default   # Windows, as default player
 ```
 
 They find Kodi's userdata directory themselves and write the correct
@@ -87,7 +87,7 @@ isn't there already:
 complete, fully commented copy to start from. Two things required to change:
 
 * Set `<filename>` to the TinePlayer executable path. On Windows, point it at
-  `launch-tineplayer.cmd` rather than straight at the executable.
+  `launch-tineplayer-windows.cmd` rather than straight at the executable.
 * Uncomment the `<rules>` block at the bottom to make TinePlayer the default
   player. Left commented, TinePlayer appears under **Play using...** instead.
 

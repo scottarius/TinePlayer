@@ -29,8 +29,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          chmod +x install.sh
-          ./install.sh
+          chmod +x setup-linux.sh
+          ./setup-linux.sh
 
       # No --locked: this is also where a dependency that no longer resolves
       # should show up, rather than being frozen out by the lockfile.
@@ -48,14 +48,14 @@ jobs:
 
       - name: Install dependencies
         shell: pwsh
-        run: .\install.ps1
+        run: .\setup-windows.ps1
 
       - name: Carry the script's environment into the job
         shell: pwsh
         run: |
           $pkgConfig = [Environment]::GetEnvironmentVariable('PKG_CONFIG_PATH', 'User')
-          if (-not $pkgConfig) { throw 'install.ps1 did not set PKG_CONFIG_PATH' }
-          Write-Host "install.ps1 chose $pkgConfig"
+          if (-not $pkgConfig) { throw 'setup-windows.ps1 did not set PKG_CONFIG_PATH' }
+          Write-Host "setup-windows.ps1 chose $pkgConfig"
           $root = Split-Path (Split-Path $pkgConfig -Parent) -Parent
           "PKG_CONFIG_PATH=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8

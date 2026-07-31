@@ -2,7 +2,7 @@
 <!--
   Offers TinePlayer to Kodi as an external player, fully commented.
 
-  install-kodi.sh and install-kodi.ps1 write this file for you, and are the
+  integrations/configure-kodi-linux.sh and integrations/configure-kodi-windows.ps1 write this file for you, and are the
   easier route. This copy is for setting it up by hand, or for merging into a
   playercorefactory.xml that already configures other players.
 
@@ -22,7 +22,7 @@
 
            On Linux, the executable itself.
 
-           On Windows, point this at launch-tineplayer.cmd, which ships at the
+           On Windows, point this at launch-tineplayer-windows.cmd, which ships at the
            top of the TinePlayer folder, rather than at TinePlayer.exe. Kodi
            starts external players from its own program folder, and Windows
            looks there for libraries before it looks anywhere else. Kodi ships

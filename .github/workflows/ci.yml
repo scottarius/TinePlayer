@@ -24,13 +24,13 @@ env:
 jobs:
   linux:
     # Pinned rather than ubuntu-latest, which silently moves to the next LTS
-    # and changes every apt package version underneath install.sh.
+    # and changes every apt package version underneath setup-linux.sh.
     runs-on: ubuntu-24.04
     name: Linux
     steps:
       - uses: actions/checkout@v7
 
-      # Set before install.sh runs, which detects an existing Rust and skips
+      # Set before setup-linux.sh runs, which detects an existing Rust and skips
       # installing one. rustup is already on the runner, so this needs no
       # third-party action.
       - name: Pin Rust toolchain
@@ -43,8 +43,8 @@ jobs:
       # the script detects and skips.
       - name: Install dependencies
         run: |
-          chmod +x install.sh
-          ./install.sh
+          chmod +x setup-linux.sh
+          ./setup-linux.sh
 
       # Restores ~/.cargo and target/ between runs. Without it every build
       # recompiles the GTK and GStreamer bindings from scratch, which is the
@@ -81,7 +81,7 @@ jobs:
           rustup default $env:RUST_VERSION
 
       # Runs the same script the README tells people to run, so CI fails if
-      # that script is wrong - matching how the Linux job treats install.sh.
+      # that script is wrong - matching how the Linux job treats setup-linux.sh.
       #
       # The version is named explicitly because winget always serves the
       # current release. There is no equivalent on the Linux side: apt on a
@@ -89,9 +89,9 @@ jobs:
       # pins the dependency too.
       - name: Install dependencies
         shell: pwsh
-        run: .\install.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
+        run: .\setup-windows.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
 
-      # install.ps1 sets User-scope environment variables, which a later step
+      # setup-windows.ps1 sets User-scope environment variables, which a later step
       # in the same job does not inherit, so its conclusions are copied into
       # Actions' own mechanism. Deliberately derived from what the script
       # wrote rather than recomputed here, so a wrong answer from the script
@@ -100,8 +100,8 @@ jobs:
         shell: pwsh
         run: |
           $pkgConfig = [Environment]::GetEnvironmentVariable('PKG_CONFIG_PATH', 'User')
-          if (-not $pkgConfig) { throw 'install.ps1 did not set PKG_CONFIG_PATH' }
-          Write-Host "install.ps1 chose $pkgConfig"
+          if (-not $pkgConfig) { throw 'setup-windows.ps1 did not set PKG_CONFIG_PATH' }
+          Write-Host "setup-windows.ps1 chose $pkgConfig"
           $root = Split-Path (Split-Path $pkgConfig -Parent) -Parent
           "PKG_CONFIG_PATH=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
@@ -125,3 +125,66 @@ jobs:
 
       - name: Build
         run: cargo build --release --locked
+
+  macos:
+    name: macOS
+    # Pinned like the others, and Apple Silicon, which is what the project is
+    # developed on. Unlike the other two, the dependency versions cannot be
+    # pinned to match: Homebrew always serves current, with no equivalent of
+    # winget's version argument or apt's frozen archive. A GStreamer release
+    # can therefore break this job without any commit doing so - the one place
+    # in this workflow where red does not strictly mean "this commit is
+    # broken".
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pin Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_VERSION"
+
+      # The same script the README tells people to run, matching how the other
+      # two jobs treat theirs. Homebrew is preinstalled on the runner, so the
+      # script skips installing it: this covers the dependency install and the
+      # build, not the bootstrap a new machine goes through. That path is
+      # tested on a clean VM instead, since a runner cannot reach it.
+      - name: Install dependencies
+        run: |
+          chmod +x setup-mac.sh
+          ./setup-mac.sh
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - name: Verify GTK 4 and GStreamer share one prefix
+        run: |
+          # Two prefixes would mean two copies of glib, which is the conflict
+          # that breaks the Windows build when GTK is installed outside
+          # GStreamer. macOS invites it from the other direction, because
+          # GStreamer's own package ships no GTK at all - so both must come
+          # from Homebrew, and this fails loudly if they ever stop doing.
+          gtk_prefix="$(pkg-config --variable=prefix gtk4)"
+          gst_prefix="$(pkg-config --variable=prefix gstreamer-1.0)"
+          echo "gtk4:      $gtk_prefix ($(pkg-config --modversion gtk4))"
+          echo "gstreamer: $gst_prefix ($(pkg-config --modversion gstreamer-1.0))"
+          if [ "$gtk_prefix" != "$gst_prefix" ]; then
+            echo "::error::GTK and GStreamer come from different prefixes, which means two copies of glib"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+

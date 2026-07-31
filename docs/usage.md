@@ -21,7 +21,7 @@ the executable.
 Useful for launching from another app or integration that has a different
 working directory if library conflicts cause errors.
 ```powershell
-.\launch-tineplayer.cmd "H:\Videos\film.mkv" --fullscreen
+.\launch-tineplayer-windows.cmd "H:\Videos\film.mkv" --fullscreen
 ```
 
 Everything required for video playback is chosen from the main screen: the

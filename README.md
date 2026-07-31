@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="https://github.com/scottarius/TinePlayer/actions/workflows/ci.yml"><img src="https://github.com/scottarius/TinePlayer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational" alt="Windows and Linux">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational" alt="Windows, Linux and macOS">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20GStreamer-orange" alt="Rust and GStreamer">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
@@ -83,7 +83,7 @@ from a single pipeline, staying in sync because it is all one clock.
 ## Quick start
 
 ```sh
-./install.sh            # Linux, or .\install.ps1 on Windows
+./setup-linux.sh            # Linux; .\setup-windows.ps1 on Windows, ./setup-mac.sh on macOS
 cargo build --release
 ./target/release/TinePlayer
 ```
@@ -103,6 +103,7 @@ runs correctly on much newer releases.
 | --- | --- | --- |
 | Raspberry Pi OS / Debian 12 (Bookworm) | 4.8 | Tested |
 | Windows 10 / 11 | 4.20 (bundled with GStreamer) | Tested |
+| macOS 26 (Apple Silicon) | 4.22 (Homebrew) | Tested |
 | Ubuntu 22.04 LTS | 4.6 | Meets baseline, untested |
 | Ubuntu 24.04 LTS | 4.14 | Meets baseline, untested |
 | Debian 13 (Trixie) | 4.18 | Meets baseline, untested |

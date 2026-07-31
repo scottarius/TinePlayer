@@ -1,12 +1,16 @@
 # Building from source
 
-Setup scripts are provided for both platforms. Each is idempotent, skipping
-anything already present, so they are safe to re-run.
+Setup scripts are provided for each platform. Each installs only what is needed
+to build, and each is idempotent, skipping anything already present, so they
+are safe to re-run.
+
+Connecting the copy you build to anything else - a desktop launcher, Kodi - is
+a separate step, and those scripts live in `integrations/`.
 
 **Linux**
 
 ```sh
-./install.sh
+./setup-linux.sh
 cargo build --release
 ```
 
@@ -14,10 +18,19 @@ Installs the Rust toolchain, GTK 4 development headers, and the GStreamer
 runtime, development headers and plugins (including those for common
 Blu-ray-rip codecs like AC3 and DTS).
 
+To start it from the desktop rather than a terminal, add a launcher entry for
+the copy you have built:
+
+```sh
+./integrations/install-desktop-linux.sh
+```
+
+The entry points into this working tree, so run it again if the tree moves.
+
 **Windows**
 
 ```powershell
-.\install.ps1
+.\setup-windows.ps1
 cargo build --release
 ```
 
@@ -34,3 +47,22 @@ it supplies every native dependency in one place.
 > other's build tools fails to build. Everything must be an MSVC build to match
 > Rust's MSVC toolchain, because MSYS2/MinGW builds use a different ABI and
 > will not link.
+
+**macOS**
+
+```sh
+./setup-mac.sh
+cargo build --release
+```
+
+Installs Homebrew, and the Xcode Command Line Tools along with it, then Rust,
+GTK 4, GStreamer and pkg-config. Run it from a terminal rather than through a
+pipe or an `ssh` command: Homebrew needs your password, and macOS will not
+prompt for one without a terminal attached.
+
+> [!NOTE]
+> GTK and GStreamer both come from Homebrew on purpose. GStreamer's own macOS
+> package ships no GTK, so taking it from there would mean getting GTK
+> somewhere else, and each source brings its own copy of glib. Two of those in
+> one process will not build. Installing both from Homebrew keeps them on a
+> single copy.
