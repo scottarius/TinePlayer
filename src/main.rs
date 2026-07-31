@@ -347,8 +347,22 @@ fn main() -> std::process::ExitCode {
             subtitle: args.subtitle.clone(),
         });
 
+    // One instance at a time, except under a launcher. GTK gives uniqueness
+    // for free once an application has an id: a second launch hands its
+    // activation to the one already running and exits.
+    //
+    // Not under `--external`, though. Whatever started us is waiting for this
+    // process to end before it decides the film is over, and a launch that
+    // returned immediately would tell it the film had finished before it
+    // began.
+    let flags = if args.external || args.kodi {
+        gtk::gio::ApplicationFlags::NON_UNIQUE
+    } else {
+        gtk::gio::ApplicationFlags::empty()
+    };
     let gtk_app = gtk::Application::builder()
         .application_id("dev.tineplayer.TinePlayer")
+        .flags(flags)
         .build();
 
     {
@@ -380,6 +394,13 @@ fn main() -> std::process::ExitCode {
         let locked_fullscreen = args.fullscreen && external;
         let kodi = args.kodi;
         gtk_app.connect_activate(move |gtk_app| {
+            // A second launch arrives here, in the process already running.
+            // Raising what is open is the whole of the answer: no error, no
+            // second window, and whatever is playing carries on.
+            if let Some(window) = gtk_app.windows().first() {
+                window.present();
+                return;
+            }
             App::build(
                 gtk_app,
                 config.clone(),
