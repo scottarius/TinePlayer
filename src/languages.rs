@@ -45,6 +45,26 @@ pub fn name_for(code: &str) -> String {
         .unwrap_or_else(|| code.to_string())
 }
 
+/// Whether a tag names a language at all.
+///
+/// `und`, an empty tag, or anything not in the table is "not stated" rather
+/// than a language of its own. Worth telling apart from a wrong language: a
+/// track that never said what it is may still be the one wanted.
+pub fn known(tag: &str) -> bool {
+    let tag: String = tag
+        .trim()
+        .to_lowercase()
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    if tag.is_empty() || tag == "und" {
+        return false;
+    }
+    LANGUAGES
+        .iter()
+        .any(|(_, _, aliases)| aliases.contains(&tag.as_str()))
+}
+
 /// Whether a track's language tag is the language stored as `code`.
 ///
 /// The tag is taken loosely: subtitle files are named things like
@@ -64,4 +84,25 @@ pub fn matches(tag: &str, code: &str) -> bool {
         .iter()
         .find(|(stored, _, _)| *stored == code)
         .is_some_and(|(_, _, aliases)| aliases.contains(&tag.as_str()))
+}
+
+#[cfg(test)]
+mod known_tests {
+    use super::known;
+
+    #[test]
+    fn a_stated_language_is_known() {
+        for tag in ["en", "eng", "en-US", "fr", "RU"] {
+            assert!(known(tag), "{tag} should be known");
+        }
+    }
+
+    #[test]
+    fn an_unstated_one_is_not() {
+        // What a container carries when nobody set a language, which is what
+        // tools that add a description track tend to leave behind.
+        for tag in ["und", "", "   ", "zzz"] {
+            assert!(!known(tag), "{tag:?} should not be known");
+        }
+    }
 }

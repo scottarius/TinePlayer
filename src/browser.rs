@@ -6,12 +6,23 @@
 
 use std::path::{Path, PathBuf};
 
-/// Extensions offered when browsing. The pipeline typefinds rather than
-/// trusting the name, so this is about keeping the list free of clutter
-/// rather than about what will play.
-pub const VIDEO_EXTENSIONS: [&str; 15] = [
-    "mkv", "webm", "mp4", "m4v", "mov", "avi", "ts", "m2ts", "mts", "mpg", "mpeg", "wmv", "flv",
-    "ogv", "3gp",
+/// Extensions offered when browsing.
+///
+/// The pipeline typefinds rather than trusting the name, so this is about
+/// keeping the listing free of clutter rather than about what will play: the
+/// aim is to offer everything playable, not to guess what is inside. Anything
+/// GStreamer has a demuxer for belongs here.
+pub const VIDEO_EXTENSIONS: [&str; 30] = [
+    // Matroska and WebM
+    "mkv", "mk3d", "webm", // MPEG-4 and QuickTime
+    "mp4", "m4v", "mov", "qt", "3gp", "3g2", "f4v", // AVI and its variants
+    "avi", "divx", // MPEG program and transport streams
+    "ts", "m2ts", "mts", "m2t", "mpg", "mpeg", "mpe", "m2v", "mpv", "vob",
+    // Windows Media
+    "wmv", "asf", // Flash
+    "flv", // Ogg
+    "ogv", "ogm", // Professional and miscellaneous
+    "mxf", "dv", "nut",
 ];
 
 pub struct Entry {

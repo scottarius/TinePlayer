@@ -54,13 +54,15 @@ struct Args {
     /// The video to play: a path, or a URL such as http:// or smb://
     file: Option<String>,
 
-    /// Audio track for the primary output. 0 for no audio there
-    #[arg(long, value_name = "N")]
-    primary: Option<u32>,
+    /// Audio for the primary output: a track number, a language code, `ad`
+    /// for described audio, or `en:ad` for both. 0 for no audio there
+    #[arg(long, value_name = "T")]
+    primary: Option<String>,
 
-    /// Audio track for the secondary output. 0 for no audio there
-    #[arg(long, value_name = "N")]
-    secondary: Option<u32>,
+    /// Audio for the secondary output: a track number, a language code, `ad`
+    /// for described audio, or `en:ad` for both. 0 for no audio there
+    #[arg(long, value_name = "T")]
+    secondary: Option<String>,
 
     /// Subtitles to show: a track number, a language code, a subtitle file
     /// name beside the video, or a preference name. 0 for none
@@ -317,8 +319,8 @@ fn main() -> std::process::ExitCode {
     // Any of them being given means "start playing", so the menu is skipped.
     let preset = (args.primary.is_some() || args.secondary.is_some() || args.subtitle.is_some())
         .then_some(app::Preset {
-            primary: args.primary,
-            secondary: args.secondary,
+            primary: args.primary.clone(),
+            secondary: args.secondary.clone(),
             subtitle: args.subtitle.clone(),
         });
 

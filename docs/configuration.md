@@ -59,6 +59,29 @@ TinePlayer writes a few keys of its own to the same file - `last_video`,
 `last_folder` and `fullscreen` - so it reopens where you left it. There is no
 need to set those by hand.
 
+## Audio description
+
+An audio description track narrates what is happening on screen, for a viewer
+who is blind or has low vision. Because each output picks its own track, one
+person can hear the description while everyone else hears the ordinary
+soundtrack.
+
+Set **Prefer Audio Description** to Yes under either output to have described
+tracks chosen automatically. It can be combined with a language preference,
+and a described track in another language is never chosen.
+
+### Where to find described audio
+
+If you have a video file without a described audio track, you can check
+[Audiovault](https://audiovault.net/) to find one, and use [this fork of
+describealaign](https://github.com/matalvernaz/describealaign) to combine
+the audio track with your video file, which specifically preserves the
+original audio along with the described audio track instead of replacing it,
+which makes the resulting file usable with TinePlayer.
+
+Both are third-party projects with no connection to TinePlayer, mentioned
+because they answer a real question rather than as a recommendation.
+
 ## Choosing subtitles automatically
 
 `subtitle_language` decides what to show for a video you have not picked

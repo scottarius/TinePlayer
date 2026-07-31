@@ -17,6 +17,104 @@ pub struct AudioTrack {
     pub title: String,
 }
 
+/// Whether a track's title marks it as an audio description: a narrated
+/// account of what is happening on screen, for a viewer who is blind or has
+/// low vision.
+///
+/// Title text is the only signal there is. The container flags exist -
+/// Matroska has `FlagVisualImpaired` - but GStreamer exposes none of them, so
+/// there is nothing else to read.
+///
+/// Naming is not standardized, and real files disagree wildly: Netflix labels
+/// the track "Descriptive", while a Blu-ray rip called it "Commentary For
+/// Visually Impaired". Those two share no words. The patterns below cover
+/// what has actually been seen plus the conventions in common use, and are
+/// deliberately loose: offering the wrong track is a menu row away from being
+/// corrected, while missing the right one leaves someone without the feature.
+///
+/// "Commentary" alone is not one of them. A director's commentary is a
+/// different thing entirely, and files carry both - the same Blu-ray rip had
+/// three commentary-ish tracks of which exactly one was description.
+pub fn is_audio_description(title: &str) -> bool {
+    let title = title.to_lowercase();
+    if title.contains("descri")
+        || title.contains("visually impaired")
+        || title.contains("visual impaired")
+        || title.contains("impaired vision")
+        || title.contains("narration")
+    {
+        return true;
+    }
+    // Only as a word of its own: "ad" is two letters and turns up inside
+    // plenty of others.
+    title
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| word == "ad")
+}
+
+/// Turns a `--primary` or `--secondary` value into a track index.
+///
+/// Accepts the same kinds of thing `--subtitle` does, so neither argument
+/// needs its own vocabulary:
+///
+/// - `3` - the third entry `--list-tracks` prints
+/// - `en` - the first track in that language
+/// - `ad` - the first described track
+/// - `en:ad` - the first described track in that language
+/// - `0` or `none` - no audio on this output
+///
+/// A plain language code will not select a described track, matching what the
+/// preference does: description is only ever chosen by asking for it.
+pub fn resolve_audio(spec: &str, tracks: &[AudioTrack]) -> Result<Option<u32>, String> {
+    let spec = spec.trim();
+    if spec == "0" || spec.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+
+    if let Ok(number) = spec.parse::<usize>() {
+        return tracks
+            .get(number - 1)
+            .map(|track| Some(track.index))
+            .ok_or_else(|| {
+                format!(
+                    "There is no audio track {number}. The file has {}.",
+                    tracks.len()
+                )
+            });
+    }
+
+    let (code, described) = match spec.split_once(':') {
+        Some((code, kind)) if kind.eq_ignore_ascii_case("ad") => (Some(code), true),
+        Some((_, kind)) => {
+            return Err(format!(
+                "Don't know what \"{kind}\" means. Use \"ad\" after the colon, as in \"en:ad\"."
+            ));
+        }
+        None if spec.eq_ignore_ascii_case("ad") => (None, true),
+        None => (Some(spec), false),
+    };
+
+    let matching = |track: &&AudioTrack| match code {
+        Some(code) => crate::languages::matches(&track.language, code),
+        None => true,
+    };
+    let found = tracks
+        .iter()
+        .find(|track| is_audio_description(&track.title) == described && matching(track));
+
+    found.map(|track| Some(track.index)).ok_or_else(|| {
+        let what = if described {
+            "described audio track"
+        } else {
+            "audio track"
+        };
+        match code {
+            Some(code) => format!("No {what} in {code}."),
+            None => format!("No {what} in this file."),
+        }
+    })
+}
+
 /// A subtitle stream carried inside the file.
 #[derive(Clone)]
 pub struct SubtitleTrack {
@@ -124,4 +222,101 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
         subtitles,
         duration_ns: info.duration().map(|d| d.nseconds()).unwrap_or(0),
     })
+}
+
+#[cfg(test)]
+mod audio_description_tests {
+    use super::is_audio_description;
+
+    #[test]
+    fn recognizes_real_titles() {
+        // Both seen in the wild, and sharing no vocabulary.
+        assert!(is_audio_description("Descriptive"));
+        assert!(is_audio_description(
+            "2.0 Dolby Digital (Commentary For Visually Impaired)"
+        ));
+        // Conventional names, not yet seen but widely used.
+        for title in [
+            "Audio Description",
+            "English (Audio Description)",
+            "English AD",
+            "Described Video",
+            "AD",
+        ] {
+            assert!(is_audio_description(title), "missed {title}");
+        }
+    }
+
+    #[test]
+    fn leaves_ordinary_tracks_alone() {
+        for title in [
+            "English",
+            "Commentary by director James Gunn",
+            "3.0 Dolby Digital (1993 LD Audio Commentary - 2018)",
+            "2.0 Dolby Digital (Isolated Score 2018)",
+            "1.0 DTS-HD-MA (1977 35mm mono mix)",
+            "Sub-commentary",
+            // Contains "ad" only inside other words.
+            "Deadpool Cast Track",
+        ] {
+            assert!(!is_audio_description(title), "wrongly matched {title}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod resolve_audio_tests {
+    use super::*;
+
+    fn tracks() -> Vec<AudioTrack> {
+        [
+            ("en", "English"),
+            ("de", "German"),
+            ("en", "Descriptive"),
+            ("de", "Audio Description"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (language, title))| AudioTrack {
+            index: index as u32,
+            codec: "AC-3".to_string(),
+            channels: 2,
+            language: language.to_string(),
+            title: title.to_string(),
+        })
+        .collect()
+    }
+
+    #[test]
+    fn takes_a_number_none_or_a_language() {
+        let tracks = tracks();
+        assert_eq!(resolve_audio("2", &tracks), Ok(Some(1)));
+        assert_eq!(resolve_audio("0", &tracks), Ok(None));
+        assert_eq!(resolve_audio("none", &tracks), Ok(None));
+        assert_eq!(resolve_audio("de", &tracks), Ok(Some(1)));
+    }
+
+    #[test]
+    fn a_language_alone_never_picks_a_described_track() {
+        // German track 4 is described and track 2 is not, so the plain code
+        // has to reach past the described one.
+        assert_eq!(resolve_audio("de", &tracks()), Ok(Some(1)));
+    }
+
+    #[test]
+    fn ad_picks_description() {
+        let tracks = tracks();
+        assert_eq!(resolve_audio("ad", &tracks), Ok(Some(2)));
+        assert_eq!(resolve_audio("de:ad", &tracks), Ok(Some(3)));
+        assert_eq!(resolve_audio("en:ad", &tracks), Ok(Some(2)));
+    }
+
+    #[test]
+    fn reports_what_it_could_not_find() {
+        let tracks = tracks();
+        assert!(resolve_audio("9", &tracks).is_err());
+        assert!(resolve_audio("fr", &tracks).is_err());
+        assert!(resolve_audio("fr:ad", &tracks).is_err());
+        assert!(resolve_audio("en:sdh", &tracks).is_err());
+    }
 }

@@ -94,6 +94,21 @@ primary output is playing.
 >   UNC path, or a mounted share. A video opened by URL, such as `http://` or
 >   `smb://`, offers only its embedded subtitles.
 
+### Choosing audio on the command line
+
+`--primary` and `--secondary` each take any of these:
+
+| Given     | Means                                                                  |
+|-----------|------------------------------------------------------------------------|
+| `3`       | the third entry `--list-tracks` prints                                 |
+| `en`      | the first track in that [language](configuration.md#languages)         |
+| `ad`      | the first [described](configuration.md#audio-description) track        |
+| `en:ad`   | the first described track in that language                             |
+| `0`       | no audio on this output                                                |
+
+A language on its own never selects a described track, matching what the
+setting does: description is only ever played by asking for it.
+
 ### Choosing subtitles on the command line
 
 By default the [Subtitle
@@ -132,8 +147,8 @@ Track numbers are those `--list-tracks` prints.
 | Option            | Meaning                                                                                                  |
 |-------------------|----------------------------------------------------------------------------------------------------------|
 | `FILE`            | The video to play, see [Video sources](#video-sources)                                                   |
-| `--primary <N>`   | Audio track for the primary output. `0` for no audio there                                               |
-| `--secondary <N>` | Audio track for the secondary output. `0` for no audio there                                             |
+| `--primary <T>`   | Audio for the primary output, see [Choosing audio on the command line](#choosing-audio-on-the-command-line) |
+| `--secondary <T>` | Audio for the secondary output, same as above                                                            |
 | `--subtitle <S>`  | Subtitles to show, see [Choosing subtitles on the command line](#choosing-subtitles-on-the-command-line) |
 | `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers                                           |
 | `--restart`       | Start video from the beginning, ignoring any saved position                                              |

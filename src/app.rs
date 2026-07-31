@@ -39,10 +39,15 @@ enum Setting {
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
 
-const SETTINGS_ROWS: usize = 13;
-/// Rows that begin a group: audio, subtitles, then the housekeeping at the
-/// bottom.
-const SETTINGS_SECTIONS: [i32; 3] = [3, 7, 10];
+const SETTINGS_ROWS: usize = 15;
+/// Rows that begin a group: each output, then subtitles, then the
+/// housekeeping at the bottom.
+const SETTINGS_SECTIONS: [i32; 4] = [3, 6, 9, 12];
+/// Rows that belong to the row named above them, drawn indented so the group
+/// reads as settings of that one thing rather than as more of their own.
+/// Indentation is what lets them be called just "Preferred Language" instead
+/// of repeating "Primary" and "Secondary" in every label.
+const SETTINGS_SUBROWS: [i32; 6] = [4, 5, 7, 8, 10, 11];
 
 /// Sizes offered for subtitles. The middle of the range is the default; the
 /// ends are deliberately wide, since what reads well from a sofa and what
@@ -93,10 +98,10 @@ enum Screen {
 /// Choices given on the command line, which skip the menu entirely.
 #[derive(Clone)]
 pub struct Preset {
-    /// Numbered as `--list-tracks` prints them, so 1 is the first track and
-    /// 0 means none.
-    pub primary: Option<u32>,
-    pub secondary: Option<u32>,
+    /// A track number as `--list-tracks` prints them, a language code, `ad`,
+    /// or `en:ad`. See [`crate::probe::resolve_audio`].
+    pub primary: Option<String>,
+    pub secondary: Option<String>,
     /// A number, a language code, or a subtitle file name beside the video.
     pub subtitle: Option<String>,
 }
@@ -331,15 +336,21 @@ impl App {
         let ready = app.config.borrow().primary_sink.is_some();
         match preset {
             Some(preset) if ready && app.file.borrow().is_some() => {
-                let resolve = |choice: Option<u32>| -> Option<u32> {
-                    let tracks = app.tracks.borrow();
-                    choice
-                        .filter(|n| *n > 0)
-                        .and_then(|n| tracks.get((n - 1) as usize))
-                        .map(|t| t.index)
+                let resolve = |spec: Option<&str>| -> Option<u32> {
+                    let spec = spec?;
+                    match crate::probe::resolve_audio(spec, &app.tracks.borrow()) {
+                        Ok(choice) => choice,
+                        // Reported rather than obeyed silently, the same way a
+                        // subtitle that cannot be resolved is: playing the
+                        // wrong track is not what was asked for either.
+                        Err(e) => {
+                            eprintln!("{e}");
+                            None
+                        }
+                    }
                 };
-                *app.primary_track.borrow_mut() = resolve(preset.primary);
-                *app.secondary_track.borrow_mut() = resolve(preset.secondary);
+                *app.primary_track.borrow_mut() = resolve(preset.primary.as_deref());
+                *app.secondary_track.borrow_mut() = resolve(preset.secondary.as_deref());
 
                 // Only touched when asked for, so a video's remembered
                 // subtitle survives being launched with audio flags alone.
@@ -1825,20 +1836,77 @@ impl App {
         let tracks = media.audio;
         let options = crate::subtitles::options(source.local(), &media.subtitles);
 
-        let (primary_language, secondary_language, subtitle_language) = {
+        let (primary_language, secondary_language, subtitle_language, described) = {
             let config = self.config.borrow();
             (
                 config.primary_language.clone(),
                 config.secondary_language.clone(),
                 config.subtitle_language.clone(),
+                (
+                    config.primary_audio_description,
+                    config.secondary_audio_description,
+                ),
             )
         };
+        let describes =
+            |track: &crate::probe::AudioTrack| crate::probe::is_audio_description(&track.title);
+
+        // What ordinary selection is allowed to pick from: everything except
+        // the described tracks, which are only ever chosen by asking for them.
+        // Without this, a file whose first English track happens to be the
+        // described one would hand narration to someone who never wanted it.
+        //
+        // Unless description is all there is. A file with nothing else would
+        // otherwise start silent, which reads as the player being broken
+        // rather than as a preference being honored.
+        let pool: Vec<&crate::probe::AudioTrack> = {
+            let plain: Vec<_> = tracks.iter().filter(|track| !describes(track)).collect();
+            if plain.is_empty() {
+                tracks.iter().collect()
+            } else {
+                plain
+            }
+        };
+
         // First track in the preferred language, if one was named.
         let by_language = |preferred: &Option<String>| -> Option<u32> {
             let code = preferred.as_deref()?;
+            pool.iter()
+                .find(|track| crate::languages::matches(&track.language, code))
+                .map(|track| track.index)
+        };
+        // A described track for an output that asked for one. Not finding one
+        // is not a failure - most files have none - so it falls back to the
+        // ordinary choice rather than leaving the output silent.
+        //
+        // A named language is a hard requirement, not a preference to relax:
+        // description narrated in a language you do not speak is worse than no
+        // description at all, so the fallback is the right language undescribed
+        // rather than the wrong language described.
+        let described_track = |want: bool, preferred: &Option<String>| -> Option<u32> {
+            if !want {
+                return None;
+            }
+            let Some(code) = preferred.as_deref() else {
+                return tracks
+                    .iter()
+                    .find(|track| describes(track))
+                    .map(|track| track.index);
+            };
             tracks
                 .iter()
-                .find(|track| crate::languages::matches(&track.language, code))
+                .find(|track| describes(track) && crate::languages::matches(&track.language, code))
+                // Then one whose language is not stated. Unknown is not the
+                // same as wrong: a track tagged for another language is
+                // rejected, but plenty of description carries no tag at all -
+                // the tool most people use to add one sets a title and no
+                // language - and refusing those would mean finding nothing in
+                // the commonest case of all.
+                .or_else(|| {
+                    tracks
+                        .iter()
+                        .find(|track| describes(track) && !crate::languages::known(&track.language))
+                })
                 .map(|track| track.index)
         };
 
@@ -1853,8 +1921,12 @@ impl App {
             // Otherwise the preferred languages decide, falling back to the
             // old behavior of the first track and a different one.
             None => (
-                by_language(&primary_language).or_else(|| tracks.first().map(|t| t.index)),
-                by_language(&secondary_language).or_else(|| tracks.get(1).map(|t| t.index)),
+                described_track(described.0, &primary_language)
+                    .or_else(|| by_language(&primary_language))
+                    .or_else(|| pool.first().map(|t| t.index)),
+                described_track(described.1, &secondary_language)
+                    .or_else(|| by_language(&secondary_language))
+                    .or_else(|| pool.get(1).map(|t| t.index)),
             ),
         };
         // The file may have been re-encoded since it was last played.
@@ -2628,8 +2700,18 @@ impl App {
                     true,
                 ),
                 (
-                    "Primary Language Preference".to_string(),
+                    "Preferred Language".to_string(),
                     language(&config.primary_language, "First track"),
+                    true,
+                ),
+                (
+                    "Prefer Audio Description".to_string(),
+                    if config.primary_audio_description {
+                        "Yes"
+                    } else {
+                        "No"
+                    }
+                    .to_string(),
                     true,
                 ),
                 (
@@ -2641,8 +2723,18 @@ impl App {
                     true,
                 ),
                 (
-                    "Secondary Language Preference".to_string(),
+                    "Preferred Language".to_string(),
                     language(&config.secondary_language, "Second track"),
+                    true,
+                ),
+                (
+                    "Prefer Audio Description".to_string(),
+                    if config.secondary_audio_description {
+                        "Yes"
+                    } else {
+                        "No"
+                    }
+                    .to_string(),
                     true,
                 ),
                 (
@@ -2689,6 +2781,11 @@ impl App {
                 row.add_css_class("tp-section-start");
             }
         }
+        for index in SETTINGS_SUBROWS {
+            if let Some(row) = list.row_at_index(index) {
+                row.add_css_class("tp-subrow");
+            }
+        }
 
         {
             let app = self.clone();
@@ -2703,12 +2800,14 @@ impl App {
                     2 => app.toggle_sounds(),
                     3 => app.open_setting(Setting::PrimaryDevice),
                     4 => app.open_setting(Setting::PrimaryLanguage),
-                    5 => app.open_setting(Setting::SecondaryDevice),
-                    6 => app.open_setting(Setting::SecondaryLanguage),
-                    7 => app.open_setting(Setting::SubtitleLanguage),
-                    8 => app.open_setting(Setting::SubtitleSize),
-                    9 => app.open_setting(Setting::SubtitleFont),
-                    10 => app.confirm_clear_data(),
+                    5 => app.toggle_audio_description(true),
+                    6 => app.open_setting(Setting::SecondaryDevice),
+                    7 => app.open_setting(Setting::SecondaryLanguage),
+                    8 => app.toggle_audio_description(false),
+                    9 => app.open_setting(Setting::SubtitleLanguage),
+                    10 => app.open_setting(Setting::SubtitleSize),
+                    11 => app.open_setting(Setting::SubtitleFont),
+                    12 => app.confirm_clear_data(),
                     _ => {}
                 }
             });
@@ -2733,6 +2832,23 @@ impl App {
     fn open_setting(self: &Rc<Self>, setting: Setting) {
         self.from_settings.set(true);
         self.show_chooser(setting);
+    }
+
+    /// Turns the described-audio preference on or off for one output.
+    ///
+    /// A toggle rather than a chooser: there are two answers, and a screen to
+    /// pick between them would be a screen with two rows on it.
+    fn toggle_audio_description(self: &Rc<Self>, primary: bool) {
+        {
+            let mut config = self.config.borrow_mut();
+            if primary {
+                config.primary_audio_description = !config.primary_audio_description;
+            } else {
+                config.secondary_audio_description = !config.secondary_audio_description;
+            }
+            let _ = config.save();
+        }
+        self.show_settings();
     }
 
     fn toggle_sounds(self: &Rc<Self>) {
@@ -3408,6 +3524,9 @@ fn style_css(scale: f64) -> String {
         .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
         .tp-menu > row:selected:hover {{ background-color: {highlight}; }}
         .tp-menu > row.tp-section-start {{ margin-top: {section}px; }}
+        /* Belongs to the row above it: indented so the group reads as one
+           thing without every label having to name the output again. */
+        .tp-menu > row.tp-subrow {{ margin-left: {subrow}px; }}
         /* The selected row keeps the same colors whether or not the list
            holds focus, and is simply dimmed when it doesn't. Fading the
            whole row rather than clearing its background keeps the position
@@ -3564,6 +3683,7 @@ fn style_css(scale: f64) -> String {
         pad_h = px(24.0),
         radius = px(8.0),
         section = px(28.0),
+        subrow = px(28.0),
         icon = px(24.0),
         crumb_pad = px(6.0),
         leading = px(38.0),

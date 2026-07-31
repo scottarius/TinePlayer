@@ -59,6 +59,22 @@ primary_language: en
 # Falls back to the second audio track when unset.
 secondary_language: ru
 
+# --- Audio description -------------------------------------------------------
+#
+# An audio description track narrates what is happening on screen, for a viewer
+# who is blind or has low vision. Set per output, so one person can hear the
+# description while everyone else hears the ordinary soundtrack, and so two
+# people who both need it can have it in different languages.
+#
+# Only applies to a video you have not played before. A described track is
+# never chosen unless asked for here, and never in a language other than the
+# one preferred above - description you cannot follow is worse than none. A
+# track that does not say what language it is still counts, because a good deal
+# of description carries no language tag.
+
+primary_audio_description: false
+secondary_audio_description: false
+
 # How a subtitle is chosen for a video you have not picked one for. Either one
 # of the automatic modes, or a language code to always prefer that language:
 #

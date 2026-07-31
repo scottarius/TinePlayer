@@ -69,6 +69,13 @@ pub struct Config {
     pub primary_language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_language: Option<String>,
+    /// Prefer a described track on this output, for a viewer who is blind or
+    /// has low vision. Per output rather than one setting for both, because
+    /// two people who need description may not share a language.
+    #[serde(default)]
+    pub primary_audio_description: bool,
+    #[serde(default)]
+    pub secondary_audio_description: bool,
     /// Unset means no subtitles unless chosen for the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_language: Option<String>,
@@ -111,6 +118,8 @@ impl Default for Config {
             subtitle_size: None,
             primary_language: None,
             secondary_language: None,
+            primary_audio_description: false,
+            secondary_audio_description: false,
             subtitle_language: None,
             resume_min_percent: None,
             watched_percent: None,
