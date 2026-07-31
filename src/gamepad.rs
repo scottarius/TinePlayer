@@ -29,14 +29,17 @@ pub enum Action {
     /// The lower face button was let go. Only the controls listen for it,
     /// where holding a button means something other than pressing it.
     ActivateReleased,
-    /// The same for the upper face button, which is held to silence
-    /// everything and tapped to change the screen.
-    FullscreenReleased,
+    /// The same for the left face button, which is held to silence
+    /// everything and tapped to change the subtitles.
+    SubtitlesReleased,
     PageUp,
     PageDown,
     PlayPause,
     Fullscreen,
     Subtitles,
+    /// Swap the right-hand readout between the running time and what is left
+    /// of it.
+    TimeReadout,
 }
 
 /// 60Hz. Polling has to be fast enough that a press feels immediate, and this
@@ -81,8 +84,8 @@ pub fn install<F: Fn(Action) + 'static>(handler: F) {
                 EventType::ButtonReleased(Button::South, _) => {
                     handler(Action::ActivateReleased);
                 }
-                EventType::ButtonReleased(Button::North, _) => {
-                    handler(Action::FullscreenReleased);
+                EventType::ButtonReleased(Button::West, _) => {
+                    handler(Action::SubtitlesReleased);
                 }
                 _ => {}
             }
@@ -127,6 +130,9 @@ fn button_action(button: Button) -> Option<Action> {
         Button::LeftTrigger => Some(Action::PageUp),
         Button::RightTrigger => Some(Action::PageDown),
         Button::Start => Some(Action::PlayPause),
+        // Clicking the right stick: a deliberate press that nothing else
+        // wants, for a readout somebody either cares about or never touches.
+        Button::RightThumb => Some(Action::TimeReadout),
         _ => None,
     }
 }

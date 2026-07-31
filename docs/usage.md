@@ -64,7 +64,8 @@ though everything is also mouse interactable.
 | <kbd>↓</kbd> | D-pad or left stick | In Video: Hide or navigate the playback controls                                        |
 | <kbd>F</kbd> | Y / Triangle | Toggle fullscreen                                                                       |
 | <kbd>C</kbd> | X / Square | Show or hide subtitles, during playback                                                 |
-| <kbd>M</kbd> | Hold Y / Triangle | Mute or restore both outputs at once                                                    |
+| <kbd>M</kbd> | Hold X / Square | Mute or restore both outputs at once                                                    |
+| <kbd>T</kbd> | Right stick click | Swap the right-hand readout between the length and the time left                        |
 | Hold <kbd>Enter</kbd> | Hold A / Cross | On the volume button: Mute or restore both outputs at once.                             |
 | <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser                                                                   |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL                                                                     |

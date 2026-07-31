@@ -65,7 +65,11 @@ need to set those by hand.
 ## Volumes
 
 Each output carries its own level and can be adjusted or muted independently.
-The volume settings persist between sessions. Holding or long-pressing the
+The volume settings persist between sessions. Set them from the settings menu
+under either output, or from the volume button during playback, which gives a
+slider per output rather than the fixed steps the menu offers.
+
+Holding or long-pressing the
 primary volume button will mute both immediately, and holding it again restores
 what each output was doing. Adjusting anything in the panel keeps the muted
 state instead, and your change applies from there.

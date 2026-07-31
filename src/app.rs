@@ -34,20 +34,54 @@ enum Setting {
     SubtitleFont,
 }
 
+/// What a slider on the settings screen is setting. All of them work in
+/// percentages, which is what makes one set of arithmetic serve the lot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Slider {
+    /// The level for one output, by role.
+    Volume(&'static str),
+    ResumeThreshold,
+    WatchedThreshold,
+}
+
+impl Slider {
+    /// How far one press moves it. Levels move in fives, being a rough
+    /// setting anyone can hear; the thresholds move by one, since the useful
+    /// range of each is narrow enough that fives would be three choices.
+    fn step(self) -> f64 {
+        match self {
+            Slider::Volume(_) => 5.0,
+            _ => 1.0,
+        }
+    }
+
+    fn range(self) -> std::ops::RangeInclusive<f64> {
+        match self {
+            Slider::Volume(_) => 0.0..=100.0,
+            // Below one per cent is indistinguishable from starting over, and
+            // past a quarter of a film nothing would ever be resumable.
+            Slider::ResumeThreshold => 1.0..=25.0,
+            // Anything under half is not watching it, and a hundred means
+            // sitting through the credits to be counted.
+            Slider::WatchedThreshold => 50.0..=100.0,
+        }
+    }
+}
+
 /// Rows of the settings screen, in the order they appear.
 /// Rows a page jump covers, roughly a screenful at the default size. What
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
 
-const SETTINGS_ROWS: usize = 15;
-/// Rows that begin a group: each output, then subtitles, then the
-/// housekeeping at the bottom.
-const SETTINGS_SECTIONS: [i32; 4] = [3, 6, 9, 12];
+const SETTINGS_ROWS: usize = 18;
+/// Rows that begin a group: each output, then subtitles, then what is
+/// remembered between runs, then the housekeeping at the bottom.
+const SETTINGS_SECTIONS: [i32; 5] = [3, 7, 11, 14, 17];
 /// Rows that belong to the row named above them, drawn indented so the group
 /// reads as settings of that one thing rather than as more of their own.
 /// Indentation is what lets them be called just "Preferred Language" instead
 /// of repeating "Primary" and "Secondary" in every label.
-const SETTINGS_SUBROWS: [i32; 6] = [4, 5, 7, 8, 10, 11];
+const SETTINGS_SUBROWS: [i32; 8] = [4, 5, 6, 8, 9, 10, 12, 13];
 
 /// Sizes offered for subtitles. The middle of the range is the default; the
 /// ends are deliberately wide, since what reads well from a sofa and what
@@ -90,6 +124,7 @@ enum Screen {
     Opening,
     Chooser,
     Confirm,
+    About,
     ConfirmQuit,
     Error,
     Playing,
@@ -152,6 +187,19 @@ pub struct App {
     /// gamepad has no events to hand to GTK, so it needs to move the
     /// selection itself and therefore needs to know what it is moving.
     nav_list: RefCell<Option<gtk::ListBox>>,
+    /// The sliders on the settings screen, by the row each one sits in, so
+    /// left and right can find the one that is selected. Emptied whenever a
+    /// screen without them is built.
+    settings_sliders: RefCell<Vec<(i32, Slider, gtk::Scale, gtk::Label)>>,
+    /// The About page's scroll position, so up and down can move a page that
+    /// has nothing on it to select.
+    about_scroll: RefCell<Option<gtk::Adjustment>>,
+    /// Where selectable text lives on the screen being shown, so Ctrl+C can
+    /// find it. Set by the screens that have any, cleared by every other.
+    copy_root: RefCell<Option<gtk::Widget>>,
+    /// The switches on the settings screen, by row, so a toggle can move the
+    /// one it belongs to instead of rebuilding the screen under the viewer.
+    settings_switches: RefCell<Vec<(i32, gtk::Switch)>>,
     nav_footer: RefCell<Vec<gtk::Button>>,
     /// Buttons above the list, currently the browser's path trail. Up from
     /// the first row reaches them, the way Down reaches the footer.
@@ -208,13 +256,15 @@ pub struct App {
     /// produces a change per pixel, and each one would otherwise be a write to
     /// disk.
     volume_save_pending: Cell<bool>,
-    /// The state of a hold on the gamepad's upper face button, which silences
-    /// everything rather than changing the screen. Kept here rather than in
-    /// the controls: it is about what a button meant, not about the strip,
-    /// and it works whether or not the strip is on screen.
-    fullscreen_hold: Cell<u64>,
-    fullscreen_holding: Cell<bool>,
-    fullscreen_held: Cell<bool>,
+    /// The state of a hold on the gamepad's left face button, which silences
+    /// everything rather than changing the subtitles. The same button for
+    /// both because they are the same question - whether you are being given
+    /// the sound or the words. Kept here rather than in the controls: it is
+    /// about what a button meant, not about the strip, and it works whether
+    /// or not the strip is on screen.
+    subtitles_hold: Cell<u64>,
+    subtitles_holding: Cell<bool>,
+    subtitles_held: Cell<bool>,
     /// The screen a modal was opened from, so backing out of one returns
     /// there. Reached by shortcut as well as by row, so it cannot be assumed
     /// to be the step that offers them.
@@ -245,7 +295,7 @@ impl App {
         let styles = install_styles();
         let monitor = appearance::tallest_monitor();
         let scale = appearance::resolve_scale(config.ui_scale, monitor.as_ref());
-        styles.load_from_data(&style_css(scale));
+        styles.load_from_data(&style_css(scale, dark));
         if config.ui_scale.is_none()
             && scale != 1.0
             && let Some(monitor) = monitor.as_ref()
@@ -288,6 +338,10 @@ impl App {
             sounds: RefCell::new(sounds),
             restart,
             nav_list: RefCell::new(None),
+            settings_sliders: RefCell::new(Vec::new()),
+            about_scroll: RefCell::new(None),
+            copy_root: RefCell::new(None),
+            settings_switches: RefCell::new(Vec::new()),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
@@ -305,9 +359,9 @@ impl App {
             session_resume: RefCell::new(None),
             subtitles_hidden: Cell::new(false),
             volume_save_pending: Cell::new(false),
-            fullscreen_hold: Cell::new(0),
-            fullscreen_holding: Cell::new(false),
-            fullscreen_held: Cell::new(false),
+            subtitles_hold: Cell::new(0),
+            subtitles_holding: Cell::new(false),
+            subtitles_held: Cell::new(false),
             origin: Cell::new(Screen::Menu),
         });
 
@@ -467,6 +521,10 @@ impl App {
                     app.controls_left_right(1);
                     glib::Propagation::Stop
                 }
+                // In the menus they belong to a slider if one is selected,
+                // and to nothing otherwise.
+                gdk::Key::Left if app.settings_slider(-1) => glib::Propagation::Stop,
+                gdk::Key::Right if app.settings_slider(1) => glib::Propagation::Stop,
                 // Always goes back one level, so it never quits by surprise
                 // from somewhere the user was only browsing.
                 // Only while the button row is held: elsewhere in playback
@@ -540,6 +598,10 @@ impl App {
                     app.toggle_mute();
                     glib::Propagation::Stop
                 }
+                gdk::Key::t | gdk::Key::T if playing => {
+                    app.toggle_time_readout();
+                    glib::Propagation::Stop
+                }
                 // The shortcut GTK's own file chooser and every web browser use
                 // to reach an address bar, worth having from the menu which is
                 // otherwise two steps away from the panel.
@@ -555,6 +617,14 @@ impl App {
                         && matches!(*app.screen.borrow(), Screen::Menu | Screen::VideoSource) =>
                 {
                     app.show_paste_uri();
+                    glib::Propagation::Stop
+                }
+                // The shortcut for copying, which GTK would otherwise only
+                // deliver to whichever widget has focus - and the text on the
+                // About page deliberately never takes it.
+                gdk::Key::c | gdk::Key::C
+                    if state.contains(gdk::ModifierType::CONTROL_MASK) && app.copy_selection() =>
+                {
                     glib::Propagation::Stop
                 }
                 // The other half of the pair, and the shortcut every desktop
@@ -633,7 +703,7 @@ impl App {
         match screen {
             Screen::Playing => self.leave_playback(),
             Screen::Chooser => self.leave_chooser(),
-            Screen::Confirm => self.show_settings(),
+            Screen::Confirm | Screen::About => self.show_settings(),
             // Nothing to go back to when the video we were started for could
             // not be opened.
             Screen::Error if self.error_is_fatal.get() => self.window.close(),
@@ -907,6 +977,10 @@ impl App {
     /// Records what the gamepad should be moving through. Screens built from
     /// buttons alone pass `None`, and fall back to GTK's directional focus.
     fn set_nav(&self, list: Option<&gtk::ListBox>, header: &[gtk::Button], footer: &[gtk::Button]) {
+        // Every screen goes through here, which makes it the one place that
+        // can be sure a screen with selectable text is no longer the one on
+        // display. A screen that has some sets it again afterwards.
+        *self.copy_root.borrow_mut() = None;
         *self.nav_list.borrow_mut() = list.cloned();
         *self.nav_header.borrow_mut() = header.to_vec();
         *self.nav_footer.borrow_mut() = footer.to_vec();
@@ -936,10 +1010,14 @@ impl App {
             Action::Left if self.playback.borrow().is_some() => self.controls_left_right(-1),
             Action::Right if self.playback.borrow().is_some() => self.controls_left_right(1),
             Action::Left => {
-                self.window.child_focus(gtk::DirectionType::Left);
+                if !self.settings_slider(-1) {
+                    self.window.child_focus(gtk::DirectionType::Left);
+                }
             }
             Action::Right => {
-                self.window.child_focus(gtk::DirectionType::Right);
+                if !self.settings_slider(1) {
+                    self.window.child_focus(gtk::DirectionType::Right);
+                }
             }
             // During playback the lower face button is the obvious place for
             // play/pause, and there is nothing else on screen to activate.
@@ -985,19 +1063,20 @@ impl App {
                     self.go_back();
                 }
             }
-            // During playback this button is held for silence and tapped for
-            // the screen, so the tap waits for the release to know which it
-            // was. Everywhere else there is nothing to silence and it acts at
-            // once, as it always has.
-            Action::Fullscreen if self.playback.borrow().is_some() => self.press_fullscreen(),
             Action::Fullscreen => self.toggle_fullscreen(),
-            Action::FullscreenReleased if self.playback.borrow().is_some() => {
-                self.release_fullscreen()
-            }
-            Action::FullscreenReleased => {}
             // Ignored outside playback, matching the keyboard: there is
             // nothing to turn off from a menu.
-            Action::Subtitles => self.toggle_subtitles(),
+            // During playback this button is held for silence and tapped for
+            // subtitles, so the tap waits for the release to know which it
+            // was. Everywhere else there is nothing to silence and nothing to
+            // subtitle, so it does neither.
+            Action::Subtitles if self.playback.borrow().is_some() => self.press_subtitles(),
+            Action::Subtitles => {}
+            Action::SubtitlesReleased if self.playback.borrow().is_some() => {
+                self.release_subtitles()
+            }
+            Action::SubtitlesReleased => {}
+            Action::TimeReadout => self.toggle_time_readout(),
         }
     }
 
@@ -1005,6 +1084,9 @@ impl App {
     /// keyboard does: the footer button sits below the last row, and the top
     /// of the list is a hard stop rather than wrapping.
     fn move_selection(self: &Rc<Self>, delta: i32) {
+        if self.scroll_about(delta) {
+            return;
+        }
         // Cloned out before anything can rebuild the screen underneath us.
         let list = self.nav_list.borrow().clone();
         let footer = self.nav_footer.borrow().clone();
@@ -1025,7 +1107,7 @@ impl App {
             if let Some(row) = list.row_at_index(index) {
                 self.sounds.borrow().click();
                 list.select_row(Some(&row));
-                row.grab_focus();
+                settle_on(&row);
             }
         };
 
@@ -1105,32 +1187,144 @@ impl App {
         self.wake_controls();
     }
 
-    /// Starts a hold on the upper face button. Nothing happens yet: what the
+    /// Starts a hold on the left face button. Nothing happens yet: what the
     /// press meant is only known when it is let go, or when it has been down
     /// long enough to have meant the other thing.
-    fn press_fullscreen(self: &Rc<Self>) {
-        if self.fullscreen_holding.replace(true) {
+    fn press_subtitles(self: &Rc<Self>) {
+        if self.subtitles_holding.replace(true) {
             return;
         }
-        self.fullscreen_held.set(false);
-        let mark = self.fullscreen_hold.get() + 1;
-        self.fullscreen_hold.set(mark);
+        self.subtitles_held.set(false);
+        let mark = self.subtitles_hold.get() + 1;
+        self.subtitles_hold.set(mark);
         let app = self.clone();
         glib::timeout_add_local_once(crate::controls::HOLD, move || {
-            if app.fullscreen_hold.get() != mark {
+            if app.subtitles_hold.get() != mark {
                 return;
             }
-            app.fullscreen_held.set(true);
+            app.subtitles_held.set(true);
             app.toggle_mute();
         });
     }
 
-    /// Changes the screen, unless the hold already silenced everything.
-    fn release_fullscreen(self: &Rc<Self>) {
-        self.fullscreen_holding.set(false);
-        self.fullscreen_hold.set(self.fullscreen_hold.get() + 1);
-        if !self.fullscreen_held.replace(false) {
-            self.toggle_fullscreen();
+    /// Changes the subtitles, unless the hold already silenced everything.
+    fn release_subtitles(self: &Rc<Self>) {
+        self.subtitles_holding.set(false);
+        self.subtitles_hold.set(self.subtitles_hold.get() + 1);
+        if !self.subtitles_held.replace(false) {
+            self.toggle_subtitles();
+        }
+    }
+
+    /// Moves the level on the settings row that is selected, and says whether
+    /// there was one. Left and right do nothing else on this screen, so they
+    /// are free to mean this where a slider is sitting.
+    fn settings_slider(self: &Rc<Self>, direction: isize) -> bool {
+        let Some(index) = self
+            .nav_list
+            .borrow()
+            .as_ref()
+            .and_then(|list| list.selected_row())
+            .map(|row| row.index())
+        else {
+            return false;
+        };
+        let found = self
+            .settings_sliders
+            .borrow()
+            .iter()
+            .find(|(row, ..)| *row == index)
+            .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
+        let Some((kind, scale, value)) = found else {
+            return false;
+        };
+        // Snapped to the step rather than added to: a value set finely with a
+        // pointer, or from the panel during playback, otherwise carries its
+        // odd remainder through every press that follows.
+        let step = kind.step();
+        let now = scale.value().round();
+        let moved = if direction > 0 {
+            (now / step).floor() * step + step
+        } else {
+            (now / step).ceil() * step - step
+        };
+        let range = kind.range();
+        let moved = moved.clamp(*range.start(), *range.end());
+        scale.set_value(moved);
+        self.set_slider(kind, moved, &value);
+        true
+    }
+
+    /// Silences the output the selected row belongs to, or lets it go. What
+    /// activating a level row does, since there is nothing to open.
+    fn toggle_settings_mute(self: &Rc<Self>, index: i32) {
+        let found = self
+            .settings_sliders
+            .borrow()
+            .iter()
+            .find(|(row, ..)| *row == index)
+            .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
+        let Some((Slider::Volume(role), scale, value)) = found else {
+            return;
+        };
+        let muted = !self.config.borrow().muted(role);
+        {
+            let mut config = self.config.borrow_mut();
+            config.set_volume(role, scale.value() / 100.0);
+            config.set_muted(role, muted);
+        }
+        value.set_text(&volume_label(scale.value() / 100.0, muted));
+        self.save_volume_soon();
+    }
+
+    /// Where a slider stands now, and how that reads beside it.
+    fn slider_state(&self, kind: Slider) -> (f64, String) {
+        let config = self.config.borrow();
+        match kind {
+            Slider::Volume(role) => {
+                let level = config.volume(role);
+                (level * 100.0, volume_label(level, config.muted(role)))
+            }
+            Slider::ResumeThreshold => {
+                let percent = config.resume_min_percent().round();
+                (percent, format!("{percent}%"))
+            }
+            Slider::WatchedThreshold => {
+                let percent = config.watched_percent().round();
+                (percent, format!("{percent}%"))
+            }
+        }
+    }
+
+    /// Writes a slider through to the configuration and puts the reading
+    /// beside it in step. Turning an output up unmutes it, as the panel
+    /// during playback does.
+    fn set_slider(self: &Rc<Self>, kind: Slider, moved: f64, value: &gtk::Label) {
+        let range = kind.range();
+        let moved = moved.clamp(*range.start(), *range.end());
+        {
+            let mut config = self.config.borrow_mut();
+            match kind {
+                Slider::Volume(role) => {
+                    config.set_volume(role, moved / 100.0);
+                    config.set_muted(role, false);
+                }
+                Slider::ResumeThreshold => config.resume_min_percent = Some(moved),
+                Slider::WatchedThreshold => config.watched_percent = Some(moved),
+            }
+        }
+        value.set_text(&match kind {
+            Slider::Volume(_) => volume_label(moved / 100.0, false),
+            _ => format!("{}%", moved.round()),
+        });
+        self.save_volume_soon();
+    }
+
+    /// Swaps the right-hand readout between the length and what is left.
+    fn toggle_time_readout(&self) {
+        let controls = self.controls.borrow().clone();
+        if let Some(controls) = controls {
+            controls.toggle_remaining();
         }
     }
 
@@ -1500,7 +1694,7 @@ impl App {
         let remembered = (*self.menu_row.borrow()).min(last_row_index(&list));
         if let Some(row) = list.row_at_index(remembered) {
             list.select_row(Some(&row));
-            row.grab_focus();
+            settle_on(&row);
         }
     }
 
@@ -1719,7 +1913,7 @@ impl App {
             .unwrap_or(0) as i32;
         if let Some(row) = list.row_at_index(opening) {
             list.select_row(Some(&row));
-            row.grab_focus();
+            settle_on(&row);
         }
     }
 
@@ -1796,7 +1990,7 @@ impl App {
                 if let Some(row) = list.row_at_index(0) {
                     app.sounds.borrow().click();
                     list.select_row(Some(&row));
-                    row.grab_focus();
+                    settle_on(&row);
                 }
                 glib::Propagation::Stop
             });
@@ -2808,7 +3002,7 @@ impl App {
             .unwrap_or(if rows.len() > 1 { 1 } else { 0 }) as i32;
         if let Some(row) = list.row_at_index(opening) {
             list.select_row(Some(&row));
-            row.grab_focus();
+            settle_on(&row);
         }
     }
 
@@ -2931,7 +3125,7 @@ impl App {
         self.window.set_child(Some(&page));
         if let Some(row) = list.row_at_index(0) {
             list.select_row(Some(&row));
-            row.grab_focus();
+            settle_on(&row);
         }
     }
 
@@ -2983,7 +3177,7 @@ impl App {
         self.window.set_child(Some(&page));
         if let Some(row) = list.row_at_index(0) {
             list.select_row(Some(&row));
-            row.grab_focus();
+            settle_on(&row);
         }
     }
 
@@ -3057,6 +3251,11 @@ impl App {
                     true,
                 ),
                 (
+                    "Volume".to_string(),
+                    volume_label(config.volume("primary"), config.muted("primary")),
+                    true,
+                ),
+                (
                     "Secondary Audio Device".to_string(),
                     config
                         .secondary_sink
@@ -3080,6 +3279,11 @@ impl App {
                     true,
                 ),
                 (
+                    "Volume".to_string(),
+                    volume_label(config.volume("secondary"), config.muted("secondary")),
+                    true,
+                ),
+                (
                     "Subtitle Preference".to_string(),
                     crate::subtitles::describe(config.subtitle_language.as_deref()),
                     true,
@@ -3100,17 +3304,18 @@ impl App {
                         .unwrap_or_else(|| crate::pipeline::DEFAULT_SUBTITLE_FONT.to_string()),
                     true,
                 ),
+                (
+                    "Resume Threshold".to_string(),
+                    format!("{}%", config.resume_min_percent().round()),
+                    true,
+                ),
+                (
+                    "Watched Threshold".to_string(),
+                    format!("{}%", config.watched_percent().round()),
+                    true,
+                ),
                 ("Clear Saved Playback Data".to_string(), String::new(), true),
-                (
-                    "Version".to_string(),
-                    env!("CARGO_PKG_VERSION").to_string(),
-                    false,
-                ),
-                (
-                    "GStreamer".to_string(),
-                    gstreamer::version_string().to_string(),
-                    false,
-                ),
+                ("About".to_string(), String::new(), true),
             ]
         };
         debug_assert_eq!(rows.len(), SETTINGS_ROWS);
@@ -3118,6 +3323,65 @@ impl App {
         for (label, value, enabled) in &rows {
             list.append(&menu_row(label, value, *enabled));
         }
+        // Swapped in over the ordinary rows built above, which keeps the row
+        // count and the section and indent indices in one place rather than
+        // splitting the list into two kinds of thing to build.
+        // A fifth of what the window has, so the bar is a consistent share
+        // of the screen whether that is a laptop or a television. The monitor
+        // stands in before the window has been given a size.
+        let slider_width = match self.window.width() {
+            0 => appearance::monitor_for_window(&self.window)
+                .map(|monitor| monitor.geometry().width())
+                .unwrap_or(1920),
+            width => width,
+        } / 5;
+        self.settings_switches.borrow_mut().clear();
+        for (index, label, on) in [
+            (2, "Navigation Sounds", self.config.borrow().sounds),
+            (
+                5,
+                "Prefer Audio Description",
+                self.config.borrow().primary_audio_description,
+            ),
+            (
+                9,
+                "Prefer Audio Description",
+                self.config.borrow().secondary_audio_description,
+            ),
+        ] {
+            let (widget, switch) = switch_row(label, on);
+            if let Some(row) = list.row_at_index(index) {
+                row.set_child(Some(&widget));
+            }
+            self.settings_switches.borrow_mut().push((index, switch));
+        }
+
+        self.settings_sliders.borrow_mut().clear();
+        for (index, kind, label) in [
+            (6, Slider::Volume("primary"), "Volume"),
+            (10, Slider::Volume("secondary"), "Volume"),
+            (14, Slider::ResumeThreshold, "Resume Threshold"),
+            (15, Slider::WatchedThreshold, "Watched Threshold"),
+        ] {
+            let (now, reading) = self.slider_state(kind);
+            let (widget, scale, value) =
+                slider_row(label, slider_width, kind.range(), now, &reading);
+            if let Some(row) = list.row_at_index(index) {
+                row.set_child(Some(&widget));
+            }
+            {
+                let app = self.clone();
+                let value = value.clone();
+                scale.connect_change_value(move |_, _, moved| {
+                    app.set_slider(kind, moved, &value);
+                    glib::Propagation::Proceed
+                });
+            }
+            self.settings_sliders
+                .borrow_mut()
+                .push((index, kind, scale, value));
+        }
+
         for index in SETTINGS_SECTIONS {
             if let Some(row) = list.row_at_index(index) {
                 row.add_css_class("tp-section-start");
@@ -3143,13 +3407,16 @@ impl App {
                     3 => app.open_setting(Setting::PrimaryDevice),
                     4 => app.open_setting(Setting::PrimaryLanguage),
                     5 => app.toggle_audio_description(true),
-                    6 => app.open_setting(Setting::SecondaryDevice),
-                    7 => app.open_setting(Setting::SecondaryLanguage),
-                    8 => app.toggle_audio_description(false),
-                    9 => app.open_setting(Setting::SubtitleLanguage),
-                    10 => app.open_setting(Setting::SubtitleSize),
-                    11 => app.open_setting(Setting::SubtitleFont),
-                    12 => app.confirm_clear_data(),
+                    6 => app.toggle_settings_mute(6),
+                    7 => app.open_setting(Setting::SecondaryDevice),
+                    8 => app.open_setting(Setting::SecondaryLanguage),
+                    9 => app.toggle_audio_description(false),
+                    10 => app.toggle_settings_mute(10),
+                    11 => app.open_setting(Setting::SubtitleLanguage),
+                    12 => app.open_setting(Setting::SubtitleSize),
+                    13 => app.open_setting(Setting::SubtitleFont),
+                    16 => app.confirm_clear_data(),
+                    17 => app.show_about(),
                     _ => {}
                 }
             });
@@ -3165,7 +3432,7 @@ impl App {
         let remembered = (*self.settings_row.borrow()).min(last_row_index(&list));
         if let Some(row) = list.row_at_index(remembered) {
             list.select_row(Some(&row));
-            row.grab_focus();
+            settle_on(&row);
         }
     }
 
@@ -3190,7 +3457,27 @@ impl App {
             }
             let _ = config.save();
         }
-        self.show_settings();
+        // In place rather than rebuilding the screen: a rebuild reselects the
+        // row but loses where the list was scrolled to, which threw the row
+        // being pressed off the screen.
+        let on = if primary {
+            self.config.borrow().primary_audio_description
+        } else {
+            self.config.borrow().secondary_audio_description
+        };
+        self.set_settings_switch(if primary { 5 } else { 9 }, on);
+    }
+
+    /// Moves the switch on a settings row to match what it now reports.
+    fn set_settings_switch(&self, index: i32, on: bool) {
+        if let Some((_, switch)) = self
+            .settings_switches
+            .borrow()
+            .iter()
+            .find(|(row, _)| *row == index)
+        {
+            switch.set_active(on);
+        }
     }
 
     fn toggle_sounds(self: &Rc<Self>) {
@@ -3201,13 +3488,133 @@ impl App {
             (config.sounds, config.primary_sink.clone())
         };
         *self.sounds.borrow_mut() = Sounds::new(enabled, device);
-        self.show_settings();
+        self.set_settings_switch(2, enabled);
     }
 
     /// Re-renders every size in the interface at a new scale.
     fn restyle(&self, scale: f64) {
         self.scale.set(scale);
-        self.styles.load_from_data(&style_css(scale));
+        self.styles
+            .load_from_data(&style_css(scale, self.dark.get()));
+    }
+
+    /// What is running, who wrote what it is built on, and under what terms.
+    ///
+    /// Prose rather than the two version rows this replaced: the versions were
+    /// only ever there to be read out when something went wrong, and the
+    /// licenses of the work TinePlayer is built on ask to be acknowledged
+    /// somewhere a person can find them. A packaged application with no About
+    /// page has nowhere to put either.
+    fn show_about(self: &Rc<Self>) {
+        let (page, scroller, body, back) = text_page("About");
+
+        let version = format!("TinePlayer {}", env!("CARGO_PKG_VERSION"));
+        body.append(&about_heading(&version));
+        body.append(&about_text(
+            "Free software under the MIT License, Copyright (c) 2026 Scott Bounds. You may use, change and pass it on, provided the copyright notice travels with it. It comes with no warranty of any kind.",
+        ));
+        body.append(&about_link(
+            "Report issues or check for updates at",
+            "https://github.com/scottarius/TinePlayer",
+            "https://github.com/scottarius/TinePlayer",
+        ));
+
+        body.append(&about_heading("Built with"));
+        body.append(&about_text(&format!(
+            "{} and GTK {}.{}.{}, both free software under the GNU Lesser General Public License.",
+            gstreamer::version_string(),
+            gtk::major_version(),
+            gtk::minor_version(),
+            gtk::micro_version(),
+        )));
+        body.append(&about_link(
+            "Also the work of a good many people writing Rust libraries, all attributed here:",
+            "https://github.com/scottarius/TinePlayer/blob/main/THIRD-PARTY.md",
+            "https://github.com/scottarius/TinePlayer/THIRD-PARTY.md",
+        ));
+
+        body.append(&about_heading("Where things are kept"));
+        for (label, path) in [
+            ("Settings", crate::config::config_path()),
+            ("Saved positions", crate::config::positions_path()),
+        ] {
+            body.append(&about_text(&format!("{label}: {}", path.display())));
+        }
+
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_settings();
+            });
+        }
+
+        // No list to move through, so up and down scroll the page instead.
+        // Without this the only way down a page longer than the screen would
+        // be a mouse, on an interface built not to need one.
+        self.set_nav(None, std::slice::from_ref(&back), &[]);
+        *self.about_scroll.borrow_mut() = Some(scroller.vadjustment());
+        *self.copy_root.borrow_mut() = Some(body.upcast());
+        *self.screen.borrow_mut() = Screen::About;
+        self.window.set_child(Some(&page));
+        back.grab_focus();
+    }
+
+    /// Copies whatever is selected on the screen being shown, and says
+    /// whether there was anything. Each paragraph is its own label and holds
+    /// its own selection, so the first one holding any is the one that was
+    /// dragged across.
+    ///
+    /// Done by hand because GTK delivers Ctrl+C to whichever widget has
+    /// focus, and selectable text here deliberately never takes focus: it
+    /// would put a caret in the middle of a screen driven by arrow keys.
+    fn copy_selection(&self) -> bool {
+        let root = self.copy_root.borrow().clone();
+        let Some(root) = root else { return false };
+        self.copy_from(&root)
+    }
+
+    fn copy_from(&self, widget: &gtk::Widget) -> bool {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>()
+            && let Some((from, to)) = label.selection_bounds()
+        {
+            let selected: String = label
+                .text()
+                .chars()
+                .skip(from as usize)
+                .take((to - from) as usize)
+                .collect();
+            self.window.clipboard().set_text(&selected);
+            return true;
+        }
+        let mut next = widget.first_child();
+        while let Some(child) = next {
+            if self.copy_from(&child) {
+                return true;
+            }
+            next = child.next_sibling();
+        }
+        false
+    }
+
+    /// Moves the About page when there is nothing to select on it. Says
+    /// whether it did, so ordinary navigation can carry on elsewhere.
+    fn scroll_about(&self, delta: i32) -> bool {
+        if *self.screen.borrow() != Screen::About {
+            return false;
+        }
+        let Some(adjustment) = self.about_scroll.borrow().clone() else {
+            return false;
+        };
+        // A third of a screenful a press: enough to make progress, little
+        // enough to keep your place on the page.
+        let step = adjustment.page_size() / 3.0;
+        let moved = adjustment.value() + delta as f64 * step;
+        adjustment.set_value(moved.clamp(
+            adjustment.lower(),
+            (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
+        ));
+        true
     }
 
     fn confirm_clear_data(self: &Rc<Self>) {
@@ -3816,6 +4223,9 @@ impl App {
 
         // Nothing to move a selection through here.
         self.set_nav(None, &[], &[]);
+        // A path or a message that went wrong is the thing most worth copying
+        // in the whole application.
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
         *self.screen.borrow_mut() = Screen::Error;
         self.window.set_child(Some(&page));
         back.grab_focus();
@@ -3996,6 +4406,229 @@ fn back_button() -> gtk::Button {
 }
 
 /// Where a stored language code sits in the offered list.
+/// How a level reads in the settings menu. A silenced output says so rather
+/// than showing the level it will return to, which is what the panel during
+/// playback does too.
+fn volume_label(level: f64, muted: bool) -> String {
+    if muted {
+        "Muted".to_string()
+    } else {
+        format!("{}%", (level * 100.0).round() as u32)
+    }
+}
+
+/// A settings row carrying a switch rather than the word "On" or "Yes".
+///
+/// The switch is a readout, not a control: it cannot be clicked or focused,
+/// and the row it sits in is what gets activated. That keeps one way of
+/// working the menu - move to a row, press it - rather than a second target
+/// inside the row that only a pointer could reach.
+fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(24)
+        .build();
+    row.add_css_class("tp-row");
+
+    let name = gtk::Label::new(Some(label));
+    name.set_xalign(0.0);
+    name.set_hexpand(true);
+    row.append(&name);
+
+    let switch = gtk::Switch::new();
+    switch.set_active(on);
+    switch.set_can_focus(false);
+    switch.set_can_target(false);
+    switch.set_valign(gtk::Align::Center);
+    row.append(&switch);
+
+    (row, switch)
+}
+
+/// A settings row carrying a slider rather than a value and a chevron.
+///
+/// A level is a quantity, not a choice from a list, and a list of ten
+/// percentages was a menu pretending to be a dial. Left and right move it
+/// where they would otherwise do nothing on this screen, and the row keeps
+/// the reading beside it so it can be set without looking at the bar.
+fn slider_row(
+    label: &str,
+    width: i32,
+    range: std::ops::RangeInclusive<f64>,
+    now: f64,
+    reading: &str,
+) -> (gtk::Box, gtk::Scale, gtk::Label) {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(24)
+        .build();
+    row.add_css_class("tp-row");
+
+    // The label takes the slack instead of the slider, which keeps the bar
+    // over on the right where every other row shows its value. A bar the
+    // width of the screen also reads as far more precision than a level has.
+    let name = gtk::Label::new(Some(label));
+    name.set_xalign(0.0);
+    name.set_hexpand(true);
+    row.append(&name);
+
+    let scale = gtk::Scale::with_range(
+        gtk::Orientation::Horizontal,
+        *range.start(),
+        *range.end(),
+        1.0,
+    );
+    scale.set_draw_value(false);
+    scale.set_size_request(width, -1);
+    scale.set_can_focus(false);
+    scale.set_value(now);
+    scale.add_css_class("tp-progress");
+    row.append(&scale);
+
+    // Fixed width, so the bar beside it does not shift as the reading goes
+    // from "Muted" to "5%" and back.
+    let value = gtk::Label::new(Some(reading));
+    value.add_css_class("tp-value");
+    value.set_xalign(1.0);
+    value.set_width_chars(6);
+    row.append(&value);
+
+    (row, scale, value)
+}
+
+/// A page of prose rather than of rows, for the one screen that is read
+/// instead of navigated.
+fn text_page(title: &str) -> (gtk::Box, gtk::ScrolledWindow, gtk::Box, gtk::Button) {
+    let (page, list, back, _slot) = list_page(title, true);
+    // The list that came with the page is not wanted here, but the header,
+    // the back button and the margins are: taking the page apart is less
+    // duplication than building a second one that has to be kept in step.
+    if let Some(scroller) = page
+        .last_child()
+        .and_then(|w| w.downcast::<gtk::ScrolledWindow>().ok())
+    {
+        list.unparent();
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(16)
+            .build();
+        scroller.set_child(Some(&body));
+        return (page, scroller, body, back);
+    }
+    unreachable!("list_page always ends in its scroller");
+}
+
+/// A heading within a page of prose. Named rather than styled inline so the
+/// About page reads as a document rather than as a form.
+fn about_heading(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("tp-about-heading");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_selectable(true);
+    label.set_can_focus(false);
+    label
+}
+
+/// A line ending in a link that opens in the machine's browser. The address
+/// is shown as written rather than hidden behind words, since on a screen
+/// nobody can click there is still a use in being able to read it out.
+fn about_link(lead: &str, href: &str, shown: &str) -> gtk::Label {
+    let label = about_text("");
+    // The address on its own line rather than run on from the sentence: an
+    // address is a thing to be read character by character, and one wrapped
+    // mid-way through a paragraph is hard to pick back out of it.
+    label.set_markup(&format!(
+        "{}\n<a href=\"{}\">{}</a>",
+        glib::markup_escape_text(lead),
+        glib::markup_escape_text(href),
+        glib::markup_escape_text(shown),
+    ));
+    label
+}
+
+fn about_text(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("tp-about");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    // Selectable so a path or a version can be copied out rather than
+    // transcribed, but never focusable: GTK gives a selectable label focus by
+    // default, which would put a caret in the middle of a page navigated by
+    // arrow keys.
+    label.set_selectable(true);
+    label.set_can_focus(false);
+    // Long enough to read as paragraphs, short enough that the eye finds the
+    // next line: a line the width of a television is unreadable.
+    label.set_max_width_chars(72);
+    label
+}
+
+/// Puts a list on a row, and scrolls it there once there is a page to scroll.
+///
+/// Focus alone is not enough. A screen is built and handed to the window in
+/// one go, so at the moment a row is focused nothing has been laid out yet:
+/// the scroller has no height, the row has no position, and the scroll that
+/// would have followed the focus has nowhere to go. Coming back to a screen
+/// therefore landed at the top of it, however far down you had been.
+///
+/// So the scroll is done by hand, and not until the row has been mapped -
+/// which is the point at which it knows where it is.
+fn settle_on(row: &gtk::ListBoxRow) {
+    row.grab_focus();
+    // Setting the window's child maps the new page there and then, so by the
+    // time a screen picks its row the row is usually mapped already and
+    // waiting for the signal would be waiting forever. Only the first screen
+    // of a session arrives unmapped, because the window itself is not up yet.
+    if row.is_mapped() {
+        after_layout(row);
+    } else {
+        row.connect_map(after_layout);
+    }
+}
+
+/// Runs once the page has been through a layout pass, which is when a row
+/// finally knows where it is and the scroller knows how much of it there is
+/// to move.
+fn after_layout(row: &gtk::ListBoxRow) {
+    let row = row.clone();
+    glib::idle_add_local_once(move || {
+        row.grab_focus();
+        show_row(&row);
+    });
+}
+
+/// Moves the scroller so a row is on screen, a third of the way down rather
+/// than jammed against an edge: a row against the top of the frame looks like
+/// the first row, which is exactly the confusion being avoided.
+fn show_row(row: &gtk::ListBoxRow) {
+    let Some(list) = row.parent() else { return };
+    let mut ancestor = list.parent();
+    let scroller = loop {
+        match ancestor {
+            Some(widget) => match widget.downcast::<gtk::ScrolledWindow>() {
+                Ok(scroller) => break scroller,
+                Err(widget) => ancestor = widget.parent(),
+            },
+            None => return,
+        }
+    };
+
+    let Some((_, top)) = row.translate_coordinates(&list, 0.0, 0.0) else {
+        return;
+    };
+    let adjustment = scroller.vadjustment();
+    let page = adjustment.page_size();
+    // Already on screen: leave it where it is rather than jumping the page
+    // about under someone who can see the row perfectly well.
+    let bottom = top + f64::from(row.height());
+    if top >= adjustment.value() && bottom <= adjustment.value() + page {
+        return;
+    }
+    let wanted = top - page / 3.0;
+    adjustment.set_value(wanted.clamp(adjustment.lower(), (adjustment.upper() - page).max(0.0)));
+}
+
 fn language_position(code: Option<&str>) -> Option<usize> {
     let code = code?;
     crate::languages::LANGUAGES
@@ -4143,7 +4776,7 @@ fn install_styles() -> gtk::CssProvider {
     provider
 }
 
-fn style_css(scale: f64) -> String {
+fn style_css(scale: f64, dark: bool) -> String {
     let px = |base: f64| (base * scale).round() as i32;
 
     format!(
@@ -4156,8 +4789,44 @@ fn style_css(scale: f64) -> String {
         }}
         .tp-row {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
         .tp-value {{ opacity: 0.7; }}
+        /* Sized with the rest of the interface: the theme's default switch is
+           drawn for a mouse at a desk, and is a smudge from a sofa.
+
+           Monochrome rather than the theme's accent, which is the same blue as
+           the row highlight and disappeared into it. On is read from the fill
+           being solid, not from its hue, so it competes with nothing. Off the
+           full foreground colour in both, which was the loudest thing on a
+           screen of settings most people set once, but not by the same
+           amount: the dark theme needs the fill near white to read as on at
+           all, where the light one wants a good deal less than black.
+           Literal
+           colors picked from the theme here rather than `@theme_fg_color`, for
+           the reason the cancel button gives. */
+        .tp-row switch {{
+            min-width: {switch_w}px;
+            min-height: {switch_h}px;
+            border-radius: {switch_h}px;
+        }}
+        .tp-row switch > slider {{
+            min-width: {slider}px;
+            min-height: {slider}px;
+            border-radius: {switch_h}px;
+        }}
+        .tp-row switch:checked {{
+            background-color: {switch_on};
+            border-color: {switch_on};
+        }}
+        .tp-row switch:checked > slider {{ background-color: {switch_knob}; }}
         .tp-chevron {{ font-size: {row}px; opacity: 0.5; }}
         .tp-hint {{ font-size: {hint}px; opacity: 0.7; }}
+        /* The one screen made of paragraphs. Looser than a row of settings,
+           since it is read rather than scanned. */
+        .tp-about {{ font-size: {hint}px; opacity: 0.8; }}
+        .tp-about-heading {{
+            font-size: {row}px;
+            font-weight: bold;
+            margin-top: {pad_v}px;
+        }}
         .tp-button, .tp-play {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
         .tp-play {{ font-weight: bold; }}
         /* Backing out, on every screen that offers it. A literal red for the
@@ -4390,6 +5059,11 @@ fn style_css(scale: f64) -> String {
         radius = px(8.0),
         outline = px(2.0).max(1),
         handle = px(18.0),
+        switch_on = if dark { "#dcdcdc" } else { "#707070" },
+        switch_knob = if dark { "#1c1c1c" } else { "#ffffff" },
+        switch_w = px(64.0),
+        switch_h = px(32.0),
+        slider = px(26.0),
         section = px(28.0),
         subrow = px(28.0),
         icon = px(24.0),

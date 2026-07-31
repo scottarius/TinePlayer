@@ -633,6 +633,15 @@ impl Controls {
         }
     }
 
+    /// Swaps the right-hand readout between the length and what is left of
+    /// it, the same as clicking it does. Peeks the strip on the way, since
+    /// otherwise a press that only changes a hidden readout looks like a
+    /// press that did nothing.
+    pub fn toggle_remaining(self: &Rc<Self>) {
+        self.remaining.set(!self.remaining.get());
+        self.peek();
+    }
+
     /// Whether a press on the volume button should be held rather than acted
     /// on at once. Only from the button row: inside the panel the same press
     /// silences the one output it is pointing at, and holding it there would
