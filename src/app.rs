@@ -431,15 +431,62 @@ impl App {
                 // Only during playback: elsewhere the arrows belong to the
                 // menus, where left and right mean nothing.
                 gdk::Key::Left if playing => {
-                    app.scrub(-crate::player::STEP_SECONDS);
+                    app.controls_left_right(-1);
                     glib::Propagation::Stop
                 }
                 gdk::Key::Right if playing => {
-                    app.scrub(crate::player::STEP_SECONDS);
+                    app.controls_left_right(1);
                     glib::Propagation::Stop
                 }
                 // Always goes back one level, so it never quits by surprise
                 // from somewhere the user was only browsing.
+                // Only while the button row is held: elsewhere in playback
+                // there is nothing highlighted to press, and Enter should not
+                // quietly become a second play/pause.
+                gdk::Key::Return | gdk::Key::KP_Enter if playing => {
+                    let on_buttons =
+                        app.controls.borrow().as_ref().is_some_and(|controls| {
+                            controls.row() == crate::controls::Row::Buttons
+                        });
+                    if !on_buttons {
+                        return glib::Propagation::Proceed;
+                    }
+                    // Cloned out before pressing anything. Stop and settings
+                    // both tear playback down, which takes this same cell
+                    // mutably - and doing that while a read borrow is still
+                    // alive panics.
+                    let controls = app.controls.borrow().clone();
+                    if let Some(controls) = controls {
+                        controls.activate_focused();
+                    }
+                    glib::Propagation::Stop
+                }
+                gdk::Key::Up if playing => {
+                    app.enter_controls();
+                    glib::Propagation::Stop
+                }
+                gdk::Key::Down if playing => {
+                    app.leave_controls();
+                    glib::Propagation::Stop
+                }
+                // Backing out of the strip before backing out of playback: a
+                // press that quit the film while somebody was working through
+                // the buttons would be a nasty surprise.
+                gdk::Key::Escape if playing => {
+                    let showing = app
+                        .controls
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|controls| controls.is_showing());
+                    if showing {
+                        if let Some(controls) = app.controls.borrow().as_ref() {
+                            controls.hide();
+                        }
+                    } else {
+                        app.go_back();
+                    }
+                    glib::Propagation::Stop
+                }
                 gdk::Key::Escape => {
                     app.go_back();
                     glib::Propagation::Stop
@@ -602,6 +649,18 @@ impl App {
         *self.tick.borrow_mut() = Some(source);
     }
 
+    /// Shows where playback has reached, and nothing else. What a seek wants:
+    /// the buttons appearing over the picture on every skip is more than was
+    /// asked for.
+    fn peek_controls(&self) {
+        let playback = self.playback.borrow().clone();
+        let controls = self.controls.borrow().clone();
+        if let (Some(playback), Some(controls)) = (playback, controls) {
+            controls.update(&playback);
+            controls.peek();
+        }
+    }
+
     /// Brings the controls up on any input during playback, so the timeline
     /// is there whenever someone reaches for a control.
     fn wake_controls(&self) {
@@ -613,6 +672,62 @@ impl App {
         }
     }
 
+    /// Up: reveal the strip and take hold of it, then climb from the buttons
+    /// to the timeline.
+    ///
+    /// The first press lands on the buttons rather than the timeline, because
+    /// the buttons are what cannot be reached any other way - left and right
+    /// already seek without any of this.
+    fn enter_controls(self: &Rc<Self>) {
+        use crate::controls::Row;
+        let Some(controls) = self.controls.borrow().clone() else {
+            return;
+        };
+        match controls.row() {
+            Row::None => controls.set_row(Row::Buttons),
+            Row::Buttons => controls.set_row(Row::Timeline),
+            Row::Timeline => {}
+        }
+    }
+
+    /// Down: back to the buttons from the timeline, then let the strip go.
+    fn leave_controls(self: &Rc<Self>) {
+        use crate::controls::Row;
+        let Some(controls) = self.controls.borrow().clone() else {
+            return;
+        };
+        match controls.row() {
+            Row::Timeline => controls.set_row(Row::Buttons),
+            Row::Buttons => controls.set_row(Row::None),
+            // Nothing is held, so there is nothing to put down - but the strip
+            // may still be on screen from a seek or a moved mouse, and down
+            // should be rid of that too.
+            Row::None => {
+                if controls.is_showing() {
+                    controls.hide();
+                }
+            }
+        }
+    }
+
+    /// Left and right: between the buttons while the button row is held,
+    /// through the video everywhere else.
+    fn controls_left_right(self: &Rc<Self>, direction: isize) {
+        use crate::controls::Row;
+        let on_buttons = self
+            .controls
+            .borrow()
+            .as_ref()
+            .is_some_and(|controls| controls.row() == Row::Buttons);
+        if on_buttons {
+            if let Some(controls) = self.controls.borrow().as_ref() {
+                controls.move_focus(direction);
+            }
+            return;
+        }
+        self.scrub(direction as f64 * crate::player::STEP_SECONDS);
+    }
+
     /// Begins or continues a scrub. Nothing moves until the ticker decides
     /// this is a hold; a tap resolves to a single step when released.
     fn scrub(self: &Rc<Self>, seconds: f64) {
@@ -622,7 +737,7 @@ impl App {
         let already = playback.is_scrubbing();
         playback.scrub_input(seconds);
         self.scrub_seen.set(Some(std::time::Instant::now()));
-        self.wake_controls();
+        self.peek_controls();
         if already {
             return;
         }
@@ -656,7 +771,7 @@ impl App {
             let now = std::time::Instant::now();
             playback.scrub_tick(now - last);
             last = now;
-            app.wake_controls();
+            app.peek_controls();
             glib::ControlFlow::Continue
         });
     }
@@ -672,7 +787,10 @@ impl App {
             .set(self.scrub_generation.get().wrapping_add(1));
         self.scrub_seen.set(None);
         playback.commit_scrub();
-        self.wake_controls();
+        // A peek, matching the press that began this. Waking the whole strip
+        // here brought the buttons in on every release, so a tap of the arrow
+        // keys made the bar duck and pop back.
+        self.peek_controls();
     }
 
     fn toggle_fullscreen(&self) {
@@ -713,15 +831,12 @@ impl App {
     fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
         use crate::gamepad::Action;
         match action {
-            Action::Up | Action::Down if self.playback.borrow().is_some() => self.wake_controls(),
+            Action::Up if self.playback.borrow().is_some() => self.enter_controls(),
+            Action::Down if self.playback.borrow().is_some() => self.leave_controls(),
             Action::Up => self.move_selection(-1),
             Action::Down => self.move_selection(1),
-            Action::Left if self.playback.borrow().is_some() => {
-                self.scrub(-crate::player::STEP_SECONDS)
-            }
-            Action::Right if self.playback.borrow().is_some() => {
-                self.scrub(crate::player::STEP_SECONDS)
-            }
+            Action::Left if self.playback.borrow().is_some() => self.controls_left_right(-1),
+            Action::Right if self.playback.borrow().is_some() => self.controls_left_right(1),
             Action::Left => {
                 self.window.child_focus(gtk::DirectionType::Left);
             }
@@ -730,7 +845,24 @@ impl App {
             }
             // During playback the lower face button is the obvious place for
             // play/pause, and there is nothing else on screen to activate.
+            // On the button row the lower face button presses whatever is
+            // highlighted. Everywhere else in playback it is play/pause, which
+            // is what it should be when nothing is being driven.
             Action::Activate | Action::PlayPause if self.playback.borrow().is_some() => {
+                let on_buttons = self
+                    .controls
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|controls| controls.row() == crate::controls::Row::Buttons);
+                if on_buttons && action == Action::Activate {
+                    // Cloned out for the same reason the key handler does:
+                    // what this presses may tear playback down.
+                    let controls = self.controls.borrow().clone();
+                    if let Some(controls) = controls {
+                        controls.activate_focused();
+                    }
+                    return;
+                }
                 if let Some(playback) = self.playback.borrow().as_ref() {
                     playback.toggle_pause();
                 }
@@ -741,7 +873,23 @@ impl App {
             Action::DirectionReleased => self.end_scrub(),
             Action::PageUp => self.move_selection(-PAGE_ROWS),
             Action::PageDown => self.move_selection(PAGE_ROWS),
-            Action::Back => self.go_back(),
+            // Whatever is on screen goes away first, whether it is being
+            // driven or simply lingering: backing out of the film while the
+            // strip is up would be a surprise either way.
+            Action::Back => {
+                let showing = self
+                    .controls
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|controls| controls.is_showing());
+                if showing {
+                    if let Some(controls) = self.controls.borrow().as_ref() {
+                        controls.hide();
+                    }
+                } else {
+                    self.go_back();
+                }
+            }
             Action::Fullscreen => self.toggle_fullscreen(),
             // Ignored outside playback, matching the keyboard: there is
             // nothing to turn off from a menu.
@@ -3192,6 +3340,15 @@ impl App {
                     controls.connect_settings(move || app.leave_playback());
                 }
                 {
+                    // The same step the arrow keys take, through the same
+                    // path, so a tap of either lands in the same place.
+                    let app = self.clone();
+                    controls.connect_skip(move |seconds| {
+                        app.scrub(seconds);
+                        app.end_scrub();
+                    });
+                }
+                {
                     let app = self.clone();
                     controls.connect_double_click(move || app.toggle_fullscreen());
                 }
@@ -3308,7 +3465,10 @@ impl App {
                 }
                 controls.set_subtitles(playback.has_subtitles(), playback.subtitles_showing());
                 controls.update(&playback);
-                controls.flash(false);
+                // Where playback has reached, and nothing else. A film
+                // opening with a full row of buttons over it announces the
+                // interface rather than the video.
+                controls.peek();
                 let widget = controls.widget().clone();
                 // Taken before the playback is moved into its cell, since the
                 // reveal below watches it for the first frame that lands.
@@ -3876,6 +4036,9 @@ fn style_css(scale: f64) -> String {
             background-color: rgba(0, 0, 0, 0.75);
             padding: {pad_v}px {pad_h}px;
         }}
+        /* The buttons sit under the timeline rather than beside it, so the
+           row a controller is moving along is unambiguous. */
+        .tp-buttons {{ padding: 0px; }}
         /* Tabular figures, so the digits are all one width. A proportional
            1 is narrower than a 0, which makes a running clock twitch even
            when the number of characters does not change. */
@@ -3885,6 +4048,8 @@ fn style_css(scale: f64) -> String {
             font-feature-settings: \"tnum\" 1;
         }}
         .tp-transport {{ -gtk-icon-size: {icon}px; color: #ffffff; }}
+        /* Play, drawn bigger than what sits around it. */
+        .tp-transport-main {{ -gtk-icon-size: {icon_main}px; }}
         /* Flat over the picture: the strip already reads as a control bar,
            and button chrome on top of video looks like a mistake. */
         .tp-transport-button {{
@@ -3897,6 +4062,22 @@ fn style_css(scale: f64) -> String {
             padding: 0px {crumb_pad}px;
         }}
         .tp-transport-button:hover {{ background-color: rgba(255, 255, 255, 0.15); }}
+        /* Where a controller is, drawn boldly enough to be found from across a
+           room rather than as the hairline a focus ring would give. */
+        .tp-selected {{
+            background-color: {highlight};
+            border-radius: {radius}px;
+        }}
+        /* The handle, not the whole bar: filling the trough drew over the
+           very thing that says where playback is. */
+        .tp-progress.tp-selected {{ background-color: transparent; }}
+        .tp-progress.tp-selected slider {{
+            background-color: #ffffff;
+            outline: {outline}px solid {highlight};
+            outline-offset: {outline}px;
+            min-width: {handle}px;
+            min-height: {handle}px;
+        }}
         /* Faded while subtitles are off and solid while they are on, so the
            button reports the state as well as offering to change it. Opacity
            rather than color: the mark is an image, which a color cannot
@@ -3973,9 +4154,12 @@ fn style_css(scale: f64) -> String {
         pad_v = px(16.0),
         pad_h = px(24.0),
         radius = px(8.0),
+        outline = px(2.0).max(1),
+        handle = px(18.0),
         section = px(28.0),
         subrow = px(28.0),
         icon = px(24.0),
+        icon_main = px(38.4),
         crumb_pad = px(6.0),
         leading = px(38.0),
         back_icon = px(22.0),

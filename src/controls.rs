@@ -16,9 +16,39 @@ use gtk::prelude::*;
 
 use crate::player::Playback;
 
+/// Which part of the strip a controller is driving.
+///
+/// Left and right mean two different things - seek, or move between buttons -
+/// and which one depends on this. Splitting the strip into a timeline row and
+/// a button row is what makes that unambiguous: the meaning belongs to the row
+/// rather than to a mode the viewer has to remember being in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Row {
+    /// Not being driven. The strip behaves as it always has: it appears on
+    /// input and hides again, and left and right seek.
+    None,
+    Buttons,
+    Timeline,
+}
+
 /// How long the strip stays up after the last input. Long enough to read a
 /// timestamp after a seek, short enough not to sit over the picture.
 const LINGER: Duration = Duration::from_secs(3);
+
+/// The same, while a controller is holding one of the rows. Someone moving
+/// through the buttons needs longer than someone who just glanced at the
+/// clock, but it still goes away on its own: a strip that stayed up forever
+/// because a button was highlighted would be worse than one that hides.
+const LINGER_HELD: Duration = Duration::from_secs(12);
+
+/// How far a pointer has to travel before it counts as having moved, in
+/// logical pixels. Small enough that reaching for a control registers at once,
+/// large enough to ignore the drift a still pointer reports.
+const MOVEMENT: f64 = 4.0;
+
+/// Play's place in the button order, which is where a controller starts every
+/// time it takes hold of the row.
+const PLAY: usize = 3;
 
 pub struct Controls {
     root: gtk::Overlay,
@@ -26,6 +56,8 @@ pub struct Controls {
     icon: gtk::Image,
     play: gtk::Button,
     stop: gtk::Button,
+    skip_back: gtk::Button,
+    skip_forward: gtk::Button,
     settings: gtk::Button,
     elapsed: gtk::Label,
     duration: gtk::Label,
@@ -50,6 +82,18 @@ pub struct Controls {
     /// Preferred over canceling the timer by id: a source that has already
     /// fired cannot be removed, and trying logs a GLib critical.
     generation: Rc<Cell<u64>>,
+    /// The buttons in the order they are drawn, which is the order a
+    /// controller moves through them.
+    order: Vec<gtk::Button>,
+    /// The button row, held back on its own when the strip is only showing
+    /// where playback has reached.
+    buttons: gtk::Revealer,
+    /// Which of them is highlighted, when the button row is being driven.
+    /// Tracked here rather than through GTK focus: the video surface taking
+    /// focus has caused trouble before, and this way an insensitive button is
+    /// simply skipped rather than needing to be made unfocusable and back.
+    focused: Cell<usize>,
+    row: Cell<Row>,
     /// Kept so the fullscreen mark can be redrawn when the state changes.
     scale: f64,
     dark: bool,
@@ -63,10 +107,29 @@ impl Controls {
         // half a second of it looking stopped.
         let icon = gtk::Image::from_icon_name("media-playback-pause-symbolic");
         icon.add_css_class("tp-transport");
+        icon.add_css_class("tp-transport-main");
         let play = gtk::Button::new();
         play.set_child(Some(&icon));
         play.add_css_class("tp-transport-button");
         play.set_can_focus(false);
+
+        // go-* rather than media-seek-*: the seek glyphs are absent from the
+        // GTK that ships with GStreamer on Windows, and a missing icon draws
+        // as a broken-image box. These are plain arrows, which is less
+        // expressive than a skip glyph but present everywhere.
+        let back_icon = gtk::Image::from_icon_name("go-previous-symbolic");
+        back_icon.add_css_class("tp-transport");
+        let skip_back = gtk::Button::new();
+        skip_back.set_child(Some(&back_icon));
+        skip_back.add_css_class("tp-transport-button");
+        skip_back.set_can_focus(false);
+
+        let forward_icon = gtk::Image::from_icon_name("go-next-symbolic");
+        forward_icon.add_css_class("tp-transport");
+        let skip_forward = gtk::Button::new();
+        skip_forward.set_child(Some(&forward_icon));
+        skip_forward.add_css_class("tp-transport-button");
+        skip_forward.set_can_focus(false);
 
         // Beside play, because they are the same kind of thing: what playback
         // is doing right now.
@@ -131,19 +194,74 @@ impl Controls {
         settings.add_css_class("tp-transport-button");
         settings.set_can_focus(false);
 
-        let row = gtk::Box::builder()
+        // Two rows: where playback is, and what can be done to it. Separating
+        // them is what lets a controller treat them differently - left and
+        // right seek along the top row and move between buttons on the bottom
+        // one, without the two meanings ever colliding.
+        let timeline = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(16)
             .build();
+        timeline.add_css_class("tp-timeline");
+        timeline.append(&elapsed);
+        timeline.append(&position);
+        timeline.append(&duration);
+
+        // Play sits in the middle and larger than the rest, because it is the
+        // one control anybody reaches for and the one a controller lands on
+        // first. Stop keeps beside it, being the other thing that acts on
+        // playback itself. What is left goes to the edges: the two that change
+        // how the video is presented on the left, the one that changes how
+        // much of the screen it takes on the right.
+        let left = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(16)
+            .build();
+        left.append(&settings);
+        left.append(&stop);
+
+        // Skipping either side of play, which balances the group and gives a
+        // pointer a way to skip at all: until now that was keyboard and
+        // gamepad only.
+        let middle = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(16)
+            .build();
+        middle.append(&skip_back);
+        middle.append(&play);
+        middle.append(&skip_forward);
+
+        let buttons = gtk::CenterBox::new();
+        buttons.add_css_class("tp-buttons");
+        buttons.set_start_widget(Some(&left));
+        buttons.set_center_widget(Some(&middle));
+        // Subtitles keep company with fullscreen, and with volume when that
+        // arrives: they are all about how the video is presented, where the
+        // left-hand pair is about leaving it or changing it.
+        let right = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(16)
+            .build();
+        right.append(&subtitles);
+        right.append(&fullscreen);
+        buttons.set_end_widget(Some(&right));
+
+        // Its own revealer, so the buttons slide in and out the way the strip
+        // itself does. Toggling visibility made them appear in one frame,
+        // which reads as a glitch beside everything else that animates.
+        let button_row = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::SlideUp)
+            .transition_duration(150)
+            .child(&buttons)
+            .build();
+
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(8)
+            .build();
         row.add_css_class("tp-controls");
-        row.append(&play);
-        row.append(&stop);
-        row.append(&elapsed);
-        row.append(&position);
-        row.append(&duration);
-        row.append(&subtitles);
-        row.append(&settings);
-        row.append(&fullscreen);
+        row.append(&timeline);
+        row.append(&button_row);
 
         // Slides up rather than appearing, which reads as deliberate at a
         // distance where a sudden change is just a flicker.
@@ -154,16 +272,31 @@ impl Controls {
             .child(&row)
             .build();
 
+        button_row.set_reveal_child(true);
+
         let root = gtk::Overlay::new();
         root.set_child(Some(video));
         root.add_overlay(&strip);
 
+        let order = vec![
+            settings.clone(),
+            stop.clone(),
+            skip_back.clone(),
+            play.clone(),
+            skip_forward.clone(),
+            subtitles.clone(),
+            fullscreen.clone(),
+        ];
+
         Rc::new(Self {
             root,
             strip,
+            buttons: button_row.clone(),
             icon,
             play,
             stop,
+            skip_back,
+            skip_forward,
             settings,
             elapsed,
             duration,
@@ -173,6 +306,9 @@ impl Controls {
             fullscreen,
             updating: Cell::new(false),
             generation: Rc::new(Cell::new(0)),
+            order,
+            focused: Cell::new(PLAY),
+            row: Cell::new(Row::None),
             scale,
             dark,
             fullscreen_state: RefCell::new(fullscreen_now),
@@ -183,8 +319,126 @@ impl Controls {
         &self.root
     }
 
+    pub fn row(&self) -> Row {
+        self.row.get()
+    }
+
+    /// Puts the strip into, or takes it out of, being driven by a controller.
+    ///
+    /// While a row is being driven the strip stays up: hiding on a timer under
+    /// someone who is deliberately moving through it would be maddening.
+    pub fn set_row(self: &Rc<Self>, row: Row) {
+        let was = self.row.replace(row);
+        match row {
+            // Straight away, rather than flashing it up and waiting out the
+            // timer: down is a request to be rid of it.
+            Row::None => self.hide(),
+            Row::Buttons => {
+                self.timeline_active(false);
+                // Play, every time the row is taken hold of afresh, rather
+                // than wherever it was left. Coming back to a highlight
+                // somewhere down the row means hunting for it.
+                if was == Row::None {
+                    self.focused.set(PLAY);
+                }
+                // Nothing insensitive, so a file without subtitles does not
+                // land on a button that cannot do anything.
+                if !self.usable(self.focused.get()) {
+                    self.step(1);
+                }
+                self.highlight(Some(self.focused.get()));
+                self.flash(false);
+            }
+            Row::Timeline => {
+                self.highlight(None);
+                self.timeline_active(true);
+                self.flash(false);
+            }
+        }
+    }
+
+    fn usable(&self, index: usize) -> bool {
+        self.order
+            .get(index)
+            .is_some_and(|button| button.is_sensitive())
+    }
+
+    /// Moves to the next usable button in that direction, stopping at the
+    /// end rather than wrapping: a row that comes back round the other side
+    /// is disorienting when you cannot see where it starts.
+    fn step(&self, delta: isize) {
+        let mut index = self.focused.get() as isize;
+        loop {
+            index += delta;
+            if index < 0 || index as usize >= self.order.len() {
+                return;
+            }
+            if self.usable(index as usize) {
+                self.focused.set(index as usize);
+                return;
+            }
+        }
+    }
+
+    /// Lets go of the strip without touching whether it is on screen.
+    fn release(&self) {
+        self.row.set(Row::None);
+        self.highlight(None);
+        self.timeline_active(false);
+    }
+
+    pub fn move_focus(self: &Rc<Self>, delta: isize) {
+        if self.row.get() != Row::Buttons {
+            return;
+        }
+        self.step(delta);
+        self.highlight(Some(self.focused.get()));
+        // Restarts the countdown, so working along the row does not run out
+        // of time part way.
+        self.flash(false);
+    }
+
+    pub fn activate_focused(&self) {
+        if self.row.get() != Row::Buttons {
+            return;
+        }
+        if let Some(button) = self.order.get(self.focused.get()) {
+            button.emit_clicked();
+        }
+    }
+
+    fn highlight(&self, index: Option<usize>) {
+        for (position, button) in self.order.iter().enumerate() {
+            if Some(position) == index {
+                button.add_css_class("tp-selected");
+            } else {
+                button.remove_css_class("tp-selected");
+            }
+        }
+    }
+
+    fn timeline_active(&self, active: bool) {
+        if active {
+            self.position.add_css_class("tp-selected");
+        } else {
+            self.position.remove_css_class("tp-selected");
+        }
+    }
+
     pub fn connect_play_pause(&self, handler: impl Fn() + 'static) {
         self.play.connect_clicked(move |_| handler());
+    }
+
+    /// Fires with the number of seconds to move, negative for backwards.
+    pub fn connect_skip(&self, handler: impl Fn(f64) + 'static) {
+        let handler = Rc::new(handler);
+        {
+            let handler = handler.clone();
+            self.skip_back
+                .connect_clicked(move |_| handler(-crate::player::STEP_SECONDS));
+        }
+        self.skip_forward
+            .connect_clicked(move |_| handler(crate::player::STEP_SECONDS));
     }
 
     pub fn connect_stop(&self, handler: impl Fn() + 'static) {
@@ -238,10 +492,18 @@ impl Controls {
         let motion = gtk::EventControllerMotion::new();
         let last = Cell::new((f64::NAN, f64::NAN));
         motion.connect_motion(move |_, x, y| {
-            if last.replace((x, y)) == (x, y) {
-                return;
+            let (previous_x, previous_y) = last.get();
+            let moved = (x - previous_x).hypot(y - previous_y);
+            // A real movement, not any difference at all. Comparing for
+            // inequality was enough on Linux and Windows but not on macOS,
+            // which reports sub-pixel drift from a pointer nobody is touching:
+            // the strip never timed out, and hiding it relaid out what sat
+            // under the pointer, which produced another event and brought it
+            // straight back.
+            if moved.is_nan() || moved >= MOVEMENT {
+                last.set((x, y));
+                handler();
             }
-            handler();
         });
         self.root.add_controller(motion);
     }
@@ -351,7 +613,38 @@ impl Controls {
     /// Shows the strip and restarts the countdown to hiding it. Paused
     /// playback keeps it up indefinitely, because a paused picture with no
     /// indication of why is just a frozen film.
-    pub fn flash(&self, paused: bool) {
+    /// Shows only where playback has reached, without the buttons.
+    ///
+    /// What a seek asks for: the timeline answers the question, and a row of
+    /// buttons appearing over the picture every time somebody skips is more
+    /// than was wanted.
+    pub fn peek(self: &Rc<Self>) {
+        // Unless a row is being driven, in which case the buttons are the
+        // point and hiding them mid-navigation would be perverse.
+        self.buttons.set_reveal_child(self.row.get() != Row::None);
+        self.show(false);
+    }
+
+    /// Takes the strip off the screen at once, and lets go of it.
+    pub fn hide(&self) {
+        self.cancel();
+        self.release();
+        self.strip.set_reveal_child(false);
+    }
+
+    pub fn is_showing(&self) -> bool {
+        self.strip.reveals_child()
+    }
+
+    /// Shows the whole strip: timeline and buttons both.
+    pub fn flash(self: &Rc<Self>, paused: bool) {
+        self.buttons.set_reveal_child(true);
+        self.show(paused);
+    }
+
+    /// Puts the strip on screen and starts the countdown to taking it off
+    /// again. What is in it has already been decided by the caller.
+    fn show(self: &Rc<Self>, paused: bool) {
         self.strip.set_reveal_child(true);
 
         let expected = self.generation.get().wrapping_add(1);
@@ -360,11 +653,23 @@ impl Controls {
             return;
         }
 
-        let strip = self.strip.clone();
+        let linger = if self.row.get() == Row::None {
+            LINGER
+        } else {
+            LINGER_HELD
+        };
         let generation = Rc::clone(&self.generation);
-        glib::timeout_add_local_once(LINGER, move || {
+        // Hiding lets go of the strip as well. Without that it would come back
+        // still holding whichever row it had, so the next press up would climb
+        // from there rather than starting at the buttons.
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(linger, move || {
+            let Some(controls) = weak.upgrade() else {
+                return;
+            };
             if generation.get() == expected {
-                strip.set_reveal_child(false);
+                controls.strip.set_reveal_child(false);
+                controls.release();
             }
         });
     }
