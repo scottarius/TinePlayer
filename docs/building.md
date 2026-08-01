@@ -19,7 +19,7 @@ To start it from the desktop rather than a terminal, add a launcher entry for
 the copy you have built:
 
 ```sh
-./integrations/install-desktop-linux.sh
+./install-desktop-linux.sh
 ```
 
 The entry points into this working tree, so run it again if the tree moves.

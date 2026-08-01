@@ -4,7 +4,7 @@
 //! binary, not from a file beside it, so this is the only way Explorer, the
 //! taskbar and Alt-Tab get anything other than a blank default. Linux has no
 //! equivalent: there the desktop entry names the icon, and
-//! `integrations/install-desktop-linux.sh` puts both where the desktop can
+//! `install-desktop-linux.sh` puts both where the desktop can
 //! find them.
 
 fn main() {

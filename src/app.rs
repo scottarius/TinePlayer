@@ -166,6 +166,8 @@ pub struct Launch {
 /// the file and track choices last for the session.
 pub struct App {
     window: gtk::ApplicationWindow,
+    /// Holds the display awake while a film is playing. See [`crate::awake`].
+    awake: crate::awake::KeepAwake,
     config: RefCell<Config>,
     file: RefCell<Option<Source>>,
     tracks: RefCell<Vec<AudioTrack>>,
@@ -326,6 +328,7 @@ impl App {
 
         let app = Rc::new(App {
             window: window.clone(),
+            awake: crate::awake::KeepAwake::new(gtk_app),
             config: RefCell::new(config),
             file: RefCell::new(None),
             tracks: RefCell::new(Vec::new()),
@@ -509,6 +512,7 @@ impl App {
                 gdk::Key::space if playing => {
                     if let Some(playback) = app.playback.borrow().as_ref() {
                         playback.toggle_pause();
+                        app.awake.set(playback.is_playing());
                     }
                     app.wake_controls();
                     glib::Propagation::Stop
@@ -1040,6 +1044,7 @@ impl App {
                 }
                 if let Some(playback) = self.playback.borrow().as_ref() {
                     playback.toggle_pause();
+                    self.awake.set(playback.is_playing());
                 }
                 self.wake_controls();
             }
@@ -1372,6 +1377,9 @@ impl App {
     /// the report goes out on a detached thread and exiting would take it
     /// along; everywhere else it would be a stall for nothing.
     fn finish_playback(&self, wait_for_kodi: bool) {
+        // Whatever else happens below, stop holding the display awake: this
+        // is reached from the window closing as well as from playback ending.
+        self.awake.set(false);
         if let Some(tick) = self.tick.borrow_mut().take() {
             tick.remove();
         }
@@ -4134,6 +4142,7 @@ impl App {
                     controls.connect_play_pause(move || {
                         if let Some(playback) = app.playback.borrow().as_ref() {
                             playback.toggle_pause();
+                            app.awake.set(playback.is_playing());
                         }
                         app.wake_controls();
                     });
@@ -4308,6 +4317,9 @@ impl App {
                 self.window
                     .set_title(Some(&self.file_label().unwrap_or_default()));
                 *self.playback.borrow_mut() = Some(playback);
+                // Playback begins playing, so the display is held from here
+                // until it is paused or torn down.
+                self.awake.set(true);
 
                 // Held back until playback has actually reached the resume
                 // point. The pipeline prerolls before the seek completes, so

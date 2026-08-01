@@ -11,7 +11,7 @@
 # A packaged build will carry its own entry and need none of this.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 
 binary="$PWD/target/release/TinePlayer"
 if [[ ! -x "$binary" ]]; then
