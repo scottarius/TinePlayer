@@ -186,9 +186,21 @@ jobs:
     # makes a rehearsal possible without leaving a release behind.
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      # Taken from Cargo.toml rather than from the tag, because it is what the
+      # packaging scripts name the files after. A tag that disagrees with
+      # Cargo.toml would otherwise produce notes pointing at downloads that do
+      # not exist, which is exactly the case a test tag creates.
+      - name: Work out the version the files are named for
+        id: version
+        run: |
+          echo "number=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)" \
+            >>"$GITHUB_OUTPUT"
 
       - name: Publish the release
         uses: softprops/action-gh-release@v2
@@ -198,7 +210,115 @@ jobs:
             artifacts/macos/*
             artifacts/linux-amd64/*
             artifacts/linux-arm64/*
-          # Left as a draft so the notes can be written, and the packages
+          # Left as a draft so the notes can be finished, and the packages
           # tried, before anyone can download them. Publishing is a button.
           draft: true
-          generate_release_notes: true
+          # The notes start filled in, so that writing them is editing rather
+          # than starting from an empty box on the day. Everything that does
+          # not change between releases - which file to download, what the
+          # unsigned-binary warnings look like, how to install - is already
+          # here and correct. What is left is saying what changed.
+          #
+          # Not generate_release_notes: a list of commit subjects is a poor
+          # substitute for a sentence about what the release was for, and it
+          # lands underneath all of this rather than in the section meant for
+          # it.
+          body: |
+            ## What's new
+
+            <!-- A sentence or two on what this release was about, so the
+                 bullets have something to hang off. Say plainly if it is a
+                 grab bag; pretending to a theme reads worse than not having
+                 one. Then bullets, grouped by what a person would notice
+                 rather than by what was edited. -->
+
+            -
+            -
+
+            <!-- OPTIONAL. Only things that actually break: a setting that
+                 moved, a file that has to be re-created, a platform that has
+                 stopped working. Delete the heading if empty. -->
+
+            ## If you are upgrading
+
+            -
+
+            ## Which files to download
+
+            | Platform | Download | Notes |
+            | --- | --- | --- |
+            | Windows | `TinePlayer-${{ steps.version.outputs.number }}-setup.exe` | The usual way, with a Start menu entry |
+            | | `TinePlayer-${{ steps.version.outputs.number }}-windows-x64.zip` | No installation, runs from wherever you unpack it |
+            | Mac | `TinePlayer-${{ steps.version.outputs.number }}.dmg` | Any M1 or newer Mac |
+            | Linux | `tineplayer_${{ steps.version.outputs.number }}_amd64.deb` | Most desktops and laptops, Intel or AMD |
+            | | `tineplayer_${{ steps.version.outputs.number }}_arm64.deb` | Raspberry Pi 4 or 5, and other ARM single-board computers |
+
+            ## Installing
+
+            ### Windows
+
+            Download and run the installer, or download and extract the .zip
+            file.
+
+            Windows may warn you that it does not recognize the publisher,
+            because the download is not signed with a certificate. Click
+            **More info**, then **Run anyway**.
+
+            ### Mac
+
+            Download and open the .dmg file and drag TinePlayer.app into your
+            Applications folder.
+
+            macOS may refuse to open it the first time, because the app is not
+            signed with an Apple developer certificate. Open **System
+            Settings**, go to **Privacy & Security**, scroll to the bottom,
+            and click **Open Anyway** next to the message about TinePlayer.
+            You only have to do this once.
+
+            If instead it tells you the app is damaged, macOS has quarantined
+            it. Clear that with:
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/TinePlayer.app
+            ```
+
+            ### Linux
+
+            Download the .deb file for your architecture and install it with
+            apt:
+
+            ```sh
+            sudo apt install ./tineplayer_${{ steps.version.outputs.number }}_arm64.deb
+            ```
+
+            The leading `./` matters: without it apt looks for a package by
+            that name in its own sources and reports that it cannot find one.
+            Using apt rather than `dpkg -i` is what pulls in the GTK and
+            GStreamer pieces TinePlayer needs.
+
+            Then run `tineplayer`, or find TinePlayer in your applications
+            menu.
+
+            If unsure which package to download, run:
+
+            ```sh
+            dpkg --print-architecture
+            ```
+
+            <!-- OPTIONAL, but be honest here. Someone who hits a known
+                 problem and finds it listed is annoyed; someone who hits one
+                 that is not listed wonders what else is wrong. Delete the
+                 heading if empty. -->
+
+            ## Known issues
+
+            -
+
+            ## Feedback
+
+            [Issues](https://github.com/scottarius/TinePlayer/issues) for
+            bugs, [Discussions](https://github.com/scottarius/TinePlayer/discussions)
+            for everything else. I especially want to hear from you if you use
+            a screen reader or rely on audio description: support for both is
+            thin, and I would rather fix it against what people actually need
+            than guess.
