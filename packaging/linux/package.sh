@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Builds the Linux package: a .deb for Debian, Ubuntu and Raspberry Pi OS.
 #
-# Produces dist/linux/tineplayer_<version>_<arch>.deb, installed with
+# Produces dist/linux/tineplayer_<version>_linux_<arch>.deb, installed with
 #
-#     sudo apt install ./tineplayer_0.6.0_arm64.deb
+#     sudo apt install ./tineplayer_0.6.0_linux_arm64.deb
 #
 # The ./ matters. It is what makes apt treat the file as a package to install
 # *and* resolve dependencies for; plain `dpkg -i` installs it and then leaves
@@ -31,8 +31,12 @@ maintainer="Scott Bounds <scott.bounds@gmail.com>"
 homepage="https://github.com/scottarius/TinePlayer"
 app_id="app.tineplayer.TinePlayer"
 
-stage="dist/linux/${package}_${version}_${arch}"
-deb="dist/linux/${package}_${version}_${arch}.deb"
+# "linux" in the name, which Debian's own convention leaves out because on a
+# Debian system there is nothing else it could be. On a releases page beside a
+# .dmg and two Windows downloads, it is the thing a reader is looking for.
+# Nothing reads the file name: apt and dpkg both go by what is inside.
+stage="dist/linux/${package}_${version}_linux_${arch}"
+deb="dist/linux/${package}_${version}_linux_${arch}.deb"
 
 for tool in dpkg-deb dpkg-shlibdeps; do
     command -v "$tool" >/dev/null 2>&1 || {

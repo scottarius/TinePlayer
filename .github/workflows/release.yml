@@ -252,8 +252,12 @@ jobs:
     # makes a rehearsal possible without leaving a release behind.
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      # No checkout: this job publishes what the other three built and reads
-      # nothing from the repository.
+      # The full history, so the previous tag can be found. A shallow
+      # checkout is a single commit, with nothing to compare against.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -268,6 +272,24 @@ jobs:
       # Deliberately not tolerant of surprises: if a package is missing or a
       # naming convention changes, this fails here rather than producing
       # confident and wrong instructions.
+      # The link GitHub's generated notes end with, without the list of commit
+      # subjects that comes above it. That list is a poor substitute for a
+      # sentence about what the release was for, but the comparison itself is
+      # worth having: it answers "what actually changed" for anyone who wants
+      # the detail.
+      - name: Work out what changed
+        id: changelog
+        run: |
+          set -euo pipefail
+          repo="${{ github.server_url }}/${{ github.repository }}"
+          previous="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            echo "link=$repo/compare/$previous...$GITHUB_REF_NAME" >>"$GITHUB_OUTPUT"
+          else
+            # A first release has nothing to compare against.
+            echo "link=$repo/commits/$GITHUB_REF_NAME" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Name the downloads
         id: files
         run: |
@@ -391,3 +413,5 @@ jobs:
             ## Feedback
 
             [Issues](https://github.com/scottarius/TinePlayer/issues) for bugs, [Discussions](https://github.com/scottarius/TinePlayer/discussions) for everything else. I especially want to hear from you if you use a screen reader or rely on audio description: support for both is thin, and I would rather fix it against what people actually need than guess.
+
+            **Full Changelog**: ${{ steps.changelog.outputs.link }}
