@@ -92,7 +92,32 @@ from a single pipeline, staying in sync because it is all one clock.
 - **[Integrations](docs/integrations.md)** - integrating with other media
   players and libraries
 
-## Quick start
+## Install
+
+Downloads for each platform are on the
+[releases page](https://github.com/scottarius/TinePlayer/releases).
+
+**Windows** - run the installer, or unpack the portable ZIP anywhere you like
+and run `TinePlayer.exe` from it. Everything it needs is included; nothing has
+to be installed first.
+
+**macOS** - open the disk image and drag TinePlayer to Applications. Apple
+Silicon only.
+
+**Linux** - a `.deb` for Debian, Ubuntu and Raspberry Pi OS, in `amd64` and
+`arm64`:
+
+```sh
+sudo apt install ./tineplayer_0.6.0_arm64.deb
+```
+
+The `./` is not a typo: it is what makes apt install the file *and* fetch the
+GTK and GStreamer packages it needs. The package bundles none of those, which
+is why it is under a megabyte, and it installs on Debian 12, Ubuntu 22.04 and
+anything newer. Then run `tineplayer`, or pick TinePlayer out of the
+applications menu.
+
+## Build from source
 
 ```sh
 ./setup-linux.sh            # Linux; .\setup-windows.ps1 on Windows, ./setup-mac.sh on macOS
@@ -172,11 +197,14 @@ It builds on the following, none of which are vendored into this repository:
 
 - **GStreamer** ([LGPL
   2.1](https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html))
-  and **GTK 4** (LGPL 2.1) are runtime dependencies. A build from source uses
-  the copies already installed on the machine; a packaged build ships them
-  beside the executable, unmodified, with their license texts. They are loaded
-  as separate shared libraries in both cases, so they can be replaced with
-  your own build of the same version, which is what the LGPL asks for.
+  and **GTK 4** (LGPL 2.1) are runtime dependencies, loaded as separate shared
+  libraries and never vendored. Where they come from depends on the platform:
+  the Windows and macOS packages ship them beside the executable, unmodified,
+  with their license texts; the Linux package ships none of them and declares
+  them as dependencies for apt to install from your distribution; a build from
+  source uses whatever is already on the machine. Being separate shared
+  libraries in every case, they can be replaced with your own build of the
+  same version, which is what the LGPL asks for.
 - **`gst-plugin-gtk4`** (MPL-2.0) provides the `gtk4paintablesink` element and
   *is* statically linked into the binary, because it is not packaged by Debian
   or shipped with the GStreamer Windows installer. Depending on it as an

@@ -128,9 +128,59 @@ jobs:
           name: macos
           path: dist/macos/*.dmg
 
+  linux:
+    name: Linux package (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runners for both. Emulation is not needed for a .deb - it
+          # is a compile and a file copy - but it is 10 times slower, and an
+          # arm64 runner costs nothing on a public repository.
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Built in the same container a developer builds in, rather than on the
+      # runner directly, so that CI and a local build cannot drift apart. It
+      # also decides compatibility: a .deb records the versions of what it was
+      # linked against, so the build has to happen on the oldest system the
+      # package should install on. That is Debian 12, which is what Raspberry
+      # Pi OS is built from. Building on the runner's own Ubuntu would set
+      # that floor by whatever GitHub happened to update to.
+      #
+      # No --platform: each runner already is the architecture it builds for.
+      - name: Build the package
+        run: |
+          docker build -f packaging/linux/Dockerfile -t tine-deb .
+          docker run --rm -v "$PWD:/src" -w /src tine-deb \
+            bash ./packaging/linux/package.sh
+
+      # Installing it is the only thing that proves the dependencies were
+      # declared correctly, since apt refuses a package whose dependencies
+      # cannot be met. Done in a clean Debian 12 with no GStreamer on it,
+      # rather than on the runner, which has had a build environment installed
+      # and would not notice a missing runtime dependency.
+      - name: Check it installs and runs on a clean system
+        run: |
+          docker run --rm -v "$PWD/dist/linux:/pkg:ro" debian:12 bash -c '
+            apt-get update -qq
+            apt-get install -y -qq /pkg/*.deb
+            tineplayer --version
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/linux/*.deb
+
   release:
     name: Publish
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     runs-on: ubuntu-24.04
     # Only for a tag. A manual run builds and uploads artifacts, which is what
     # makes a rehearsal possible without leaving a release behind.
@@ -146,6 +196,8 @@ jobs:
           files: |
             artifacts/windows/*
             artifacts/macos/*
+            artifacts/linux-amd64/*
+            artifacts/linux-arm64/*
           # Left as a draft so the notes can be written, and the packages
           # tried, before anyone can download them. Publishing is a button.
           draft: true

@@ -1,0 +1,91 @@
+.TH TINEPLAYER 1 "2026-08-01" "TinePlayer" "User Commands"
+.SH NAME
+tineplayer \- play a video with two audio tracks on two output devices
+.SH SYNOPSIS
+.B tineplayer
+.RI [ OPTIONS ]
+.RI [ FILE ]
+.SH DESCRIPTION
+.B TinePlayer
+plays one video with two soundtracks at once, sending each to a different
+output device, so that two people can watch the same screen together and each
+hear it their own way. One hears the film in English through the television
+while the other hears it in Spanish through headphones, and the two stay in
+sync because it is one pipeline decoding one file.
+.PP
+The same split carries audio description: someone who needs the narrated
+version hears it on headphones while everyone else hears the ordinary
+soundtrack.
+.PP
+Run with no arguments to choose everything from the menu: the video, the two
+output devices, the audio track for each, and the subtitles. Pass a
+.I FILE
+to open it directly. A file may be a path or a URL, including
+.BR http:// " and " smb:// .
+.SH OPTIONS
+.TP
+.BI \-\-primary " TRACK"
+Audio for the primary output. A track number as
+.B \-\-list\-tracks
+prints them, a language code such as
+.BR en ,
+.B ad
+for described audio, or
+.B en:ad
+for both. Use
+.B 0
+for no audio on that output.
+.TP
+.BI \-\-secondary " TRACK"
+Audio for the secondary output, in the same forms.
+.TP
+.BI \-\-subtitle " SUBTITLE"
+Subtitles to show: a track number, a language code, the name of a subtitle
+file beside the video, or a preference name.
+.B 0
+for none.
+.TP
+.B \-\-list\-tracks
+Print the file's audio tracks and subtitles with their numbers, and exit.
+.TP
+.B \-\-restart
+Start from the beginning, ignoring any saved position.
+.TP
+.B \-\-forget
+Forget saved positions and track choices. With a
+.IR FILE ,
+forgets only that one; with none, forgets them all.
+.TP
+.B \-\-fullscreen
+Start fullscreen.
+.TP
+.B \-\-windowed
+Start windowed, overriding a remembered fullscreen preference.
+.TP
+.B \-\-external
+Play only the video given, with no file browser and no confirmation on the way
+out, exiting when the video ends. For launching from another application.
+.TP
+.B \-\-kodi
+Launched by Kodi: keep the resume position in step with Kodi's library.
+Implies
+.BR \-\-external .
+.TP
+.B \-h ", " \-\-help
+Print a summary of these options.
+.TP
+.B \-V ", " \-\-version
+Print the version.
+.SH FILES
+.TP
+.I ~/.config/tineplayer/config.yaml
+Settings: output devices, preferred languages, subtitle appearance, interface
+scale. A file that cannot be parsed is copied aside rather than overwritten,
+and TinePlayer starts on defaults and says so.
+.TP
+.I ~/.local/share/tineplayer/
+Saved playback positions and per-video track choices.
+.SH SEE ALSO
+Full documentation, including how to hand playback over from Kodi, at
+.UR https://github.com/scottarius/TinePlayer
+.UE .

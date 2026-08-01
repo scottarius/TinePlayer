@@ -11,24 +11,46 @@ dependencies:
 ## Native libraries
 
 These are separate libraries TinePlayer loads at runtime rather than compiles
-into itself. Packaged builds ship them alongside the executable; a build from
-source uses the copies already installed on the machine.
+into itself.
 
 | Library | License | Source |
 |---------|---------|--------|
 | GStreamer | LGPL-2.1-or-later | https://gitlab.freedesktop.org/gstreamer/gstreamer |
 | GTK 4 | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/gtk |
 | GLib | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/glib |
+| FFmpeg | LGPL-2.1-or-later | https://ffmpeg.org |
 
-They are used unmodified. Because they are loaded as separate shared
-libraries, they can be replaced with your own build of the same version, which
-is what the LGPL asks for. Their full license text ships with them.
+Where they come from depends on how you got TinePlayer, and the difference
+matters for what these terms oblige:
+
+- **The Windows and macOS packages ship them**, alongside the executable or
+  inside the application bundle, with their license texts. Distributing them
+  is what brings the obligations below.
+- **The Linux package ships none of them.** It is a `.deb` that declares them
+  as dependencies, and apt installs your distribution's own copies under your
+  distribution's terms. Depending on software is not distributing it, so
+  nothing here is being redistributed on Linux.
+- **A build from source** uses whatever is already installed on the machine.
+
+Where they are shipped, they are used unmodified. Because they are loaded as
+separate shared libraries, they can be replaced with your own build of the
+same version, which is what the LGPL asks for.
 
 > [!NOTE]
 > Some GStreamer plugins carry different terms from GStreamer itself. The
-> decoders for AC-3 and DTS in particular are GPL-licensed, and patent-
-> encumbered in some countries. TinePlayer ships neither; it plays whatever
-> the GStreamer installation on the machine provides.
+> `a52dec` and `dtsdec` plugins, which decode AC-3 and DTS, are GPL-licensed,
+> and TinePlayer ships neither: including them in a package would place the
+> whole of it under the GPL.
+>
+> AC-3 and DTS soundtracks still play. On Windows and macOS they are decoded
+> by FFmpeg, which is LGPL as long as it is built without its GPL components,
+> and the FFmpeg in those packages is checked for exactly that. On Linux the
+> decoder is whichever one your distribution installed, under whatever terms
+> your distribution chose - which is its business rather than TinePlayer's,
+> precisely because nothing is being redistributed.
+>
+> Patents are a separate question from copyright and vary by country. This is
+> a statement about licenses, not about patents.
 
 ## Rust dependencies
 
