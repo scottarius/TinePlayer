@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Offers TinePlayer to Kodi as an external player. Written into Kodi's userdata
-  directory by TinePlayer itself, under Settings, which puts a real path in
-  place of the placeholder below: the executable for a packaged build, and for
-  a build from source on Windows the launcher script at the top of the tree.
+  directory by TinePlayer itself, under Settings, which puts a real command in
+  place of the two placeholders below.
 
-  This is the template the application consumes, so it keeps the placeholder
+  What that command is depends on how both programs were installed, so there
+  are two placeholders rather than one. A build from source is run directly,
+  by path. A Flatpak cannot be, because the path inside the sandbox means
+  nothing outside it, so it is run as "flatpak run app.tineplayer.TinePlayer".
+  And if Kodi is itself a Flatpak, whichever of those it is has to be handed
+  to flatpak-spawn --host first, because Kodi would otherwise start the player
+  inside its own sandbox - where there is no GTK, and no sight of your files.
+
+  This is the template the application consumes, so it keeps the placeholders
   and the RULES markers it cuts on. examples/playercorefactory.xml says the
   same thing to people rather than to a program, with the settings explained
   and nothing to substitute, and wants changing alongside this one.
@@ -23,7 +30,7 @@
   <players>
     <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
       <filename>TINEPLAYER_BINARY</filename>
-      <args>"{1}" --fullscreen --kodi</args>
+      <args>TINEPLAYER_LAUNCH"{1}" --fullscreen --kodi</args>
       <!-- Gets Kodi out of the way while the film plays, which matters on a
            television where both are fullscreen. -->
       <hidexbmc>true</hidexbmc>

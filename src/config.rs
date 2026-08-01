@@ -52,6 +52,12 @@ pub struct Config {
     /// Where the built-in browser last was, so it reopens there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_folder: Option<PathBuf>,
+    /// Kodi userdata folders named by hand, kept only while TinePlayer is set
+    /// up in them. A typed path cannot be rediscovered, so without this a Kodi
+    /// configured from a chosen folder would vanish from the list and there
+    /// would be no way to take TinePlayer back out of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kodi_paths: Vec<PathBuf>,
     /// Font family and style for subtitles, without a size, e.g. "Sans Bold".
     ///
     /// Set because Pango's default resolves to a serif face, which is a poor
@@ -126,6 +132,7 @@ impl Default for Config {
             ui_scale: None,
             theme: Theme::default(),
             last_folder: None,
+            kodi_paths: Vec::new(),
             subtitle_font: None,
             subtitle_size: None,
             primary_language: None,

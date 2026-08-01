@@ -126,6 +126,14 @@ enum Screen {
     Confirm,
     About,
     Kodi,
+    /// The screens of the Kodi wizard. None of them writes anything: only
+    /// Configure on the summary does.
+    KodiChoose,
+    KodiHow,
+    KodiManual,
+    KodiSummary,
+    KodiConfirm,
+    KodiError,
     KodiDone,
     ConfirmQuit,
     Error,
@@ -201,6 +209,8 @@ pub struct App {
     /// Where selectable text lives on the screen being shown, so Ctrl+C can
     /// find it. Set by the screens that have any, cleared by every other.
     copy_root: RefCell<Option<gtk::Widget>>,
+    /// What the Kodi wizard has been told so far. `None` outside the wizard.
+    kodi_draft: RefCell<Option<KodiDraft>>,
     /// The switches on the settings screen, by row, so a toggle can move the
     /// one it belongs to instead of rebuilding the screen under the viewer.
     settings_switches: RefCell<Vec<(i32, gtk::Switch)>>,
@@ -346,6 +356,7 @@ impl App {
             settings_sliders: RefCell::new(Vec::new()),
             about_scroll: RefCell::new(None),
             copy_root: RefCell::new(None),
+            kodi_draft: RefCell::new(None),
             settings_switches: RefCell::new(Vec::new()),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
@@ -710,8 +721,14 @@ impl App {
             Screen::Playing => self.leave_playback(),
             Screen::Chooser => self.leave_chooser(),
             Screen::Confirm | Screen::About | Screen::Kodi => self.show_settings(),
-            // Back out of the result to what it was a result of.
-            Screen::KodiDone => self.show_kodi(),
+            // Every wizard screen leaves the wizard rather than stepping back
+            // through it. Nothing has been written until Configure, so this
+            // is the same as pressing Cancel, which is what Escape should
+            // mean on a screen whose other button says Cancel.
+            Screen::KodiChoose | Screen::KodiConfirm | Screen::KodiDone => self.show_kodi(),
+            Screen::KodiHow => self.show_kodi_choose(),
+            Screen::KodiManual | Screen::KodiSummary => self.show_kodi_how(),
+            Screen::KodiError => self.show_kodi_summary(),
             // Nothing to go back to when the video we were started for could
             // not be opened.
             Screen::Error if self.error_is_fatal.get() => self.window.close(),
@@ -3349,11 +3366,10 @@ impl App {
                 ("Clear Saved Playback Data".to_string(), String::new(), true),
                 (
                     "Kodi".to_string(),
-                    match crate::kodi_setup::find() {
-                        Some(setup) => setup.state.describe().to_string(),
-                        None => "Not found".to_string(),
-                    },
-                    crate::kodi_setup::find().is_some(),
+                    crate::kodi_setup::summary(&crate::kodi_setup::find_all(&config.kodi_paths)),
+                    // Always reachable: with nothing configured, this is where
+                    // configuring starts.
+                    true,
                 ),
                 ("About".to_string(), String::new(), true),
             ]
@@ -3664,75 +3680,42 @@ impl App {
 
     /// Registering with Kodi, which Kodi itself gives no way to do.
     ///
-    /// The work is in [`crate::kodi_setup`]; this is the part that says what
-    /// is currently true and offers the three things worth doing about it.
+    /// The list of what is set up, and the way to add more. Only configured
+    /// instances appear here: an unconfigured Kodi is something to add, not
+    /// something with a state worth reporting, and listing every Kodi on the
+    /// machine alongside the one you set up buries it.
     fn show_kodi(self: &Rc<Self>) {
         let (page, list, back, _slot) = list_page("Kodi", true);
 
-        let found = crate::kodi_setup::find();
-        let mut rows: Vec<(String, String, bool)> = Vec::new();
-        match &found {
-            Some(setup) => {
-                // Activating it opens the folder it sits in. Which of the
-                // options below is greyed out already says how Kodi is set
-                // up, so there is nothing else this row has to report.
-                rows.push((
-                    "Player file".to_string(),
-                    setup.file.display().to_string(),
-                    true,
-                ));
-                rows.push((
-                    "Offer under \"Play using...\"".to_string(),
-                    String::new(),
-                    setup.state != crate::kodi_setup::Registration::Offered,
-                ));
-                rows.push((
-                    "Set as default player".to_string(),
-                    String::new(),
-                    setup.state != crate::kodi_setup::Registration::Default,
-                ));
-                rows.push((
-                    "Remove from Kodi".to_string(),
-                    String::new(),
-                    setup.state != crate::kodi_setup::Registration::Absent,
-                ));
-            }
-            None => {
-                rows.push((
-                    "Kodi".to_string(),
-                    "Not found on this machine".to_string(),
-                    false,
-                ));
-            }
-        }
-        for (label, value, enabled) in &rows {
+        let configured = self.configured_kodis();
+        let mut rows: Vec<(String, String)> = configured
+            .iter()
+            .map(|setup| (setup.label(), setup.state.describe().to_string()))
+            .collect();
+        rows.push(("Add Configuration".to_string(), String::new()));
+
+        for (label, value) in &rows {
             append_named(
                 &list,
-                &menu_row(label, value, *enabled),
+                &menu_row(label, value, true),
                 &row_name(label, value),
             );
         }
 
         {
             let app = self.clone();
+            let paths: Vec<std::path::PathBuf> = configured
+                .iter()
+                .map(|setup| setup.userdata().to_path_buf())
+                .collect();
+            let add_row = rows.len() - 1;
             list.connect_row_activated(move |_, row| {
                 app.sounds.borrow().click();
-                let Some(setup) = crate::kodi_setup::find() else {
-                    return;
-                };
-                if row.index() == 0 {
-                    app.open_folder(setup.file.parent());
-                    return;
-                }
-                let want = match row.index() {
-                    1 => crate::kodi_setup::Registration::Offered,
-                    2 => crate::kodi_setup::Registration::Default,
-                    3 => crate::kodi_setup::Registration::Absent,
-                    _ => return,
-                };
-                match crate::kodi_setup::apply(&setup, want) {
-                    Ok(done) => app.show_kodi_done(&done),
-                    Err(e) => app.show_kodi_done(&e),
+                let index = row.index() as usize;
+                if index == add_row {
+                    app.start_kodi_wizard();
+                } else if let Some(userdata) = paths.get(index) {
+                    app.confirm_kodi_remove(userdata.clone());
                 }
             });
         }
@@ -3744,11 +3727,31 @@ impl App {
             });
         }
 
+        *self.kodi_draft.borrow_mut() = None;
         self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
         *self.screen.borrow_mut() = Screen::Kodi;
         self.window.set_child(Some(&page));
-        // The first row that can actually be pressed, since the ones above it
-        // are there to be read.
+        Self::open_on_first_usable(&list, &back);
+    }
+
+    /// Every Kodi on this machine, including any folder named by hand that we
+    /// are still keeping track of.
+    fn known_kodis(&self) -> Vec<crate::kodi_setup::Setup> {
+        let extra = self.config.borrow().kodi_paths.clone();
+        crate::kodi_setup::find_all(&extra)
+    }
+
+    /// Just the ones TinePlayer is set up in.
+    fn configured_kodis(&self) -> Vec<crate::kodi_setup::Setup> {
+        self.known_kodis()
+            .into_iter()
+            .filter(|setup| setup.is_configured())
+            .collect()
+    }
+
+    /// Selects the first row that can actually be pressed, since some are
+    /// there to be read, and falls back to the Back button when none can.
+    fn open_on_first_usable(list: &gtk::ListBox, back: &gtk::Button) {
         let opening = (0..).find(|index| {
             list.row_at_index(*index)
                 .is_none_or(|row| row.is_sensitive())
@@ -3761,80 +3764,464 @@ impl App {
         }
     }
 
-    /// What happened, over the top of the Kodi screen.
+    /// Taking TinePlayer back out of one Kodi.
     ///
-    /// A panel rather than more rows: the result is a sentence about
-    /// something that has already happened, and a list of rows that cannot be
-    /// pressed reads as a list of things that can be.
-    fn show_kodi_done(self: &Rc<Self>, message: &str) {
-        let page = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(28)
-            .valign(gtk::Align::Center)
-            .margin_top(48)
-            .margin_bottom(48)
-            .margin_start(56)
-            .margin_end(56)
-            .build();
+    /// Asked first, because it changes a file outside TinePlayer's own
+    /// keeping. No backup is restored and none is taken: the file may have
+    /// been edited since, by hand or by Kodi itself, and putting an old copy
+    /// back would undo that. Our entry is cut out and the rest is left alone.
+    fn confirm_kodi_remove(self: &Rc<Self>, userdata: std::path::PathBuf) {
+        let setup = crate::kodi_setup::setup_at(userdata.clone());
+        let app = self.clone();
+        let back = {
+            let app = self.clone();
+            move || app.show_kodi()
+        };
+        self.show_kodi_dialog(
+            &format!("Remove configuration from\n{}?", setup.label()),
+            &["TinePlayer's entry will be removed from Kodi's configuration file"],
+            "Remove",
+            Screen::KodiConfirm,
+            back,
+            move || {
+                let setup = crate::kodi_setup::setup_at(userdata.clone());
+                match crate::kodi_setup::apply(
+                    &setup,
+                    crate::kodi_setup::Registration::Absent,
+                    None,
+                ) {
+                    Ok(_) => {
+                        // A folder named by hand is only worth remembering
+                        // while something is set up in it.
+                        {
+                            let mut config = app.config.borrow_mut();
+                            config.kodi_paths.retain(|path| path != &userdata);
+                            let _ = config.save();
+                        }
+                        app.show_kodi();
+                    }
+                    Err(e) => app.show_kodi_error(&e, {
+                        let app = app.clone();
+                        move || app.show_kodi()
+                    }),
+                }
+            },
+        );
+    }
 
-        let text = gtk::Label::builder()
-            .label(message)
-            .wrap(true)
-            .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .justify(gtk::Justification::Center)
-            .halign(gtk::Align::Center)
-            .css_classes(["tp-hint"])
-            .build();
-        // The path to a backup is worth copying out, being the one thing here
-        // somebody might want to go and look at.
-        text.set_selectable(true);
-        text.set_can_focus(false);
-        page.append(&text);
+    // --- The wizard ----------------------------------------------------
+    //
+    // Screens that collect answers and write nothing. Only Configure, on the
+    // last one, touches Kodi - so backing out is free at every point, which
+    // is the whole reason it is shaped this way rather than as a screen of
+    // switches that act as they are flipped.
+    //
+    // The two that ask something are ordinary lists with a back arrow, driven
+    // like every other screen in the application: choosing a row is the
+    // answer and moves on, so there is no Next to press and nothing to
+    // explain about how to proceed.
 
-        let close = gtk::Button::with_label("Close");
-        close.add_css_class("tp-button");
-        close.set_halign(gtk::Align::Center);
-        page.append(&close);
+    fn start_kodi_wizard(self: &Rc<Self>) {
+        *self.kodi_draft.borrow_mut() = Some(KodiDraft::default());
+        self.show_kodi_choose();
+    }
+
+    /// Which Kodi. Every one found, whether or not it is already set up:
+    /// choosing one that is becomes an update rather than a second entry.
+    fn show_kodi_choose(self: &Rc<Self>) {
+        let (page, list, back, _slot) = list_page("Choose a Kodi Installation", true);
+
+        let found = self.known_kodis();
+        let mut rows: Vec<(String, String)> = found
+            .iter()
+            .map(|setup| {
+                let state = if setup.is_configured() {
+                    format!("Already set up - {}", setup.state.describe())
+                } else {
+                    setup.userdata().display().to_string()
+                };
+                (setup.label(), state)
+            })
+            .collect();
+        rows.push(("Custom install location".to_string(), String::new()));
+
+        for (label, value) in &rows {
+            append_named(
+                &list,
+                &menu_row(label, value, true),
+                &row_name(label, value),
+            );
+        }
 
         {
             let app = self.clone();
-            close.connect_clicked(move |_| {
+            let paths: Vec<std::path::PathBuf> = found
+                .iter()
+                .map(|setup| setup.userdata().to_path_buf())
+                .collect();
+            let browse_row = rows.len() - 1;
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                let index = row.index() as usize;
+                if index == browse_row {
+                    app.browse_for_kodi();
+                } else if let Some(userdata) = paths.get(index) {
+                    app.with_draft(|draft| draft.userdata = Some(userdata.clone()));
+                    app.show_kodi_how();
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| {
                 app.sounds.borrow().click();
                 app.show_kodi();
             });
         }
 
-        self.set_nav(None, std::slice::from_ref(&close), &[]);
-        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
-        *self.screen.borrow_mut() = Screen::KodiDone;
-        self.window.set_child(Some(&self.modal(&page)));
-        close.grab_focus();
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        *self.screen.borrow_mut() = Screen::KodiChoose;
+        self.window.set_child(Some(&page));
+        Self::open_on_first_usable(&list, &back);
     }
 
-    /// Opens a folder in whatever the system uses to browse files.
-    ///
-    /// The folder rather than the file itself: an `.xml` opens in whatever
-    /// happens to be registered for it, which on Windows is as likely to be a
-    /// browser as an editor, and on a fresh machine may be nothing at all.
-    ///
-    /// Handed to the system's own opener rather than to GIO, which has no
-    /// handler registered for a directory on Windows and takes the process
-    /// down rather than reporting that it cannot.
-    fn open_folder(&self, folder: Option<&std::path::Path>) {
-        let Some(folder) = folder else { return };
-        let opener = if cfg!(target_os = "windows") {
-            "explorer"
-        } else if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        // Only the spawn is checked. Explorer reports a non-zero exit even
-        // when it has opened the window asked for, so its status says
-        // nothing, and waiting on any of them would hold up the interface.
-        if let Err(e) = std::process::Command::new(opener).arg(folder).spawn() {
-            eprintln!("Couldn't open {}: {e}", folder.display());
+    /// A folder chosen by hand, for a Kodi installed somewhere TinePlayer does
+    /// not know to look. Choosing one is the same answer as picking a row, so
+    /// it moves on by itself.
+    fn browse_for_kodi(self: &Rc<Self>) {
+        let chooser = gtk::FileChooserNative::new(
+            Some("Choose Kodi's userdata folder"),
+            Some(&self.window),
+            gtk::FileChooserAction::SelectFolder,
+            Some("Choose"),
+            Some("Cancel"),
+        );
+        let app = self.clone();
+        // Held by the closure so the dialog outlives this function; a dropped
+        // FileChooserNative closes before the user can answer. Same handling
+        // as the video chooser.
+        let held = RefCell::new(Some(chooser.clone()));
+        chooser.connect_response(move |chooser, response| {
+            let chosen = (response == gtk::ResponseType::Accept)
+                .then(|| chooser.file().and_then(|file| file.path()))
+                .flatten();
+            held.borrow_mut().take();
+            if let Some(folder) = chosen {
+                let userdata = crate::kodi_setup::userdata_from(folder);
+                app.with_draft(|draft| draft.userdata = Some(userdata));
+                app.show_kodi_how();
+            }
+        });
+        chooser.show();
+    }
+
+    /// What Kodi should do with TinePlayer. Choosing is the answer, and leads
+    /// straight to what it would mean.
+    fn show_kodi_how(self: &Rc<Self>) {
+        use crate::kodi_setup::Registration;
+
+        if self.draft_userdata().is_none() {
+            return self.show_kodi();
         }
+        let (page, list, back, _slot) = list_page("How to Configure", true);
+
+        let choices = [
+            (
+                "Default Player",
+                "Kodi hands every video straight to TinePlayer",
+                Registration::Default,
+            ),
+            (
+                "Optional Player",
+                "TinePlayer appears under \"Play using...\" in a video's menu",
+                Registration::Offered,
+            ),
+        ];
+        for (label, value, _) in &choices {
+            append_named(
+                &list,
+                &menu_row(label, value, true),
+                &row_name(label, value),
+            );
+        }
+
+        {
+            let app = self.clone();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                if let Some((_, _, want)) = choices.get(row.index() as usize) {
+                    app.with_draft(|draft| draft.want = Some(*want));
+                    app.show_kodi_manual_or_summary();
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_kodi_choose();
+            });
+        }
+
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        *self.screen.borrow_mut() = Screen::KodiHow;
+        self.window.set_child(Some(&page));
+        Self::open_on_first_usable(&list, &back);
+    }
+
+    /// The manual step, when there is one, and otherwise straight to the
+    /// summary. Skipped rather than shown empty: a screen saying "nothing to
+    /// do here" is a screen worth not having.
+    fn show_kodi_manual_or_summary(self: &Rc<Self>) {
+        let confinement = self
+            .draft_userdata()
+            .map(|userdata| crate::kodi_setup::setup_at(userdata).confinement);
+        match confinement.and_then(crate::kodi_setup::manual_step) {
+            Some(manual) => self.show_kodi_manual(manual),
+            None => self.show_kodi_summary(),
+        }
+    }
+
+    /// Something TinePlayer cannot do for you, and will not do quietly.
+    /// Continuing is what says it has been done.
+    fn show_kodi_manual(self: &Rc<Self>, manual: crate::kodi_setup::ManualStep) {
+        let mut lines = vec![manual.what, manual.why];
+        if let Some(command) = manual.command {
+            lines.push(command);
+        }
+        lines.push(manual.cost);
+
+        let back = {
+            let app = self.clone();
+            move || app.show_kodi_how()
+        };
+        let app = self.clone();
+        self.show_kodi_dialog(
+            "One thing to do yourself",
+            &lines,
+            "Continue",
+            Screen::KodiManual,
+            back,
+            move || app.show_kodi_summary(),
+        );
+    }
+
+    /// Everything that is about to happen, before any of it happens.
+    fn show_kodi_summary(self: &Rc<Self>) {
+        let Some((userdata, want)) = self.draft_parts() else {
+            return self.show_kodi();
+        };
+        let setup = crate::kodi_setup::setup_at(userdata);
+
+        // Settled here rather than at write time, because this screen names
+        // the file and the write has to produce that same one. Whether to
+        // take one at all is not asked: a copy is kept the first time
+        // TinePlayer touches a file, and not on later runs, which is the
+        // answer almost everyone would give and saves a question.
+        let backup_to = setup
+            .backup_by_default()
+            .then(|| crate::kodi_setup::backup_path(&setup.file));
+        self.with_draft(|draft| draft.backup_to = backup_to.clone());
+
+        let mut lines = vec![format!(
+            "{} {}",
+            if setup.file.exists() {
+                "Edit"
+            } else {
+                "Create"
+            },
+            setup.file.display()
+        )];
+        if let Some(name) = backup_to.as_ref().and_then(|path| path.file_name()) {
+            lines.push(format!("Backup file: {}", name.to_string_lossy()));
+        }
+        lines.push(format!("Add TinePlayer as {}", want.describe()));
+
+        let back = {
+            let app = self.clone();
+            move || app.show_kodi_how()
+        };
+        let app = self.clone();
+        self.show_kodi_dialog(
+            "Confirm Configuration",
+            &lines.iter().map(String::as_str).collect::<Vec<_>>(),
+            "Configure",
+            Screen::KodiSummary,
+            back,
+            move || app.apply_kodi_draft(),
+        );
+    }
+
+    /// The only place anything is written.
+    fn apply_kodi_draft(self: &Rc<Self>) {
+        let Some((userdata, want)) = self.draft_parts() else {
+            return self.show_kodi();
+        };
+        let setup = crate::kodi_setup::setup_at(userdata.clone());
+        // The path the summary named, not a freshly computed one: the file
+        // written has to be the file the viewer was shown.
+        let backup_to = self
+            .kodi_draft
+            .borrow()
+            .as_ref()
+            .and_then(|draft| draft.backup_to.clone());
+        match crate::kodi_setup::apply(&setup, want, backup_to.as_deref()) {
+            Ok(_) => {
+                // A folder named by hand is worth keeping track of now that
+                // something is set up in it, so it can be found again to
+                // change or remove.
+                let known = crate::kodi_setup::find_all(&[])
+                    .iter()
+                    .any(|found| found.userdata() == userdata);
+                if !known {
+                    let mut config = self.config.borrow_mut();
+                    if !config.kodi_paths.contains(&userdata) {
+                        config.kodi_paths.push(userdata);
+                        let _ = config.save();
+                    }
+                }
+                self.show_kodi_configured();
+            }
+            // Back to the summary, which is still true and still the place to
+            // press Configure from.
+            Err(e) => self.show_kodi_error(&e, {
+                let app = self.clone();
+                move || app.show_kodi_summary()
+            }),
+        }
+    }
+
+    /// Done, with the one thing left for the viewer to do.
+    fn show_kodi_configured(self: &Rc<Self>) {
+        let page = wizard_page("Configuration Successful");
+        page.append(&wizard_text(
+            "Restart Kodi for the configuration to take effect.",
+            false,
+        ));
+
+        let ok = gtk::Button::with_label("OK");
+        ok.add_css_class("tp-button");
+        ok.set_halign(gtk::Align::Center);
+        page.append(&ok);
+        {
+            let app = self.clone();
+            ok.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_kodi();
+            });
+        }
+
+        *self.kodi_draft.borrow_mut() = None;
+        self.set_nav(None, std::slice::from_ref(&ok), &[]);
+        *self.screen.borrow_mut() = Screen::KodiDone;
+        self.window.set_child(Some(&self.modal(&page)));
+        ok.grab_focus();
+    }
+
+    /// Something went wrong, said plainly, with a way back to where it was
+    /// worth trying from.
+    fn show_kodi_error(self: &Rc<Self>, message: &str, back: impl Fn() + 'static) {
+        let page = wizard_page("Configuration Error");
+        page.append(&wizard_text(message, false));
+
+        let ok = gtk::Button::with_label("OK");
+        ok.add_css_class("tp-button");
+        ok.set_halign(gtk::Align::Center);
+        page.append(&ok);
+        {
+            let app = self.clone();
+            ok.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                back();
+            });
+        }
+
+        self.set_nav(None, std::slice::from_ref(&ok), &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::KodiError;
+        self.window.set_child(Some(&self.modal(&page)));
+        ok.grab_focus();
+    }
+
+    /// A panel that states something and asks whether to go ahead.
+    ///
+    /// Cancel returns wherever the caller says, which is not always the Kodi
+    /// list: backing out of Confirm Configuration belongs on the screen the
+    /// choice was made on, so the answer can be changed rather than the whole
+    /// wizard restarted.
+    fn show_kodi_dialog(
+        self: &Rc<Self>,
+        title: &str,
+        lines: &[&str],
+        confirm_label: &str,
+        screen: Screen,
+        back: impl Fn() + 'static,
+        action: impl Fn() + 'static,
+    ) {
+        let page = wizard_page(title);
+        for line in lines {
+            // A command is the one thing somebody has to reproduce exactly,
+            // so it is set apart and wraps by character rather than by word.
+            let command = line.starts_with("flatpak ");
+            page.append(&wizard_text(line, command));
+        }
+
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.add_css_class("tp-cancel");
+        let confirm = gtk::Button::with_label(confirm_label);
+        confirm.add_css_class("tp-button");
+        row.append(&cancel);
+        row.append(&confirm);
+        page.append(&row);
+
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                back();
+            });
+        }
+        {
+            let app = self.clone();
+            confirm.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                action();
+            });
+        }
+
+        self.set_nav(None, &[cancel.clone(), confirm.clone()], &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = screen;
+        self.window.set_child(Some(&self.modal(&page)));
+        // Cancel, so a reflexive second press changes nothing.
+        cancel.grab_focus();
+    }
+
+    fn with_draft(&self, edit: impl FnOnce(&mut KodiDraft)) {
+        if let Some(draft) = self.kodi_draft.borrow_mut().as_mut() {
+            edit(draft);
+        }
+    }
+
+    fn draft_userdata(&self) -> Option<std::path::PathBuf> {
+        self.kodi_draft
+            .borrow()
+            .as_ref()
+            .and_then(|draft| draft.userdata.clone())
+    }
+
+    /// Where and what, or nothing if the wizard is not far enough along to
+    /// act on.
+    fn draft_parts(&self) -> Option<(std::path::PathBuf, crate::kodi_setup::Registration)> {
+        let draft = self.kodi_draft.borrow();
+        let draft = draft.as_ref()?;
+        Some((draft.userdata.clone()?, draft.want?))
     }
 
     fn confirm_clear_data(self: &Rc<Self>) {
@@ -4682,6 +5069,63 @@ fn volume_label(level: f64, muted: bool) -> String {
 /// and the row it sits in is what gets activated. That keeps one way of
 /// working the menu - move to a row, press it - rather than a second target
 /// inside the row that only a pointer could reach.
+/// What the Kodi wizard has been told so far.
+///
+/// Every field is optional because the wizard fills them in one screen at a
+/// time, and none of it has been written to Kodi: dropping this is what
+/// Cancel does, and it costs nothing.
+#[derive(Default)]
+struct KodiDraft {
+    userdata: Option<std::path::PathBuf>,
+    want: Option<crate::kodi_setup::Registration>,
+    /// The exact file a backup would be copied to, settled when the summary
+    /// names it so that what was promised is what gets written.
+    backup_to: Option<std::path::PathBuf>,
+}
+
+/// A wizard panel: a heading, then whatever the step needs, centered over the
+/// screen it was opened from.
+fn wizard_page(title: &str) -> gtk::Box {
+    let page = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(20)
+        .valign(gtk::Align::Center)
+        .margin_top(40)
+        .margin_bottom(40)
+        .margin_start(56)
+        .margin_end(56)
+        .build();
+    let heading = heading_label(title);
+    heading.set_halign(gtk::Align::Center);
+    // halign centers the label in the panel; justify centers the lines within
+    // the label. Without it a heading that wraps, or one written across two
+    // lines, sits centered as a block with its second line ragged left.
+    heading.set_justify(gtk::Justification::Center);
+    page.append(&heading);
+    page
+}
+
+/// A line of explanation on a wizard panel. Selectable, so a command or a
+/// path can be copied out with Ctrl+C, but never focusable: these are read,
+/// not operated.
+fn wizard_text(text: &str, command: bool) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(text)
+        .wrap(true)
+        .wrap_mode(if command {
+            gtk::pango::WrapMode::Char
+        } else {
+            gtk::pango::WrapMode::WordChar
+        })
+        .justify(gtk::Justification::Center)
+        .halign(gtk::Align::Center)
+        .css_classes([if command { "tp-path" } else { "tp-hint" }])
+        .build();
+    label.set_selectable(true);
+    label.set_can_focus(false);
+    label
+}
+
 fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
