@@ -85,7 +85,7 @@ cat >"$app/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key>
     <string>TinePlayer</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.tineplayer.TinePlayer</string>
+    <string>app.tineplayer.TinePlayer</string>
     <key>CFBundleExecutable</key>
     <string>TinePlayer</string>
     <key>CFBundleIconFile</key>

@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=TinePlayer
+GenericName=Video Player
+Comment=Play one video with two audio tracks on two output devices
+Exec=TinePlayer %f
+Icon=app.tineplayer.TinePlayer
+Terminal=false
+Categories=AudioVideo;Video;Player;
+MimeType=video/x-matroska;video/mp4;video/mpeg;video/mp2t;video/x-msvideo;video/quicktime;video/webm;
+# The window class the toolkit sets, which GTK takes from the program name, so
+# this is the name of the executable rather than the application id. It is how
+# an X11 desktop pairs a running window with this file and finds its icon;
+# under Wayland the pairing comes from this file being named for the
+# application id instead. Packaging rewrites this line, since an installed
+# build and a build from source do not name the binary the same way.
+StartupWMClass=TinePlayer

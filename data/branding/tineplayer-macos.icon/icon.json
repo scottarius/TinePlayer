@@ -22,8 +22,8 @@
           "blend-mode" : "normal",
           "glass" : true,
           "hidden" : false,
-          "image-name" : "dev.tineplayer.TinePlayer.svg",
-          "name" : "dev.tineplayer.TinePlayer",
+          "image-name" : "app.tineplayer.TinePlayer.svg",
+          "name" : "app.tineplayer.TinePlayer",
           "opacity" : 1
         }
       ],

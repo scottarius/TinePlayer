@@ -491,7 +491,7 @@ fn main() -> std::process::ExitCode {
         gtk::gio::ApplicationFlags::empty()
     };
     let gtk_app = gtk::Application::builder()
-        .application_id("dev.tineplayer.TinePlayer")
+        .application_id("app.tineplayer.TinePlayer")
         .flags(flags)
         .build();
 

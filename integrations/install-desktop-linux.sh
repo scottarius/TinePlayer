@@ -23,14 +23,14 @@ icons="$HOME/.local/share/icons/hicolor/scalable/apps"
 applications="$HOME/.local/share/applications"
 mkdir -p "$icons" "$applications"
 
-cp data/branding/dev.tineplayer.TinePlayer.svg "$icons/"
+cp data/branding/app.tineplayer.TinePlayer.svg "$icons/"
 # The Exec line is rewritten rather than assuming the binary is on PATH, since
 # nothing here installs it system-wide. Wayland matches a running window to
 # this file by the application id, which is also what puts the icon in the
 # taskbar.
 sed "s|^Exec=.*|Exec=$binary %f|" \
-    data/templates/dev.tineplayer.TinePlayer.desktop \
-    >"$applications/dev.tineplayer.TinePlayer.desktop"
+    data/templates/app.tineplayer.TinePlayer.desktop \
+    >"$applications/app.tineplayer.TinePlayer.desktop"
 
 # Both are best-effort: the desktop still works without the caches, they just
 # take longer to notice the new entry.
