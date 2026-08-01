@@ -2,8 +2,13 @@
 //!
 //! A fixed list rather than everything ISO defines: this is a menu read from
 //! across a room, and a list of several hundred codes would be unusable with
-//! a controller. Anything missing can still be played by choosing the track
-//! by hand.
+//! a controller. What is here is what actually turns up as an alternate audio
+//! track on commercial discs and the rips made from them. Anything missing can
+//! still be played by choosing the track by hand.
+//!
+//! Ordered by name rather than by how common each is. At fifty entries a
+//! hand-tuned order is one nobody can predict, and looking for "Polish" in a
+//! list sorted by popularity means reading all of it.
 
 /// Code stored in the config, the name shown in the menu, and the tags a
 /// container might label the track with.
@@ -11,30 +16,59 @@
 /// Both two and three letter forms are listed because files disagree: MKV
 /// tends to carry `eng`, while GStreamer often reports `en`.
 pub const LANGUAGES: &[(&str, &str, &[&str])] = &[
-    ("en", "English", &["en", "eng"]),
-    ("ru", "Russian", &["ru", "rus"]),
-    ("es", "Spanish", &["es", "spa"]),
-    ("fr", "French", &["fr", "fra", "fre"]),
-    ("de", "German", &["de", "deu", "ger"]),
-    ("it", "Italian", &["it", "ita"]),
-    ("pt", "Portuguese", &["pt", "por"]),
-    ("nl", "Dutch", &["nl", "nld", "dut"]),
-    ("pl", "Polish", &["pl", "pol"]),
-    ("uk", "Ukrainian", &["uk", "ukr"]),
+    ("ar", "Arabic", &["ar", "ara"]),
+    ("hy", "Armenian", &["hy", "hye", "arm"]),
+    ("az", "Azerbaijani", &["az", "aze"]),
+    ("bn", "Bengali", &["bn", "ben"]),
+    ("bs", "Bosnian", &["bs", "bos"]),
+    ("bg", "Bulgarian", &["bg", "bul"]),
+    ("yue", "Cantonese", &["yue"]),
+    ("ca", "Catalan", &["ca", "cat"]),
+    ("zh", "Chinese", &["zh", "zho", "chi", "cmn"]),
+    ("hr", "Croatian", &["hr", "hrv"]),
     ("cs", "Czech", &["cs", "ces", "cze"]),
-    ("sv", "Swedish", &["sv", "swe"]),
-    ("no", "Norwegian", &["no", "nor", "nb", "nob"]),
     ("da", "Danish", &["da", "dan"]),
+    ("nl", "Dutch", &["nl", "nld", "dut"]),
+    ("en", "English", &["en", "eng"]),
+    ("et", "Estonian", &["et", "est"]),
     ("fi", "Finnish", &["fi", "fin"]),
-    ("hu", "Hungarian", &["hu", "hun"]),
-    ("tr", "Turkish", &["tr", "tur"]),
+    ("fr", "French", &["fr", "fra", "fre"]),
+    ("ka", "Georgian", &["ka", "kat", "geo"]),
+    ("de", "German", &["de", "deu", "ger"]),
     ("el", "Greek", &["el", "ell", "gre"]),
     ("he", "Hebrew", &["he", "heb", "iw"]),
-    ("ar", "Arabic", &["ar", "ara"]),
     ("hi", "Hindi", &["hi", "hin"]),
+    ("hu", "Hungarian", &["hu", "hun"]),
+    ("is", "Icelandic", &["is", "isl", "ice"]),
+    ("id", "Indonesian", &["id", "ind", "in"]),
+    ("it", "Italian", &["it", "ita"]),
     ("ja", "Japanese", &["ja", "jpn"]),
+    ("kk", "Kazakh", &["kk", "kaz"]),
     ("ko", "Korean", &["ko", "kor"]),
-    ("zh", "Chinese", &["zh", "zho", "chi"]),
+    ("lv", "Latvian", &["lv", "lav"]),
+    ("lt", "Lithuanian", &["lt", "lit"]),
+    ("ms", "Malay", &["ms", "msa", "may"]),
+    ("ml", "Malayalam", &["ml", "mal"]),
+    ("no", "Norwegian", &["no", "nor", "nb", "nob", "nn", "nno"]),
+    ("fa", "Persian", &["fa", "fas", "per"]),
+    ("pl", "Polish", &["pl", "pol"]),
+    ("pt", "Portuguese", &["pt", "por"]),
+    ("pa", "Punjabi", &["pa", "pan"]),
+    ("ro", "Romanian", &["ro", "ron", "rum", "mo", "mol"]),
+    ("ru", "Russian", &["ru", "rus"]),
+    ("sr", "Serbian", &["sr", "srp"]),
+    ("sk", "Slovak", &["sk", "slk", "slo"]),
+    ("sl", "Slovenian", &["sl", "slv"]),
+    ("es", "Spanish", &["es", "spa"]),
+    ("sv", "Swedish", &["sv", "swe"]),
+    ("tl", "Tagalog", &["tl", "tgl", "fil"]),
+    ("ta", "Tamil", &["ta", "tam"]),
+    ("te", "Telugu", &["te", "tel"]),
+    ("th", "Thai", &["th", "tha"]),
+    ("tr", "Turkish", &["tr", "tur"]),
+    ("uk", "Ukrainian", &["uk", "ukr"]),
+    ("ur", "Urdu", &["ur", "urd"]),
+    ("vi", "Vietnamese", &["vi", "vie"]),
 ];
 
 pub fn name_for(code: &str) -> String {
