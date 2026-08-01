@@ -1,0 +1,152 @@
+name: Release
+
+# Builds the downloadable packages and attaches them to a GitHub release.
+#
+# Triggered by pushing a tag that starts with "v", so the tag is what decides
+# a release happens rather than a branch or a button. Also available from the
+# Actions tab for a dry run, which builds everything and uploads it as job
+# artifacts without creating a release at all.
+#
+# Rehearsing this is expected: tags and releases can be deleted, including on
+# a private repository, and the same version number can be used again
+# afterwards. Better to find a broken packaging script on v0.6.0-test1 than on
+# the day of the real one.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build the packages but do not create a release"
+        type: boolean
+        default: true
+
+# Pinned for the same reason CI pins: a release should be reproducible from
+# its tag, not dependent on what upstream published that morning.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.97.1"
+  GSTREAMER_VERSION: "1.28.5"
+
+permissions:
+  contents: write # creating the release and uploading to it
+
+jobs:
+  windows:
+    name: Windows package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pin Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal
+          rustup default $env:RUST_VERSION
+
+      - name: Install dependencies
+        shell: pwsh
+        run: .\setup-windows.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
+
+      # setup-windows.ps1 writes User-scope variables, which a later step does
+      # not inherit. Same handling as ci.yml, and derived from what the script
+      # decided rather than recomputed.
+      - name: Carry the script's environment into the job
+        shell: pwsh
+        run: |
+          $pkgConfig = [Environment]::GetEnvironmentVariable('PKG_CONFIG_PATH', 'User')
+          if (-not $pkgConfig) { throw 'setup-windows.ps1 did not set PKG_CONFIG_PATH' }
+          $root = Split-Path (Split-Path $pkgConfig -Parent) -Parent
+          "PKG_CONFIG_PATH=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "GSTREAMER_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # Builds the executable, chooses the plugins, walks the libraries,
+      # collects the licenses, and produces both the ZIP and the installer.
+      # Inno Setup is installed by the script if the runner lacks it.
+      - name: Package
+        shell: pwsh
+        run: .\packaging\windows\package.ps1 -GStreamer $env:GSTREAMER_ROOT
+
+      # A package that cannot start is worse than no package. This runs it
+      # with GStreamer's own directory off PATH, which is the whole point of
+      # bundling: if a library was missed, this is where it shows.
+      - name: Check it runs without GStreamer on PATH
+        shell: pwsh
+        run: |
+          $stage = Get-ChildItem dist\windows -Directory | Select-Object -First 1
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+          # Start-Process -Wait rather than the call operator: TinePlayer is a
+          # GUI-subsystem binary, so PowerShell does not wait for it and
+          # $LASTEXITCODE would be whatever came before.
+          $run = Start-Process -FilePath "$($stage.FullName)\TinePlayer.exe" `
+              -ArgumentList '--version' -Wait -PassThru -NoNewWindow
+          if ($run.ExitCode -ne 0) {
+              throw "the packaged build could not start: exit $($run.ExitCode)"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/windows/*.zip
+            dist/windows/*-setup.exe
+
+  macos:
+    name: macOS package
+    # Apple Silicon only, which is a deliberate decision: Apple stopped
+    # selling Intel Macs in 2023 and macOS 26 is their last release. An Intel
+    # package would be this same job on an Intel runner, added if anyone asks.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pin Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - name: Install dependencies
+        run: |
+          chmod +x setup-mac.sh
+          ./setup-mac.sh
+
+      # Builds the bundle, fills it with libraries and licenses, takes the
+      # LGPL FFmpeg from GStreamer's own macOS build, and makes the disk
+      # image. Signing stays ad-hoc unless TINE_SIGN_IDENTITY is set.
+      - name: Package
+        run: |
+          chmod +x packaging/macos/*.sh
+          ./packaging/macos/package.sh
+
+      - name: Check it runs from the bundle
+        run: |
+          dist/macos/TinePlayer.app/Contents/MacOS/TinePlayer --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/macos/*.dmg
+
+  release:
+    name: Publish
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    # Only for a tag. A manual run builds and uploads artifacts, which is what
+    # makes a rehearsal possible without leaving a release behind.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/windows/*
+            artifacts/macos/*
+          # Left as a draft so the notes can be written, and the packages
+          # tried, before anyone can download them. Publishing is a button.
+          draft: true
+          generate_release_notes: true
