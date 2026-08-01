@@ -73,7 +73,7 @@ impl Slider {
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
 
-const SETTINGS_ROWS: usize = 18;
+const SETTINGS_ROWS: usize = 19;
 /// Rows that begin a group: each output, then subtitles, then what is
 /// remembered between runs, then the housekeeping at the bottom.
 const SETTINGS_SECTIONS: [i32; 5] = [3, 7, 11, 14, 17];
@@ -125,6 +125,8 @@ enum Screen {
     Chooser,
     Confirm,
     About,
+    Kodi,
+    KodiDone,
     ConfirmQuit,
     Error,
     Playing,
@@ -703,7 +705,9 @@ impl App {
         match screen {
             Screen::Playing => self.leave_playback(),
             Screen::Chooser => self.leave_chooser(),
-            Screen::Confirm | Screen::About => self.show_settings(),
+            Screen::Confirm | Screen::About | Screen::Kodi => self.show_settings(),
+            // Back out of the result to what it was a result of.
+            Screen::KodiDone => self.show_kodi(),
             // Nothing to go back to when the video we were started for could
             // not be opened.
             Screen::Error if self.error_is_fatal.get() => self.window.close(),
@@ -3335,6 +3339,14 @@ impl App {
                     true,
                 ),
                 ("Clear Saved Playback Data".to_string(), String::new(), true),
+                (
+                    "Kodi".to_string(),
+                    match crate::kodi_setup::find() {
+                        Some(setup) => setup.state.describe().to_string(),
+                        None => "Not found".to_string(),
+                    },
+                    crate::kodi_setup::find().is_some(),
+                ),
                 ("About".to_string(), String::new(), true),
             ]
         };
@@ -3440,7 +3452,8 @@ impl App {
                     12 => app.open_setting(Setting::SubtitleSize),
                     13 => app.open_setting(Setting::SubtitleFont),
                     16 => app.confirm_clear_data(),
-                    17 => app.show_about(),
+                    17 => app.show_kodi(),
+                    18 => app.show_about(),
                     _ => {}
                 }
             });
@@ -3639,6 +3652,181 @@ impl App {
             (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
         ));
         true
+    }
+
+    /// Registering with Kodi, which Kodi itself gives no way to do.
+    ///
+    /// The work is in [`crate::kodi_setup`]; this is the part that says what
+    /// is currently true and offers the three things worth doing about it.
+    fn show_kodi(self: &Rc<Self>) {
+        let (page, list, back, _slot) = list_page("Kodi", true);
+
+        let found = crate::kodi_setup::find();
+        let mut rows: Vec<(String, String, bool)> = Vec::new();
+        match &found {
+            Some(setup) => {
+                // Activating it opens the folder it sits in. Which of the
+                // options below is greyed out already says how Kodi is set
+                // up, so there is nothing else this row has to report.
+                rows.push((
+                    "Player file".to_string(),
+                    setup.file.display().to_string(),
+                    true,
+                ));
+                rows.push((
+                    "Offer under \"Play using...\"".to_string(),
+                    String::new(),
+                    setup.state != crate::kodi_setup::Registration::Offered,
+                ));
+                rows.push((
+                    "Set as default player".to_string(),
+                    String::new(),
+                    setup.state != crate::kodi_setup::Registration::Default,
+                ));
+                rows.push((
+                    "Remove from Kodi".to_string(),
+                    String::new(),
+                    setup.state != crate::kodi_setup::Registration::Absent,
+                ));
+            }
+            None => {
+                rows.push((
+                    "Kodi".to_string(),
+                    "Not found on this machine".to_string(),
+                    false,
+                ));
+            }
+        }
+        for (label, value, enabled) in &rows {
+            append_named(
+                &list,
+                &menu_row(label, value, *enabled),
+                &row_name(label, value),
+            );
+        }
+
+        {
+            let app = self.clone();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                let Some(setup) = crate::kodi_setup::find() else {
+                    return;
+                };
+                if row.index() == 0 {
+                    app.open_folder(setup.file.parent());
+                    return;
+                }
+                let want = match row.index() {
+                    1 => crate::kodi_setup::Registration::Offered,
+                    2 => crate::kodi_setup::Registration::Default,
+                    3 => crate::kodi_setup::Registration::Absent,
+                    _ => return,
+                };
+                match crate::kodi_setup::apply(&setup, want) {
+                    Ok(done) => app.show_kodi_done(&done),
+                    Err(e) => app.show_kodi_done(&e),
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_settings();
+            });
+        }
+
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        *self.screen.borrow_mut() = Screen::Kodi;
+        self.window.set_child(Some(&page));
+        // The first row that can actually be pressed, since the ones above it
+        // are there to be read.
+        let opening = (0..).find(|index| {
+            list.row_at_index(*index)
+                .is_none_or(|row| row.is_sensitive())
+        });
+        if let Some(row) = opening.and_then(|index| list.row_at_index(index)) {
+            list.select_row(Some(&row));
+            settle_on(&row);
+        } else {
+            back.grab_focus();
+        }
+    }
+
+    /// What happened, over the top of the Kodi screen.
+    ///
+    /// A panel rather than more rows: the result is a sentence about
+    /// something that has already happened, and a list of rows that cannot be
+    /// pressed reads as a list of things that can be.
+    fn show_kodi_done(self: &Rc<Self>, message: &str) {
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(28)
+            .valign(gtk::Align::Center)
+            .margin_top(48)
+            .margin_bottom(48)
+            .margin_start(56)
+            .margin_end(56)
+            .build();
+
+        let text = gtk::Label::builder()
+            .label(message)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .justify(gtk::Justification::Center)
+            .halign(gtk::Align::Center)
+            .css_classes(["tp-hint"])
+            .build();
+        // The path to a backup is worth copying out, being the one thing here
+        // somebody might want to go and look at.
+        text.set_selectable(true);
+        text.set_can_focus(false);
+        page.append(&text);
+
+        let close = gtk::Button::with_label("Close");
+        close.add_css_class("tp-button");
+        close.set_halign(gtk::Align::Center);
+        page.append(&close);
+
+        {
+            let app = self.clone();
+            close.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_kodi();
+            });
+        }
+
+        self.set_nav(None, std::slice::from_ref(&close), &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::KodiDone;
+        self.window.set_child(Some(&self.modal(&page)));
+        close.grab_focus();
+    }
+
+    /// Opens a folder in whatever the system uses to browse files.
+    ///
+    /// The folder rather than the file itself: an `.xml` opens in whatever
+    /// happens to be registered for it, which on Windows is as likely to be a
+    /// browser as an editor, and on a fresh machine may be nothing at all.
+    ///
+    /// Handed to the system's own opener rather than to GIO, which has no
+    /// handler registered for a directory on Windows and takes the process
+    /// down rather than reporting that it cannot.
+    fn open_folder(&self, folder: Option<&std::path::Path>) {
+        let Some(folder) = folder else { return };
+        let opener = if cfg!(target_os = "windows") {
+            "explorer"
+        } else if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        // Only the spawn is checked. Explorer reports a non-zero exit even
+        // when it has opened the window asked for, so its status says
+        // nothing, and waiting on any of them would hold up the interface.
+        if let Err(e) = std::process::Command::new(opener).arg(folder).spawn() {
+            eprintln!("Couldn't open {}: {e}", folder.display());
+        }
     }
 
     fn confirm_clear_data(self: &Rc<Self>) {

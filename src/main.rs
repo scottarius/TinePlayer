@@ -14,6 +14,7 @@ mod devices;
 mod display;
 mod gamepad;
 mod kodi;
+mod kodi_setup;
 mod languages;
 mod pipeline;
 mod player;

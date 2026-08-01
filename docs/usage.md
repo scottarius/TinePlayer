@@ -10,6 +10,13 @@ the executable.
 ./target/release/TinePlayer ~/Videos/film.mkv --fullscreen
 ```
 
+### macOS
+
+```sh
+./target/release/TinePlayer
+./target/release/TinePlayer ~/Movies/film.mkv --fullscreen
+```
+
 ### Windows
 
 ```powershell

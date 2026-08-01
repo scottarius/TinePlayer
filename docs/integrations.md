@@ -14,15 +14,21 @@ Launch the executable by passing the video and the `--external` flag:
 TinePlayer "/home/you/Videos/film.mkv" --external --fullscreen
 ```
 
+### macOS
+
+```sh
+TinePlayer "/Users/you/Movies/film.mkv" --external --fullscreen
+```
+
 ### Windows
 
 ```powershell
-launch-tineplayer-windows.cmd "H:\Videos\film.mkv" --external --fullscreen
+TinePlayer.exe "H:\Videos\film.mkv" --external --fullscreen
 ```
 
-On Windows, using `launch-tineplayer-windows.cmd` rather than the exe directly starts
-TinePlayer from its own folder, avoiding any working directory issues with
-loading conflicting libraries. See [the launch script
+On Windows and if running from the source built version, point at
+`launch-tineplayer-windows.cmd` rather than the exe directly if you
+experience startup errors. See [the launch script
 usage](usage.md#launch-script).
 
 Passing `--external` puts TinePlayer into an integration mode, where it plays
@@ -62,21 +68,19 @@ There are two ways to set it up depending on your preference:
 > * On Kodi 20 and earlier, it only appears under **Videos → Files**, not in
 >   the libraries.
 
-### Automated Installation
+### From TinePlayer
 
-The easiest way. These scripts write the configuration file for you:
+The easiest way. In TinePlayer, open
+**Settings** and choose **Kodi**. It finds Kodi's userdata directory itself
+and offers three things:
 
-```sh
-./integrations/configure-kodi-linux.sh             # Linux
-./integrations/configure-kodi-linux.sh --default   # Linux, as default player
+* **Offer under "Play using..."** - Kodi keeps playing videos itself by default, and
+  TinePlayer appears in a video's context menu.
+* **Set as default player** - Kodi hands every video to TinePlayer.
+* **Remove from Kodi** - takes TinePlayer back out again.
 
-.\integrations\configure-kodi-windows.ps1            # Windows
-.\integrations\configure-kodi-windows.ps1 -Default   # Windows, as default player
-```
-
-They find Kodi's userdata directory themselves and write the correct
-configuration file. Any existing `playercorefactory.xml` is backed up rather
-than replaced.
+If you have an existing `playercorefactory.xml` it is edited non-destructively and a 
+copy of the file is backed up before TinePlayer edits it. 
 
 Restart Kodi to see changes.
 
@@ -88,12 +92,12 @@ isn't there already:
 
 * Linux: `~/.kodi/userdata/playercorefactory.xml`
 * Windows: `%APPDATA%\Kodi\userdata\playercorefactory.xml`
+* macOS: `~/Library/Application Support/Kodi/userdata/playercorefactory.xml`
 
 **[examples/playercorefactory.xml](../examples/playercorefactory.xml)** is a
 complete, fully commented copy to start from. Two things required to change:
 
-* Set `<filename>` to the TinePlayer executable path. On Windows, point it at
-  `launch-tineplayer-windows.cmd` rather than straight at the executable.
+* Set `<filename>` to the TinePlayer executable path.
 * Uncomment the `<rules>` block at the bottom to make TinePlayer the default
   player. Left commented, TinePlayer appears under **Play using...** instead.
 

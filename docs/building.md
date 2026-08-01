@@ -4,9 +4,6 @@ Setup scripts are provided for each platform. Each installs only what is needed
 to build, and each is idempotent, skipping anything already present, so they
 are safe to re-run.
 
-Connecting the copy you build to anything else - a desktop launcher, Kodi - is
-a separate step, and those scripts live in `integrations/`.
-
 **Linux**
 
 ```sh

@@ -2,9 +2,9 @@
 <!--
   Offers TinePlayer to Kodi as an external player, fully commented.
 
-  integrations/configure-kodi-linux.sh and integrations/configure-kodi-windows.ps1 write this file for you, and are the
-  easier route. This copy is for setting it up by hand, or for merging into a
-  playercorefactory.xml that already configures other players.
+  TinePlayer writes this file for you: open Settings and choose Kodi, which is
+  the easier route. This copy is for setting it up by hand, or for merging into
+  a playercorefactory.xml that already configures other players.
 
   Put it in Kodi's userdata directory and restart Kodi:
 
