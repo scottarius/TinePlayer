@@ -76,11 +76,29 @@ if [[ -n "${TINE_SIGN_IDENTITY:-}" ]]; then
     if [[ -n "${TINE_NOTARY_PROFILE:-}" ]]; then
         echo
         echo "=== Notarizing ==="
-        xcrun notarytool submit "$dmg" --keychain-profile "$TINE_NOTARY_PROFILE" --wait
+        # TINE_NOTARY_KEYCHAIN names the keychain holding the profile, for a
+        # build machine that keeps credentials somewhere other than the login
+        # keychain. A runner does: its keychain is created for the job and
+        # thrown away with it.
+        notary_keychain=()
+        [[ -n "${TINE_NOTARY_KEYCHAIN:-}" ]] &&
+            notary_keychain=(--keychain "$TINE_NOTARY_KEYCHAIN")
+        xcrun notarytool submit "$dmg" \
+            --keychain-profile "$TINE_NOTARY_PROFILE" "${notary_keychain[@]}" --wait
         # Stapling puts the ticket inside the image, so it opens even on a
         # machine that cannot reach Apple to ask.
         xcrun stapler staple "$dmg"
         xcrun stapler validate "$dmg"
+
+        # What a viewer's Mac will actually decide, asked the same way
+        # Gatekeeper asks it. Worth doing here rather than trusting that a
+        # successful notarization means a working download: this is the check
+        # that fails if the hardened runtime rejected a bundled library.
+        echo
+        echo "=== What Gatekeeper makes of it ==="
+        spctl --assess --type open --context context:primary-signature \
+            --verbose=2 "$dmg"
+        codesign --verify --deep --strict --verbose=2 "dist/macos/TinePlayer.app"
     else
         echo "TINE_NOTARY_PROFILE not set, so the image is signed but not notarized." >&2
     fi

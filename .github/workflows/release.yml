@@ -85,7 +85,7 @@ jobs:
               throw "the packaged build could not start: exit $($run.ExitCode)"
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
@@ -94,6 +94,12 @@ jobs:
 
   macos:
     name: macOS package
+    # Whether there is a certificate to sign with. Carried into an env var
+    # because the secrets context cannot be read from a step's `if`, only from
+    # `env` and `with` - and a workflow that tries is rejected outright, with
+    # no jobs and no log to say why.
+    env:
+      SIGNING: ${{ secrets.MACOS_CERT_P12 != '' }}
     # Apple Silicon only, which is a deliberate decision: Apple stopped
     # selling Intel Macs in 2023 and macOS 26 is their last release. An Intel
     # package would be this same job on an Intel runner, added if anyone asks.
@@ -111,10 +117,70 @@ jobs:
           chmod +x setup-mac.sh
           ./setup-mac.sh
 
+      # Signing and notarization, when the secrets for them exist.
+      #
+      # Without them the build still works and produces an ad-hoc signed
+      # bundle - which opens on the machine that built it, and on anyone
+      # else's Mac produces a warning that has to be clicked past in System
+      # Settings, or worse, claims the app is damaged. That is the state this
+      # is here to end, and it costs an Apple developer membership.
+      #
+      # Nothing needs editing here when that arrives: add the secrets and the
+      # next release is signed.
+      - name: Set up signing
+        if: env.SIGNING == 'true'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          # A keychain of its own, made for this job. The runner is destroyed
+          # afterwards, but a certificate that came out of a secret still does
+          # not belong in the login keychain, and a separate one means the
+          # partition list can be set without touching anything else.
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          echo "$CERT_P12" | base64 --decode >"$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Without this, codesign stops to ask for permission to use the key,
+          # and a runner has nobody to ask: the job hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$keychain_password" "$keychain" >/dev/null
+
+          # Put it in the search list so codesign and notarytool find it.
+          security list-keychain -d user -s "$keychain" login.keychain-db
+
+          # notarytool credentials, stored in the same keychain. Done with an
+          # App Store Connect key rather than an Apple ID and app-specific
+          # password: no second factor, and it can be revoked on its own.
+          echo "$API_KEY_P8" | base64 --decode >"$RUNNER_TEMP/api.p8"
+          xcrun notarytool store-credentials tineplayer \
+            --key "$RUNNER_TEMP/api.p8" \
+            --key-id "$API_KEY_ID" \
+            --issuer "$API_ISSUER_ID" \
+            --keychain "$keychain"
+          rm -f "$RUNNER_TEMP/api.p8"
+
       # Builds the bundle, fills it with libraries and licenses, takes the
       # LGPL FFmpeg from GStreamer's own macOS build, and makes the disk
-      # image. Signing stays ad-hoc unless TINE_SIGN_IDENTITY is set.
+      # image. Signing stays ad-hoc unless TINE_SIGN_IDENTITY is set, so these
+      # are empty and harmless until the secrets exist.
       - name: Package
+        env:
+          TINE_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          TINE_NOTARY_PROFILE: ${{ secrets.MACOS_CERT_P12 != '' && 'tineplayer' || '' }}
+          TINE_NOTARY_KEYCHAIN: ${{ runner.temp }}/signing.keychain-db
         run: |
           chmod +x packaging/macos/*.sh
           ./packaging/macos/package.sh
@@ -123,7 +189,7 @@ jobs:
         run: |
           dist/macos/TinePlayer.app/Contents/MacOS/TinePlayer --version
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: dist/macos/*.dmg
@@ -173,7 +239,7 @@ jobs:
             tineplayer --version
           '
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: dist/linux/*.deb
@@ -186,24 +252,62 @@ jobs:
     # makes a rehearsal possible without leaving a release behind.
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/download-artifact@v4
+      # No checkout: this job publishes what the other three built and reads
+      # nothing from the repository.
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      # Taken from Cargo.toml rather than from the tag, because it is what the
-      # packaging scripts name the files after. A tag that disagrees with
-      # Cargo.toml would otherwise produce notes pointing at downloads that do
-      # not exist, which is exactly the case a test tag creates.
-      - name: Work out the version the files are named for
-        id: version
+      # Read off the artifacts rather than spelled out below, so the notes
+      # cannot name a download that does not exist. Writing the names by hand
+      # and substituting a version number looks like it works and does not:
+      # the first test release said TinePlayer-0.6.0-setup.exe for a file
+      # called TinePlayer-0.6.0-windows-x64-setup.exe, and TinePlayer-0.6.0.dmg
+      # for TinePlayer-0.6.0-macos.dmg. Both would have sent people hunting.
+      #
+      # Deliberately not tolerant of surprises: if a package is missing or a
+      # naming convention changes, this fails here rather than producing
+      # confident and wrong instructions.
+      - name: Name the downloads
+        id: files
         run: |
-          echo "number=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)" \
-            >>"$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          # Returns rather than exits, and is called from an assignment: an
+          # exit inside a command substitution only ends the subshell, so
+          # `echo "x=$(only ...)"` would carry on and write an empty value.
+          # An assignment carries the failure, and set -e stops the step.
+          only() {
+            local found
+            found="$(ls $1 2>/dev/null || true)"
+            if [ -z "$found" ]; then
+              echo "No file matching $1" >&2
+              return 1
+            fi
+            if [ "$(echo "$found" | wc -l)" -ne 1 ]; then
+              echo "Expected one file matching $1, found:" >&2
+              echo "$found" >&2
+              return 1
+            fi
+            basename "$found"
+          }
+
+          setup="$(only 'artifacts/windows/*setup.exe')"
+          zip="$(only 'artifacts/windows/*.zip')"
+          dmg="$(only 'artifacts/macos/*.dmg')"
+          amd64="$(only 'artifacts/linux-amd64/*.deb')"
+          arm64="$(only 'artifacts/linux-arm64/*.deb')"
+
+          {
+            echo "setup=$setup"
+            echo "zip=$zip"
+            echo "dmg=$dmg"
+            echo "amd64=$amd64"
+            echo "arm64=$arm64"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/windows/*
@@ -226,57 +330,37 @@ jobs:
           body: |
             ## What's new
 
-            <!-- A sentence or two on what this release was about, so the
-                 bullets have something to hang off. Say plainly if it is a
-                 grab bag; pretending to a theme reads worse than not having
-                 one. Then bullets, grouped by what a person would notice
-                 rather than by what was edited. -->
-
-            -
-            -
-
-            <!-- OPTIONAL. Only things that actually break: a setting that
-                 moved, a file that has to be re-created, a platform that has
-                 stopped working. Delete the heading if empty. -->
+            New release!
 
             ## If you are upgrading
 
-            -
+            - What to do.
 
             ## Which files to download
 
             | Platform | Download | Notes |
             | --- | --- | --- |
-            | Windows | `TinePlayer-${{ steps.version.outputs.number }}-setup.exe` | The usual way, with a Start menu entry |
-            | | `TinePlayer-${{ steps.version.outputs.number }}-windows-x64.zip` | No installation, runs from wherever you unpack it |
-            | Mac | `TinePlayer-${{ steps.version.outputs.number }}.dmg` | Any M1 or newer Mac |
-            | Linux | `tineplayer_${{ steps.version.outputs.number }}_amd64.deb` | Most desktops and laptops, Intel or AMD |
-            | | `tineplayer_${{ steps.version.outputs.number }}_arm64.deb` | Raspberry Pi 4 or 5, and other ARM single-board computers |
+            | Windows | `${{ steps.files.outputs.setup }}` | The usual install, with a Start menu entry |
+            | | `${{ steps.files.outputs.zip }}` | No installation, runs from wherever you unpack it |
+            | Mac | `${{ steps.files.outputs.dmg }}` | Any M1 or newer Mac |
+            | Linux | `${{ steps.files.outputs.amd64 }}` | Most desktops and laptops, Intel or AMD |
+            | | `${{ steps.files.outputs.arm64 }}` | Raspberry Pi 4 or 5, and other ARM single-board computers |
 
             ## Installing
 
             ### Windows
 
-            Download and run the installer, or download and extract the .zip
-            file.
+            Download and run the installer, or download and extract the .zip file.
 
-            Windows may warn you that it does not recognize the publisher,
-            because the download is not signed with a certificate. Click
-            **More info**, then **Run anyway**.
+            Windows may warn you that it does not recognize the publisher, because the download is not signed with a certificate. Click **More info**, then **Run anyway**.
 
             ### Mac
 
-            Download and open the .dmg file and drag TinePlayer.app into your
-            Applications folder.
+            Download and open the .dmg file and drag TinePlayer.app into your Applications folder.
 
-            macOS may refuse to open it the first time, because the app is not
-            signed with an Apple developer certificate. Open **System
-            Settings**, go to **Privacy & Security**, scroll to the bottom,
-            and click **Open Anyway** next to the message about TinePlayer.
-            You only have to do this once.
+            macOS may refuse to open it the first time, because the app is not signed with an Apple developer certificate. Open **System Settings**, go to **Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to the message about TinePlayer. You only have to do this once.
 
-            If instead it tells you the app is damaged, macOS has quarantined
-            it. Clear that with:
+            If instead it tells you the app is damaged, macOS has quarantined it. Clear that with:
 
             ```sh
             xattr -dr com.apple.quarantine /Applications/TinePlayer.app
@@ -284,20 +368,15 @@ jobs:
 
             ### Linux
 
-            Download the .deb file for your architecture and install it with
-            apt:
+            Download the .deb file for your architecture and install it with apt:
 
             ```sh
-            sudo apt install ./tineplayer_${{ steps.version.outputs.number }}_arm64.deb
+            sudo apt install ./${{ steps.files.outputs.arm64 }}
             ```
 
-            The leading `./` matters: without it apt looks for a package by
-            that name in its own sources and reports that it cannot find one.
-            Using apt rather than `dpkg -i` is what pulls in the GTK and
-            GStreamer pieces TinePlayer needs.
+            The leading `./` matters: without it apt looks for a package by that name in its own sources and reports that it cannot find one. Using apt rather than `dpkg -i` is what pulls in the GTK and GStreamer pieces TinePlayer needs.
 
-            Then run `tineplayer`, or find TinePlayer in your applications
-            menu.
+            Then run `tineplayer`, or find TinePlayer in your applications menu.
 
             If unsure which package to download, run:
 
@@ -305,20 +384,10 @@ jobs:
             dpkg --print-architecture
             ```
 
-            <!-- OPTIONAL, but be honest here. Someone who hits a known
-                 problem and finds it listed is annoyed; someone who hits one
-                 that is not listed wonders what else is wrong. Delete the
-                 heading if empty. -->
-
             ## Known issues
 
-            -
+            - :(
 
             ## Feedback
 
-            [Issues](https://github.com/scottarius/TinePlayer/issues) for
-            bugs, [Discussions](https://github.com/scottarius/TinePlayer/discussions)
-            for everything else. I especially want to hear from you if you use
-            a screen reader or rely on audio description: support for both is
-            thin, and I would rather fix it against what people actually need
-            than guess.
+            [Issues](https://github.com/scottarius/TinePlayer/issues) for bugs, [Discussions](https://github.com/scottarius/TinePlayer/discussions) for everything else. I especially want to hear from you if you use a screen reader or rely on audio description: support for both is thin, and I would rather fix it against what people actually need than guess.
