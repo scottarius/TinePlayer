@@ -21,6 +21,14 @@ case "${1:-}" in
     ;;
 esac
 
+# Built here rather than assumed, matching what package.ps1 does on Windows.
+# Set TINE_SKIP_BUILD=1 to package whatever is already in target/release.
+if [[ "${TINE_SKIP_BUILD:-}" != "1" ]]; then
+    echo "=== Building ==="
+    cargo build --release
+fi
+
+echo
 echo "=== Building the bundle ==="
 "$here/bundle.sh"
 
