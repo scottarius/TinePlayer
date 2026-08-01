@@ -148,13 +148,30 @@ if (-not (Test-Path $GStreamer)) {
 $gstBin = Join-Path $GStreamer 'bin'
 
 # --- dumpbin, for walking imports --------------------------------------
-$dumpbin = Get-ChildItem -Path "${env:ProgramFiles}\Microsoft Visual Studio\2022" `
-    -Filter 'dumpbin.exe' -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -like '*Hostx64\x64*' } |
-    Select-Object -First 1 -ExpandProperty FullName
+# Found through vswhere rather than by guessing a path: the edition, the year
+# and the install location all differ between a developer's machine and a
+# build runner, and only vswhere knows which is there.
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$dumpbin = $null
+if (Test-Path $vswhere) {
+    $vsRoot = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath 2>$null | Select-Object -First 1
+    if ($vsRoot) {
+        $dumpbin = Get-ChildItem -Path "$vsRoot\VC\Tools\MSVC" -Filter 'dumpbin.exe' `
+            -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like '*Hostx64\x64*' } |
+        Select-Object -First 1 -ExpandProperty FullName
+    }
+}
+if (-not $dumpbin) {
+    # Already on PATH inside a Developer Command Prompt.
+    $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue).Source
+}
 if (-not $dumpbin) {
     throw 'dumpbin.exe not found. It comes with the Visual Studio C++ build tools, which setup-windows.ps1 installs.'
 }
+Write-Host "  dumpbin from $(Split-Path (Split-Path $dumpbin -Parent) -Parent)" -ForegroundColor DarkGray
 
 # --- Build --------------------------------------------------------------
 if (-not $SkipBuild) {
