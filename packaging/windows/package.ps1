@@ -25,7 +25,7 @@
     location of the MSVC 64-bit build.
 
 .PARAMETER Output
-    Where to build the package. Defaults to dist/ at the top of the tree.
+    Where to build the package. Defaults to dist/windows at the top of the tree.
 
 .PARAMETER SkipBuild
     Package whatever is already in target/release rather than building first.
@@ -40,7 +40,9 @@ param(
 $ErrorActionPreference = 'Stop'
 # packaging/windows/package.ps1, so the top of the tree is three levels up.
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
-if (-not $Output) { $Output = Join-Path $root 'dist' }
+# Per platform, so three machines can drop their artifacts into one tree
+# without colliding, and so a second architecture later has somewhere to go.
+if (-not $Output) { $Output = Join-Path $root 'dist\windows' }
 
 # --- What the player needs ---------------------------------------------
 #
@@ -302,7 +304,7 @@ if (-not $iscc) {
 if ($iscc) {
     Write-Host 'Installer...' -ForegroundColor Cyan
     $iss = Join-Path $PSScriptRoot 'tineplayer.iss'
-    & $iscc /Q "/DAppVersion=$version" "/DStageDir=$stage" "/DOutputDir=$Output" $iss
+    & $iscc /Q "/DAppVersion=$version" "/DStageDir=$stage" "/DOutputDir=$Output" "/DRootDir=$root" $iss
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed.' }
     $setup = Join-Path $Output "TinePlayer-$version-windows-x64-setup.exe"
 } else {

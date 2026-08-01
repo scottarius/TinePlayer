@@ -309,7 +309,59 @@ fn dirs_cache() -> Option<std::path::PathBuf> {
     Some(cache)
 }
 
-#[cfg(not(target_os = "windows"))]
+/// The same for a macOS bundle, where the parts live under Contents.
+#[cfg(target_os = "macos")]
+fn use_bundled_resources() {
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    // .../TinePlayer.app/Contents/MacOS/TinePlayer
+    let Some(contents) = executable.parent().and_then(|macos| macos.parent()) else {
+        return;
+    };
+    if contents.file_name().is_none_or(|name| name != "Contents") {
+        return;
+    }
+
+    let resources = contents.join("Resources");
+    let plugins = resources.join("gstreamer-1.0");
+    if !plugins.is_dir() {
+        return;
+    }
+
+    // SAFETY: as above - before any thread exists, and before GStreamer or
+    // GTK read any of these.
+    unsafe {
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &plugins);
+        std::env::set_var("GST_PLUGIN_PATH_1_0", &plugins);
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &plugins);
+        std::env::set_var("GST_PLUGIN_PATH", &plugins);
+
+        let scanner = resources.join("libexec/gst-plugin-scanner");
+        if scanner.is_file() {
+            std::env::set_var("GST_PLUGIN_SCANNER", scanner);
+        }
+        let gio = resources.join("gio-modules");
+        if gio.is_dir() {
+            std::env::set_var("GIO_MODULE_DIR", gio);
+        }
+        // Its own registry, for the same reason as on Windows: one built from
+        // another GStreamer names plugins this bundle does not have.
+        if let Some(home) = std::env::var_os("HOME") {
+            let cache = std::path::PathBuf::from(home).join("Library/Caches/tineplayer");
+            if std::fs::create_dir_all(&cache).is_ok() {
+                std::env::set_var("GST_REGISTRY", cache.join("registry.bin"));
+            }
+        }
+        std::env::set_var(
+            "GSETTINGS_SCHEMA_DIR",
+            resources.join("share/glib-2.0/schemas"),
+        );
+        std::env::set_var("XDG_DATA_DIRS", resources.join("share"));
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn use_bundled_resources() {}
 
 /// Switches on GTK's accessibility backend, which Windows otherwise leaves

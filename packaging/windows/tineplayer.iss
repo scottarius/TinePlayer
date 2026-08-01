@@ -22,7 +22,12 @@
   #define StageDir "..\dist\TinePlayer-0.0.0-windows-x64"
 #endif
 #ifndef OutputDir
-  #define OutputDir "..\dist"
+  #define OutputDir "..\..\dist\windows"
+#endif
+; The top of the source tree, passed in rather than worked out by counting
+; ".." from the staging folder - which broke the moment that folder moved.
+#ifndef RootDir
+  #define RootDir "..\.."
 #endif
 
 [Setup]
@@ -48,7 +53,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 LicenseFile={#StageDir}\licenses\TinePlayer-MIT.txt
 OutputDir={#OutputDir}
 OutputBaseFilename={#AppName}-{#AppVersion}-windows-x64-setup
-SetupIconFile={#StageDir}\..\..\data\tineplayer.ico
+SetupIconFile={#RootDir}\data\branding\tineplayer.ico
 UninstallDisplayIcon={app}\TinePlayer.exe
 UninstallDisplayName={#AppName} {#AppVersion}
 
