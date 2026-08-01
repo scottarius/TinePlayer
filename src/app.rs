@@ -129,6 +129,7 @@ enum Screen {
     /// The screens of the Kodi wizard. None of them writes anything: only
     /// Configure on the summary does.
     KodiChoose,
+    KodiFolder,
     KodiHow,
     KodiManual,
     KodiSummary,
@@ -726,6 +727,7 @@ impl App {
             // is the same as pressing Cancel, which is what Escape should
             // mean on a screen whose other button says Cancel.
             Screen::KodiChoose | Screen::KodiConfirm | Screen::KodiDone => self.show_kodi(),
+            Screen::KodiFolder => self.show_kodi_choose(),
             Screen::KodiHow => self.show_kodi_choose(),
             Screen::KodiManual | Screen::KodiSummary => self.show_kodi_how(),
             Screen::KodiError => self.show_kodi_summary(),
@@ -1947,6 +1949,10 @@ impl App {
             .position(|(_, choice)| *choice == current)
             .unwrap_or(0) as i32;
         if let Some(row) = list.row_at_index(opening) {
+            // The setting in force, marked as such: scrolling a long list -
+            // the languages especially - otherwise loses track of which one
+            // is actually set the moment the cursor moves off it.
+            row.add_css_class("tp-current");
             list.select_row(Some(&row));
             settle_on(&row);
         }
@@ -2908,12 +2914,14 @@ impl App {
         // Guards against a relative folder reaching here from anywhere at
         // all, including a `last_folder` saved before this was fixed.
         let directory = &crate::browser::rooted(directory);
-        let (crumbs, crumb_buttons) = self.breadcrumbs(directory);
+        let (crumbs, crumb_buttons) = self.breadcrumbs(directory, false);
 
         let (page, list, _back, slot) = list_page_with(&crumbs, false);
         // The arrow's slot holds a fixed width for every screen to line up
         // against. With no arrow in it, that is just a gap before the trail.
         slot.set_visible(false);
+        self.add_places_column(&page, directory, false, &crumb_buttons);
+        self.follow_focus(&list);
 
         // Along the foot with the way out, rather than tucked into the header:
         // both are things done with the browser rather than places inside it.
@@ -2953,7 +2961,7 @@ impl App {
         // steps up a level.
         let mut rows: Vec<(String, &str, Option<std::path::PathBuf>)> = Vec::new();
         let parent = directory.parent().map(|p| p.to_path_buf());
-        if parent.is_some() || !crate::browser::roots().is_empty() {
+        if parent.is_some() {
             // Two dots rather than the word: it is what a file listing has
             // always called the folder above, and it needs no translating.
             rows.push(("..".to_string(), "folder-symbolic", None));
@@ -3009,12 +3017,14 @@ impl App {
                             Err(e) => app.show_source_error(&source, &e, false),
                         }
                     }
-                    // Up: to the parent, or to the drive list when there is
-                    // nothing above this.
-                    None => match here.parent() {
-                        Some(parent) => app.show_browser(parent, Some(&here)),
-                        None => app.show_roots(),
-                    },
+                    // Up. Only offered when there is somewhere above to go:
+                    // at the top of the tree the column to the left is how
+                    // you reach anywhere else.
+                    None => {
+                        if let Some(parent) = here.parent() {
+                            app.show_browser(parent, Some(&here));
+                        }
+                    }
                 }
             });
         }
@@ -3056,7 +3066,14 @@ impl App {
     ///
     /// Capped at the last few levels: a deep path would otherwise run off the
     /// side, and the leading button stands in for everything trimmed away.
-    fn breadcrumbs(self: &Rc<Self>, directory: &std::path::Path) -> (gtk::Box, Vec<gtk::Button>) {
+    /// `folders` decides which browser a crumb reopens. Without it, stepping
+    /// up the trail from the folder browser lands in the video browser, which
+    /// is the same shape of screen doing an entirely different job.
+    fn breadcrumbs(
+        self: &Rc<Self>,
+        directory: &std::path::Path,
+        folders: bool,
+    ) -> (gtk::Box, Vec<gtk::Button>) {
         use std::path::{Component, PathBuf};
 
         // Each level paired with the path that reaches it.
@@ -3125,6 +3142,10 @@ impl App {
                 let here = directory.to_path_buf();
                 button.connect_clicked(move |_| {
                     app.sounds.borrow().click();
+                    if folders {
+                        app.show_kodi_folder(&target);
+                        return;
+                    }
                     // Selecting the folder you are already in should settle
                     // focus back on the listing rather than rebuild nothing.
                     let select = (target != here).then(|| here.clone());
@@ -3136,42 +3157,6 @@ impl App {
         }
 
         (row, buttons)
-    }
-
-    /// The drive list, which only Windows has anything above the root to
-    /// show.
-    fn show_roots(self: &Rc<Self>) {
-        let roots = crate::browser::roots();
-        if roots.is_empty() {
-            return;
-        }
-        let (page, list, back, _header) = list_page("Drives", true);
-        for entry in &roots {
-            append_named(&list, &chooser_row(&entry.label), &entry.label);
-        }
-
-        {
-            let app = self.clone();
-            let paths: Vec<std::path::PathBuf> = roots.iter().map(|e| e.path.clone()).collect();
-            list.connect_row_activated(move |_, row| {
-                app.sounds.borrow().click();
-                if let Some(path) = paths.get(row.index() as usize) {
-                    app.show_browser(path, None);
-                }
-            });
-        }
-        {
-            let app = self.clone();
-            back.connect_clicked(move |_| app.show_menu());
-        }
-
-        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
-        *self.screen.borrow_mut() = Screen::Browser;
-        self.window.set_child(Some(&page));
-        if let Some(row) = list.row_at_index(0) {
-            list.select_row(Some(&row));
-            settle_on(&row);
-        }
     }
 
     /// Always the built-in browser.
@@ -3864,7 +3849,10 @@ impl App {
                 app.sounds.borrow().click();
                 let index = row.index() as usize;
                 if index == browse_row {
-                    app.browse_for_kodi();
+                    // Home, every time. Kodi's userdata lives under it on
+                    // every platform, and where the video browser was last
+                    // says nothing about where Kodi keeps its settings.
+                    app.show_kodi_folder(&crate::browser::home());
                 } else if let Some(userdata) = paths.get(index) {
                     app.with_draft(|draft| draft.userdata = Some(userdata.clone()));
                     app.show_kodi_how();
@@ -3885,10 +3873,298 @@ impl App {
         Self::open_on_first_usable(&list, &back);
     }
 
-    /// A folder chosen by hand, for a Kodi installed somewhere TinePlayer does
-    /// not know to look. Choosing one is the same answer as picking a row, so
-    /// it moves on by itself.
-    fn browse_for_kodi(self: &Rc<Self>) {
+    /// The places column that sits to the left of a browser's listing.
+    ///
+    /// Home, the drives or filesystem, and whatever is mounted - all at once
+    /// rather than on a separate screen reached by stepping off the top of
+    /// the tree. Moving between the two lists is left and right, which the
+    /// keyboard and the gamepad both do by ordinary directional focus.
+    ///
+    /// `folders` says which browser a drive reopens, the same way the
+    /// breadcrumbs do.
+    fn places_column(
+        self: &Rc<Self>,
+        current: &std::path::Path,
+        folders: bool,
+    ) -> Option<(gtk::ScrolledWindow, gtk::ListBox)> {
+        let roots = crate::browser::places();
+        if roots.is_empty() {
+            return None;
+        }
+
+        let list = gtk::ListBox::new();
+        list.add_css_class("tp-menu");
+        list.set_selection_mode(gtk::SelectionMode::Browse);
+        list.set_activate_on_single_click(true);
+
+        // Which place the listing is inside, so the column says where you are
+        // as well as where you could go. The longest match wins: a volume
+        // under /mnt is a better answer than the filesystem root that also
+        // contains it.
+        let here = crate::browser::rooted(current);
+        let mut selected: Option<(i32, usize)> = None;
+        for (index, entry) in roots.iter().enumerate() {
+            append_named(&list, &chooser_row(&entry.label), &entry.label);
+            if here.starts_with(&entry.path) {
+                let depth = entry.path.components().count();
+                if selected.is_none_or(|(_, best)| depth > best) {
+                    selected = Some((index as i32, depth));
+                }
+            }
+        }
+        let selected = selected.map(|(index, _)| index);
+        if let Some(row) = selected.and_then(|index| list.row_at_index(index)) {
+            // Marked as the one in force, and the cursor starts there - but
+            // the two part company as soon as the viewer moves, which is the
+            // whole point of marking it separately.
+            row.add_css_class("tp-current");
+            list.select_row(Some(&row));
+        }
+
+        {
+            let app = self.clone();
+            let paths: Vec<std::path::PathBuf> = roots.iter().map(|e| e.path.clone()).collect();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                if let Some(path) = paths.get(row.index() as usize) {
+                    if folders {
+                        app.show_kodi_folder(path);
+                    } else {
+                        app.show_browser(path, None);
+                    }
+                }
+            });
+        }
+        self.follow_focus(&list);
+
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .width_request((220.0 * self.scale.get()).round() as i32)
+            .child(&list)
+            .build();
+        Some((scroller, list))
+    }
+
+    /// Makes a list the one the gamepad drives whenever it holds the focus.
+    ///
+    /// The navigation machinery knows about a single list at a time, which is
+    /// all any other screen needs. With two side by side, which one is "the"
+    /// list has to follow the focus, or the gamepad keeps driving whichever
+    /// was wired last however far the viewer has moved away from it.
+    fn follow_focus(self: &Rc<Self>, list: &gtk::ListBox) {
+        let app = self.clone();
+        let controller = gtk::EventControllerFocus::new();
+        {
+            let list = list.clone();
+            controller.connect_enter(move |_| {
+                *app.nav_list.borrow_mut() = Some(list.clone());
+            });
+        }
+        list.add_controller(controller);
+    }
+
+    /// Puts a browser's listing beside its drive column.
+    ///
+    /// `list_page_with` has already put the listing in the page; this takes
+    /// it back out and rebuilds that row with the drives to its left.
+    fn add_places_column(
+        self: &Rc<Self>,
+        page: &gtk::Box,
+        current: &std::path::Path,
+        folders: bool,
+        header: &[gtk::Button],
+    ) {
+        let Some(listing) = page.last_child() else {
+            return;
+        };
+        let Some((places, list)) = self.places_column(current, folders) else {
+            return;
+        };
+        page.remove(&listing);
+
+        // The column takes the width it asked for and the listing takes the
+        // rest. Without this the listing is given its minimum, which for a
+        // list of names is very little, and the folders end up in a ribbon
+        // down one side of the screen.
+        places.set_hexpand(false);
+        listing.set_hexpand(true);
+
+        // Up from the top of the column reaches the trail above it, the same
+        // way it does from the listing.
+        {
+            let app = self.clone();
+            let header: Vec<glib::WeakRef<gtk::Button>> =
+                header.iter().map(|button| button.downgrade()).collect();
+            let controller = gtk::EventControllerKey::new();
+            // Weak, since the controller is added to the very list it watches
+            // and holding a strong reference would keep the pair alive.
+            let watched = list.downgrade();
+            controller.connect_key_pressed(move |_, key, _, _| {
+                let Some(list) = watched.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                if key != gdk::Key::Up || list.selected_row().map(|row| row.index()) != Some(0) {
+                    return glib::Propagation::Proceed;
+                }
+                let buttons: Vec<gtk::Button> = header
+                    .iter()
+                    .filter_map(|button| button.upgrade())
+                    .collect();
+                if let Some(button) = App::last_header(&buttons) {
+                    app.sounds.borrow().click();
+                    button.grab_focus();
+                }
+                glib::Propagation::Stop
+            });
+            list.add_controller(controller);
+        }
+
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .vexpand(true)
+            .build();
+        row.append(&places);
+        row.append(&listing);
+        page.append(&row);
+    }
+
+    /// Browsing for Kodi's userdata folder, in TinePlayer's own browser.
+    ///
+    /// The system's folder chooser would do the job, but not from a sofa: it
+    /// is a desktop dialog that a gamepad cannot drive and that draws itself
+    /// at desktop sizes on a television. This is the same browser used for
+    /// finding a video, showing only folders, with choosing the current one
+    /// on a button beside the way out.
+    ///
+    /// Deliberately a sibling of `show_browser` rather than a mode of it.
+    /// That one carries a paste row, video entries, a remembered location and
+    /// an origin to return to, none of which belong here, and threading a
+    /// purpose through all of it would put the video browser at risk for the
+    /// sake of a screen that shares only its shape.
+    fn show_kodi_folder(self: &Rc<Self>, directory: &std::path::Path) {
+        let directory = crate::browser::rooted(directory);
+        let (crumbs, crumb_buttons) = self.breadcrumbs(&directory, true);
+        let (page, list, _back, slot) = list_page_with(&crumbs, false);
+        // With no arrow in it, the slot is just a gap before the trail.
+        slot.set_visible(false);
+        self.add_places_column(&page, &directory, true, &crumb_buttons);
+        self.follow_focus(&list);
+
+        // Folders only. A userdata folder is a folder, and listing the files
+        // inside it would be a list of things that cannot be chosen.
+        let folders: Vec<crate::browser::Entry> = crate::browser::read(&directory)
+            .into_iter()
+            .filter(|entry| entry.is_dir)
+            .collect();
+
+        // The system chooser as well, as the video browser offers: a pointer
+        // and a keyboard can go faster through a dialog they already know.
+        // Not focusable, and a folder chooser rather than a file one.
+        let browse_face = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .build();
+        let browse_icon = gtk::Image::from_icon_name("folder-symbolic");
+        browse_icon.set_pixel_size((24.0 * self.scale.get()).round() as i32);
+        browse_face.append(&browse_icon);
+        browse_face.append(&gtk::Label::new(Some("Open System Browser")));
+        let browse = gtk::Button::builder().child(&browse_face).build();
+        browse.add_css_class("tp-button");
+        browse.add_css_class("tp-secondary");
+        browse.set_can_focus(false);
+        browse.set_valign(gtk::Align::Start);
+        {
+            let app = self.clone();
+            browse.connect_clicked(move |_| app.choose_kodi_folder_natively());
+        }
+
+        let choose = gtk::Button::with_label("Choose");
+        choose.add_css_class("tp-button");
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.add_css_class("tp-cancel");
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        buttons.append(&cancel);
+        buttons.append(&choose);
+        let footer = gtk::CenterBox::new();
+        footer.set_start_widget(Some(&browse));
+        footer.set_center_widget(Some(&buttons));
+        page.append(&footer);
+
+        // Only when there is somewhere above to go. At the root of a drive
+        // the way to another one is the column to the left, not a row that
+        // leads out of the listing entirely.
+        let up = directory.parent().is_some();
+        if up {
+            append_named(
+                &list,
+                &browser_row("folder-symbolic", ".."),
+                "Up one folder",
+            );
+        }
+        for entry in &folders {
+            append_named(
+                &list,
+                &browser_row("folder-symbolic", &entry.label),
+                &entry.label,
+            );
+        }
+
+        {
+            let app = self.clone();
+            let directory = directory.clone();
+            let paths: Vec<std::path::PathBuf> =
+                folders.iter().map(|entry| entry.path.clone()).collect();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                let index = row.index() as usize;
+                if up && index == 0 {
+                    if let Some(parent) = directory.parent() {
+                        app.show_kodi_folder(parent);
+                    }
+                    return;
+                }
+                let offset = if up { 1 } else { 0 };
+                if let Some(path) = paths.get(index - offset) {
+                    app.show_kodi_folder(path);
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            let directory = directory.clone();
+            choose.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                let userdata = crate::kodi_setup::userdata_from(directory.clone());
+                app.with_draft(|draft| draft.userdata = Some(userdata));
+                app.show_kodi_how();
+            });
+        }
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_kodi_choose();
+            });
+        }
+
+        self.wire_navigation(&list, &crumb_buttons, &[choose.clone(), cancel.clone()]);
+        *self.screen.borrow_mut() = Screen::KodiFolder;
+        self.window.set_child(Some(&self.modal(&page)));
+        if let Some(row) = list.row_at_index(0) {
+            list.select_row(Some(&row));
+            settle_on(&row);
+        }
+    }
+
+    /// The system's own folder chooser, for anyone who would rather use it.
+    fn choose_kodi_folder_natively(self: &Rc<Self>) {
         let chooser = gtk::FileChooserNative::new(
             Some("Choose Kodi's userdata folder"),
             Some(&self.window),
@@ -5553,38 +5829,50 @@ fn style_css(scale: f64, dark: bool) -> String {
         /* Gray rather than a theme color, so it lifts off the background in
            both light and dark without needing two rules. */
         .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
-        .tp-menu > row:selected:hover {{ background-color: {highlight}; }}
+        .tp-menu:focus-within > row:selected:hover {{ background-color: {highlight}; }}
         .tp-menu > row.tp-section-start {{ margin-top: {section}px; }}
+        /* Which row is in force, as opposed to which row the cursor is on.
+           Two different facts that a list has only one highlight for, and
+           conflating them is actively misleading in the places column: moving
+           the cursor there would appear to change the folder being shown.
+
+           A bar down the leading edge rather than a fill, so it reads as
+           'you are here' beside the focus rather than competing with it.
+           Drawn with an inset shadow rather than a border so that marking a
+           row does not shift its text. */
+        .tp-menu > row.tp-current {{
+            box-shadow: inset {mark}px 0 0 0 {highlight};
+        }}
         /* Belongs to the row above it: indented so the group reads as one
            thing without every label having to name the output again. */
         .tp-menu > row.tp-subrow {{ margin-left: {subrow}px; }}
-        /* The selected row keeps the same colors whether or not the list
-           holds focus, and is simply dimmed when it doesn't. Fading the
-           whole row rather than clearing its background keeps the position
-           visible while the Play button or another window is active, and
-           dims text and background together so the contrast between them
-           survives. */
-        .tp-menu > row:selected {{
+        /* A selection is only shown while the list it belongs to holds the
+           focus. A list keeps its selected row either way, so that returning
+           to it lands where you left - but showing that on a list you are
+           not on reads as a second cursor, and with two lists side by side
+           it is genuinely unclear which one an arrow key would move.
+
+           The cost is that stepping down to the buttons leaves the list with
+           nothing marked. That is the right trade: the buttons show their own
+           focus, so there is still exactly one thing highlighted on screen. */
+        .tp-menu:focus-within > row:selected {{
             background-image: none;
             background-color: {highlight};
             color: #ffffff;
-            opacity: 0.45;
         }}
-        .tp-menu > row:selected .tp-value,
-        .tp-menu > row:selected .tp-chevron {{
+        .tp-menu:focus-within > row:selected .tp-value,
+        .tp-menu:focus-within > row:selected .tp-chevron {{
             color: #ffffff;
             opacity: 0.85;
         }}
-        .tp-menu:focus-within > row:selected {{ opacity: 1; }}
-        /* background-image has to be cleared too: themes draw button
-           backgrounds with a gradient image, which covers any
-           background-color set underneath it. The label is colored
-           separately because themes set button text color directly. */
+        /* A ring rather than a fill. Recoloring a focused button changes what
+           it looks like it does - a Cancel that turns blue reads as the one
+           to press - and beside another button the pair stop looking like
+           peers. An inset shadow rather than a border so nothing shifts, and
+           rather than an outline so it follows the rounded corners. */
         button:focus {{
-            background-image: none;
-            background-color: {highlight};
+            box-shadow: inset 0 0 0 {mark}px {highlight};
         }}
-        button:focus label {{ color: #ffffff; }}
         /* Chrome-less until pointed at, but the arrow itself stays visible
            so the way back is always apparent. */
         /* One fixed footprint for whatever leads the header, the back arrow
@@ -5773,6 +6061,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         slider = px(26.0),
         section = px(28.0),
         subrow = px(28.0),
+        mark = px(4.0),
         icon = px(24.0),
         icon_main = px(38.4),
         crumb_pad = px(6.0),

@@ -86,26 +86,91 @@ pub fn read(directory: &Path) -> Vec<Entry> {
 /// On Windows that is the drives, since there is nothing above `C:\`. On
 /// Unix everything hangs off one root, so going up eventually stops there
 /// and this is never needed.
-#[cfg(target_os = "windows")]
-pub fn roots() -> Vec<Entry> {
-    ('A'..='Z')
-        .map(|letter| PathBuf::from(format!("{letter}:\\")))
-        .filter(|path| path.exists())
-        .map(|path| Entry {
-            label: path.to_string_lossy().to_string(),
-            path,
-            is_dir: true,
-        })
-        .collect()
+/// The user's own folder, which is where anything they are looking for almost
+/// certainly lives.
+pub fn home() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .unwrap_or_else(|| rooted(Path::new(".")))
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn roots() -> Vec<Entry> {
-    Vec::new()
+/// The places worth reaching in one press, for the column beside a browser's
+/// listing.
+///
+/// Not drives: a drive letter is what this means on Windows and nothing at
+/// all anywhere else, where the equivalent question is "where are my things
+/// and what is plugged in". Home comes first on every platform because it is
+/// where almost everything anyone browses for actually lives.
+///
+/// Everything is checked for existence, so a machine with nothing mounted
+/// gets a short list rather than a list of places that are not there.
+pub fn places() -> Vec<Entry> {
+    let mut places = Vec::new();
+    let mut add = |path: PathBuf, label: String| {
+        if path.is_dir() && !places.iter().any(|e: &Entry| e.path == path) {
+            places.push(Entry {
+                path,
+                label,
+                is_dir: true,
+            });
+        }
+    };
+
+    add(home(), "Home".to_string());
+
+    #[cfg(target_os = "windows")]
+    for letter in 'A'..='Z' {
+        let path = PathBuf::from(format!("{letter}:\\"));
+        add(path.clone(), path.to_string_lossy().to_string());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        add(PathBuf::from("/"), "Filesystem".to_string());
+
+        // Where removable and network volumes get mounted. Some systems put
+        // them straight under the directory and others under one named for
+        // the user, so both depths are looked at.
+        let user = std::env::var("USER").unwrap_or_default();
+        let mut bases: Vec<PathBuf> = vec![
+            PathBuf::from("/mnt"),
+            PathBuf::from("/media"),
+            PathBuf::from("/Volumes"),
+        ];
+        if !user.is_empty() {
+            bases.push(PathBuf::from("/media").join(&user));
+            bases.push(PathBuf::from("/run/media").join(&user));
+        }
+        for base in bases {
+            let Ok(entries) = std::fs::read_dir(&base) else {
+                continue;
+            };
+            let mut found: Vec<PathBuf> = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
+            found.sort();
+            for path in found {
+                let label = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                // A mount point named for the user under /media is the
+                // container for their volumes, not a volume itself.
+                if label == user {
+                    continue;
+                }
+                add(path, label);
+            }
+        }
+    }
+
+    places
 }
 
-/// The directory to open at: where browsing last stopped, else beside the
-/// last video played, else the user's home.
 pub fn start_location(remembered: Option<&Path>, last_video: Option<&Path>) -> PathBuf {
     remembered
         .filter(|path| path.is_dir())
