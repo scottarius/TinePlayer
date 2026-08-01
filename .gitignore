@@ -2,3 +2,6 @@
 config.local.yaml
 positions.local.json
 .idea/
+
+# Packaged builds: staging folder, ZIP and installer.
+dist/

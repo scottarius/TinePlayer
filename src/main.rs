@@ -237,6 +237,81 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     Ok(())
 }
 
+/// Points GStreamer and glib at the copies shipped beside the executable.
+///
+/// A packaged build carries its own GStreamer, GTK and plugins so that it
+/// runs on a machine with none of them installed. Those libraries look for
+/// their parts where they were *built*, which on someone else's machine is a
+/// path that does not exist - or worse, one that does, belonging to a
+/// different installation.
+///
+/// Silently does nothing for a build from source, which is meant to use what
+/// the machine already has.
+#[cfg(target_os = "windows")]
+fn use_bundled_resources() {
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    let Some(root) = executable.parent() else {
+        return;
+    };
+    let plugins = root.join("lib/gstreamer-1.0");
+    if !plugins.is_dir() {
+        return;
+    }
+
+    // SAFETY: called before any thread is started, and before GStreamer or
+    // GTK read any of these. Setting an environment variable is only unsound
+    // alongside a concurrent read of it.
+    unsafe {
+        // The suffixed names *replace* the directory GStreamer was compiled
+        // to look in, rather than adding to it. Without them it also scans
+        // whatever GStreamer installation the machine has, which loads a
+        // second copy of glib into the process and undoes the point of
+        // bundling - and quietly reinstates the plugins deliberately left
+        // out of the package.
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &plugins);
+        std::env::set_var("GST_PLUGIN_PATH_1_0", &plugins);
+        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &plugins);
+        std::env::set_var("GST_PLUGIN_PATH", &plugins);
+
+        // Scanning happens in a helper process, which GStreamer looks for
+        // where it was built rather than beside itself.
+        let scanner = root.join("libexec/gst-plugin-scanner.exe");
+        if scanner.is_file() {
+            std::env::set_var("GST_PLUGIN_SCANNER", scanner);
+        }
+
+        // The registry is a cache keyed by plugin paths. One left over from
+        // another installation names plugins this package does not have.
+        if let Some(cache) = dirs_cache() {
+            std::env::set_var("GST_REGISTRY", cache.join("registry.bin"));
+        }
+
+        // glib otherwise loads these from where it was built, putting a
+        // second copy of itself in the process. They also carry TLS, so
+        // pointing at nothing would quietly break https.
+        let gio = root.join("lib/gio/modules");
+        if gio.is_dir() {
+            std::env::set_var("GIO_MODULE_DIR", gio);
+        }
+        std::env::set_var("GSETTINGS_SCHEMA_DIR", root.join("share/glib-2.0/schemas"));
+        std::env::set_var("XDG_DATA_DIRS", root.join("share"));
+    }
+}
+
+/// Somewhere writable to keep GStreamer's plugin registry, so a packaged
+/// build does not fight over the one belonging to an installed GStreamer.
+#[cfg(target_os = "windows")]
+fn dirs_cache() -> Option<std::path::PathBuf> {
+    let cache = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("tineplayer");
+    std::fs::create_dir_all(&cache).ok()?;
+    Some(cache)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn use_bundled_resources() {}
+
 /// Switches on GTK's accessibility backend, which Windows otherwise leaves
 /// off.
 ///
@@ -261,6 +336,8 @@ fn enable_accessibility() {}
 
 fn main() -> std::process::ExitCode {
     attach_parent_console();
+    // Before anything reads the environment, and before GStreamer starts.
+    use_bundled_resources();
     enable_accessibility();
 
     let args = Args::parse();
