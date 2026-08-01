@@ -4532,7 +4532,7 @@ fn list_page_with(
 /// distribution ships no gdk-pixbuf loaders at all and so cannot decode SVG
 /// at runtime. The SVG is still what Linux installs, where librsvg is present.
 fn logo_image(scale: f64) -> gtk::Image {
-    const LOGO: &[u8] = include_bytes!("../data/tineplayer.png");
+    const LOGO: &[u8] = include_bytes!("../data/ui/tineplayer.png");
 
     let image = gtk::Image::new();
     match gdk::Texture::from_bytes(&glib::Bytes::from_static(LOGO)) {
@@ -4583,7 +4583,7 @@ fn heading_label(text: &str) -> gtk::Label {
 /// the control strip draws its own dark background whatever the theme is, so
 /// there is nothing for a second version to adapt to.
 pub fn subtitles_image(scale: f64) -> gtk::Image {
-    const ICON: &[u8] = include_bytes!("../data/subtitles.png");
+    const ICON: &[u8] = include_bytes!("../data/ui/subtitles.png");
 
     let image = gtk::Image::new();
     if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
@@ -4594,10 +4594,10 @@ pub fn subtitles_image(scale: f64) -> gtk::Image {
 }
 
 pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
-    const ENTER_LIGHT: &[u8] = include_bytes!("../data/fullscreen-light.png");
-    const ENTER_DARK: &[u8] = include_bytes!("../data/fullscreen-dark.png");
-    const LEAVE_LIGHT: &[u8] = include_bytes!("../data/restore-light.png");
-    const LEAVE_DARK: &[u8] = include_bytes!("../data/restore-dark.png");
+    const ENTER_LIGHT: &[u8] = include_bytes!("../data/ui/fullscreen-light.png");
+    const ENTER_DARK: &[u8] = include_bytes!("../data/ui/fullscreen-dark.png");
+    const LEAVE_LIGHT: &[u8] = include_bytes!("../data/ui/restore-light.png");
+    const LEAVE_DARK: &[u8] = include_bytes!("../data/ui/restore-dark.png");
 
     let bytes = match (fullscreen, dark) {
         (true, true) => LEAVE_DARK,

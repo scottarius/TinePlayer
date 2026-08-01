@@ -10,9 +10,9 @@
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        println!("cargo:rerun-if-changed=data/tineplayer.ico");
+        println!("cargo:rerun-if-changed=data/branding/tineplayer.ico");
         let mut resource = winresource::WindowsResource::new();
-        resource.set_icon("data/tineplayer.ico");
+        resource.set_icon("data/branding/tineplayer.ico");
         if let Err(e) = resource.compile() {
             // Not fatal: a binary without an icon still runs, and failing the
             // build over decoration would be worse than the missing icon.

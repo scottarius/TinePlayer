@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// The template that ships with the source, used whole when there is no file
 /// yet and mined for its `<player>` element when there is. Embedded rather
 /// than read from disk so a packaged build needs nothing beside it.
-const TEMPLATE: &str = include_str!("../data/playercorefactory.xml");
+const TEMPLATE: &str = include_str!("../data/templates/playercorefactory.xml");
 
 /// The placeholder the template carries where the command belongs.
 const PLACEHOLDER: &str = "TINEPLAYER_BINARY";
