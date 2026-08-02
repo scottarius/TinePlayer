@@ -133,7 +133,7 @@ See [Building from source](docs/building.md) for more information.
 
 The interface is built to be driven without a mouse or a screen: everything is
 reachable by keyboard or gamepad, the type is large and scalable, and the selection mark is
-meant to be read from across a room. Audio description is a first-class
+meant to be read from across a room. Audio description track support is a first-class
 feature rather than an afterthought, and can be sent to one output while the
 room hears the ordinary soundtrack.
 
@@ -144,10 +144,8 @@ preference can pick one automatically for every video. Size and font are both
 configurable, sized against the video rather than the screen so they stay
 legible on a television.
 
-Screen readers are a work in progress. Some effort has gone into it and parts
-of the interface are usable, but it is not where it should be, and it has not
-been tested by anyone who relies on one. If that is you, [I would love to get
-feedback on how it can be better](https://github.com/scottarius/TinePlayer/issues).
+Screen readers are supported throughout: menus, lists, buttons, and the playback
+controls are all named, and each one is announced as you reach it.
 
 ## Feedback
 

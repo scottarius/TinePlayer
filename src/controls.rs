@@ -1,10 +1,21 @@
 //! The strip of playback controls laid over the video: where you are, how
 //! long the file is, whether it is running, and the means to change all three.
 //!
-//! Nothing here takes keyboard focus. A controller drives playback through the
-//! same actions the keyboard does, so making these focusable would only add a
-//! focus state to get wrong, and focus on the video surface has caused trouble
-//! before. They are all reachable with a pointer, which is what they are for.
+//! The transport buttons take keyboard focus, and the focus follows whichever
+//! one is highlighted. That was not always so: they were deliberately
+//! unfocusable, on the grounds that a controller drives them through the same
+//! actions the keyboard does and a focus state is one more thing to get wrong.
+//!
+//! What that cost was the screen reader. A screen reader speaks on focus
+//! changes, so a highlight kept in a `Cell` and a CSS class is silence.
+//! Checked against Windows UI Automation rather than guessed at: with the
+//! marks published as accessible state and no focus movement, the focused
+//! element stayed the window while the highlight travelled the row.
+//!
+//! The position scale is still unfocusable, because its own arrow bindings
+//! would nudge the playhead instead of seeking, so the bar takes the focus for
+//! that row and renames itself. Space is caught in the capture phase for the
+//! same class of reason - see the controller beside the button row.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -102,6 +113,13 @@ fn name_it(widget: &impl IsA<gtk::Accessible>, name: &str) {
 pub struct Controls {
     root: gtk::Overlay,
     strip: gtk::Revealer,
+    /// The bar the whole strip sits in.
+    ///
+    /// It carries the `active-descendant` relation, and it takes the focus
+    /// itself for the timeline row, where the scale must not have it. Renamed
+    /// as that happens, so arriving there is announced as "Playback position"
+    /// rather than as the strip in general.
+    holder: gtk::Box,
     icon: gtk::Image,
     play: gtk::Button,
     stop: gtk::Button,
@@ -138,9 +156,11 @@ pub struct Controls {
     /// where playback has reached.
     buttons: gtk::Revealer,
     /// Which of them is highlighted, when the button row is being driven.
-    /// Tracked here rather than through GTK focus: the video surface taking
-    /// focus has caused trouble before, and this way an insensitive button is
-    /// simply skipped rather than needing to be made unfocusable and back.
+    ///
+    /// Still kept here rather than read back from GTK, because stepping over
+    /// an insensitive button is far easier against an index than against the
+    /// focus chain. The focus is moved to match, which is what a screen reader
+    /// follows, but this remains the thing that decides where it goes.
     focused: Cell<usize>,
     row: Cell<Row>,
     /// Told about every level and mute change, whichever way it was made.
@@ -196,7 +216,6 @@ impl Controls {
         let play = gtk::Button::new();
         play.set_child(Some(&icon));
         play.add_css_class("tp-transport-button");
-        play.set_can_focus(false);
         name_it(&play, "Play or pause");
 
         // go-* rather than media-seek-*: the seek glyphs are absent from the
@@ -208,7 +227,6 @@ impl Controls {
         let skip_back = gtk::Button::new();
         skip_back.set_child(Some(&back_icon));
         skip_back.add_css_class("tp-transport-button");
-        skip_back.set_can_focus(false);
         name_it(&skip_back, "Skip back");
 
         let forward_icon = gtk::Image::from_icon_name("go-next-symbolic");
@@ -216,7 +234,6 @@ impl Controls {
         let skip_forward = gtk::Button::new();
         skip_forward.set_child(Some(&forward_icon));
         skip_forward.add_css_class("tp-transport-button");
-        skip_forward.set_can_focus(false);
         name_it(&skip_forward, "Skip forward");
 
         // Beside play, because they are the same kind of thing: what playback
@@ -226,7 +243,6 @@ impl Controls {
         let stop = gtk::Button::new();
         stop.set_child(Some(&stop_icon));
         stop.add_css_class("tp-transport-button");
-        stop.set_can_focus(false);
         name_it(&stop, "Stop");
 
         let elapsed = gtk::Label::new(Some("0:00"));
@@ -262,7 +278,6 @@ impl Controls {
             dark,
         )));
         fullscreen.add_css_class("tp-transport-button");
-        fullscreen.set_can_focus(false);
         name_it(&fullscreen, "Toggle fullscreen");
         // Hidden rather than dimmed when fullscreen is fixed for this run:
         // there is nothing to be waiting for, so nothing to grey out.
@@ -275,7 +290,6 @@ impl Controls {
         subtitles.set_child(Some(&crate::app::subtitles_image(scale)));
         subtitles.add_css_class("tp-transport-button");
         subtitles.add_css_class("tp-subtitles-button");
-        subtitles.set_can_focus(false);
         name_it(&subtitles, "Show or hide subtitles");
         subtitles.set_sensitive(false);
 
@@ -287,7 +301,6 @@ impl Controls {
         let volume = gtk::Button::new();
         volume.set_child(Some(&volume_icon));
         volume.add_css_class("tp-transport-button");
-        volume.set_can_focus(false);
         name_it(&volume, "Volume");
 
         let panel = gtk::Box::builder()
@@ -328,6 +341,12 @@ impl Controls {
                 .orientation(gtk::Orientation::Vertical)
                 .spacing(4)
                 .build();
+            // The row takes the focus for this output, rather than the mute
+            // button or the slider inside it: which of the two outputs you
+            // are on is the part worth hearing, and the controls within it
+            // are named already.
+            row.set_focusable(true);
+            name_it(&row, name);
             row.append(&label);
             row.append(&pair);
             panel.append(&row);
@@ -363,7 +382,6 @@ impl Controls {
         let settings = gtk::Button::new();
         settings.set_child(Some(&settings_icon));
         settings.add_css_class("tp-transport-button");
-        settings.set_can_focus(false);
         name_it(&settings, "Settings");
 
         // Two rows: where playback is, and what can be done to it. Separating
@@ -445,9 +463,14 @@ impl Controls {
         // corner it was opened from.
         let row = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
+            .accessible_role(gtk::AccessibleRole::Group)
             .build();
         row.append(&panel_reveal);
         row.append(&bar);
+        // Takes the focus for everything inside it. Nothing else in the strip
+        // can hold it, which is what makes this the one place to put it.
+        row.set_focusable(true);
+        name_it(&row, "Playback controls");
 
         // Slides up rather than appearing, which reads as deliberate at a
         // distance where a sudden change is just a flicker.
@@ -459,6 +482,31 @@ impl Controls {
             .build();
 
         button_row.set_reveal_child(true);
+
+        // Space stays pause, even with a transport button holding the focus.
+        //
+        // The window's own key handling runs in the bubble phase, so a focused
+        // GtkButton would activate itself on Space long before that handler
+        // saw the key - pressing Space while the strip was up would Stop the
+        // film, or toggle subtitles, depending on where you happened to be.
+        // Capture on the bar runs ahead of the button, and pressing play is
+        // the same thing the window handler would have done.
+        //
+        // Enter is deliberately left alone: activating the highlighted control
+        // is exactly what it should do, and the button already does it.
+        {
+            let play_button = play.clone();
+            let controller = gtk::EventControllerKey::new();
+            controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+            controller.connect_key_pressed(move |_, key, _, _| match key {
+                gdk::Key::space => {
+                    play_button.emit_clicked();
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            });
+            row.add_controller(controller);
+        }
 
         let root = gtk::Overlay::new();
         root.set_child(Some(video));
@@ -478,6 +526,7 @@ impl Controls {
         let controls = Rc::new(Self {
             root,
             strip,
+            holder: row.clone(),
             buttons: button_row.clone(),
             icon,
             play,
@@ -644,6 +693,9 @@ impl Controls {
                 self.flash(false);
             }
         }
+        // After the arm, not inside it: every one of them has just settled
+        // where the strip is, and Row::None has already let go through hide().
+        self.announce_current();
     }
 
     /// Opens the panel, marking an output only when something that cannot
@@ -820,6 +872,9 @@ impl Controls {
 
     fn select_output(&self) {
         self.select_output_row(Some(self.output.get()));
+        // Everything that moves within the panel comes through here, both
+        // the first press that takes hold of it and every one after.
+        self.announce_current();
     }
 
     fn select_output_row(&self, index: Option<usize>) {
@@ -948,6 +1003,9 @@ impl Controls {
         self.row.set(Row::None);
         self.highlight(None);
         self.timeline_active(false);
+        // Row::None now, so this hands the focus back rather than leaving it
+        // on a strip that is about to go.
+        self.announce_current();
     }
 
     pub fn move_focus(self: &Rc<Self>, delta: isize) {
@@ -956,6 +1014,7 @@ impl Controls {
         }
         self.step(delta);
         self.highlight(Some(self.focused.get()));
+        self.announce_current();
         // Restarts the countdown, so working along the row does not run out
         // of time part way.
         self.flash(false);
@@ -982,6 +1041,77 @@ impl Controls {
     /// Whether a press belongs to the strip rather than to playback.
     pub fn takes_activation(&self) -> bool {
         matches!(self.row.get(), Row::Buttons | Row::Volume)
+    }
+
+    /// Points assistive technology at whatever the strip is on now.
+    ///
+    /// Worked out from the row being driven rather than hooked onto each of
+    /// the three marks separately. The highlight, the timeline and the volume
+    /// panel each set and clear their own, and in some orders one clears what
+    /// another just set: `set_row` puts the timeline mark on and takes the
+    /// button highlight off in the same breath. Deriving the answer in one
+    /// place means whoever ran last cannot be the one who decides it.
+    fn announce_current(&self) {
+        let current: Option<gtk::Widget> = match self.row.get() {
+            Row::None => None,
+            Row::Buttons => self
+                .order
+                .get(self.focused.get())
+                .map(|button| button.clone().upcast()),
+            // The bar itself, because the scale must not take focus: its own
+            // arrow bindings would move the playhead a pixel at a time
+            // instead of seeking. Renamed below, so arriving here is still
+            // announced as something rather than as the strip in general.
+            Row::Timeline => Some(self.holder.clone().upcast()),
+            // The row rather than the level inside it, so the output is named
+            // as well as the number: "Headphones" is the part that says which
+            // of the two you are about to change.
+            Row::Volume => self
+                .outputs
+                .get(self.output.get())
+                .map(|output| output.row.clone().upcast()),
+        };
+
+        name_it(
+            &self.holder,
+            if self.row.get() == Row::Timeline {
+                "Playback position"
+            } else {
+                "Playback controls"
+            },
+        );
+
+        match current {
+            Some(control) => {
+                self.holder
+                    .update_relation(&[gtk::accessible::Relation::ActiveDescendant(
+                        match self.row.get() {
+                            Row::Timeline => self.position.upcast_ref(),
+                            _ => control.upcast_ref(),
+                        },
+                    )]);
+                // The strip is very often still sliding into place when this
+                // runs, and a widget part way through a transition will not
+                // take focus. One retry after the frame settles, rather than
+                // silently ending up with the focus still on the window.
+                if !control.has_focus() && !control.grab_focus() {
+                    let control = control.downgrade();
+                    glib::idle_add_local_once(move || {
+                        if let Some(control) = control.upgrade() {
+                            control.grab_focus();
+                        }
+                    });
+                }
+            }
+            // The relation goes and the focus is left alone. Taking it back to
+            // the window by hand was wrong: the hide countdown ends here, so
+            // every strip that timed out cleared the focus to the window and a
+            // screen reader read the title bar. GTK already moves focus off a
+            // widget when the revealer stops showing it.
+            None => self
+                .holder
+                .reset_relation(gtk::AccessibleRelation::ActiveDescendant),
+        }
     }
 
     fn highlight(&self, index: Option<usize>) {

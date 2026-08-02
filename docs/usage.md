@@ -81,11 +81,6 @@ by direct path, not `http://` or `smb://`
 
 Everything is reachable with a keyboard or a gamepad. A mouse is not required, but can be used.
 
-> [!NOTE]
-> Screen reader support is a work in progress. Menus and their rows are named
-> and announced; the playback controls can be reached and used, but are not
-> announced. See [Accessibility](../README.md#accessibility).
-
 ### In the menus
 
 | Key | Gamepad | Action                                |

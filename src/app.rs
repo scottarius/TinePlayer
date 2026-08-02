@@ -1281,12 +1281,15 @@ impl App {
         };
         let list = self.nav_list.borrow().clone();
 
-        // A list is one focus stop now, so what gets activated is the row it
-        // has selected rather than the widget holding focus - there is no
-        // focused row any more to ask.
+        // The focus is on a row again, so that a screen reader has something
+        // to announce. Both shapes are still accepted: the row directly, and
+        // the list for the moment after Tab has landed on one but before a
+        // row has been settled on.
         let focused_list = widget
-            .downcast_ref::<gtk::ListBox>()
-            .cloned()
+            .downcast_ref::<gtk::ListBoxRow>()
+            .and_then(|row| row.parent())
+            .and_downcast::<gtk::ListBox>()
+            .or_else(|| widget.downcast_ref::<gtk::ListBox>().cloned())
             .or_else(|| list.filter(|list| list.has_focus()));
         if let Some(list) = focused_list
             && let Some(row) = list.selected_row()
@@ -2084,6 +2087,7 @@ impl App {
         footer: &[gtk::Button],
     ) {
         self.set_nav(Some(list), header, footer);
+        announce_selection(list);
 
         // Every arrow key goes through move_selection, which already knows
         // where the focus is and what should happen at each boundary - it is
@@ -4165,6 +4169,8 @@ impl App {
         // it sits left of, and driven by the same keys once it has focus.
         *self.nav_side_list.borrow_mut() = Some(list.clone());
         self.wire_arrows(list.upcast_ref());
+        // Its own, since wire_navigation only ever sees a screen's main list.
+        announce_selection(&list);
 
         // Up from the top of the column reaches the trail above it, the same
         // way it does from the listing.
@@ -5585,6 +5591,33 @@ pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image 
 /// inside it, and GTK derives a name from a child label but not from a
 /// grandchild. A row built as a box of two labels therefore had no name, and
 /// a screen reader announced it as "3 of 6" and nothing more.
+/// Makes a list say which row it is on, for anyone who cannot see the
+/// highlight.
+///
+/// The list holds the focus and the rows do not, which is the right shape for
+/// Tab but leaves a screen reader with nothing to follow: focus never moves
+/// again once it has arrived, so the list and its first row are announced and
+/// then nothing, however far down somebody travels.
+///
+/// `active-descendant` is what that pattern is for. It names the current row
+/// without moving focus, so both readings stay true - one focus stop for Tab,
+/// and a cursor within it that is announced as it moves.
+///
+/// Hung off `row-selected` rather than off the places that select, because
+/// there are many of those - arrow keys, the gamepad, page keys, a pointer,
+/// and every screen that opens on a remembered row - and one signal catches
+/// them all.
+fn announce_selection(list: &gtk::ListBox) {
+    list.connect_row_selected(|list, row| match row {
+        Some(row) => {
+            list.update_relation(&[gtk::accessible::Relation::ActiveDescendant(
+                row.upcast_ref(),
+            )]);
+        }
+        None => list.reset_relation(gtk::AccessibleRelation::ActiveDescendant),
+    });
+}
+
 fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) {
     list.append(child);
     if let Some(row) = child.as_ref().parent().and_downcast::<gtk::ListBoxRow>() {
@@ -5594,9 +5627,19 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
         // the button below it, which is the difference between usable and
         // not for anyone who navigates by Tab.
         //
-        // Arrow keys move within the list instead, which is the ordinary
-        // arrangement for a list widget and what a screen reader expects.
-        row.set_focusable(false);
+        // Rows stay focusable all the same, and the focus follows the
+        // selection. Making them unfocusable was the obvious way to get one
+        // tab stop and it silenced the screen reader completely: focus
+        // arrived at the list and never moved again, so Narrator read the
+        // list and its first row and then nothing, however far down somebody
+        // travelled. Selection alone is not enough - checked against Windows
+        // UI Automation, which showed `IsSelected` moving correctly from row
+        // to row while the focused element stayed the list throughout, and a
+        // screen reader speaks on focus.
+        //
+        // One tab stop comes from `move_focus_stop` instead, which finds the
+        // stop containing the focus and steps to the next one, so a focused
+        // row still counts as being on its list.
     }
 }
 
@@ -5871,12 +5914,8 @@ fn about_text(text: &str) -> gtk::Label {
 /// So the scroll is done by hand, and not until the row has been mapped -
 /// which is the point at which it knows where it is.
 fn settle_on(row: &gtk::ListBoxRow) {
-    // The list takes the focus, since the row cannot. Selection is what says
-    // which row you are on, and the stylesheet draws it only while the list
-    // holds focus, so the two together read exactly as before.
-    if let Some(list) = row.parent().and_downcast::<gtk::ListBox>() {
-        list.grab_focus();
-    }
+    // The row itself, so a screen reader has a focus change to announce.
+    row.grab_focus();
     // Setting the window's child maps the new page there and then, so by the
     // time a screen picks its row the row is usually mapped already and
     // waiting for the signal would be waiting forever. Only the first screen
