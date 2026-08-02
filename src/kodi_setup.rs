@@ -78,6 +78,21 @@ pub enum Confinement {
 }
 
 impl Confinement {
+    /// Whether TinePlayer can be set up in a Kodi installed this way.
+    ///
+    /// A Snap cannot: it confines Kodi to its own view of the system with no
+    /// supported way to start a program outside that, so the command would be
+    /// written and then quietly do nothing. Better to say so before it is
+    /// chosen than to let it be configured and appear to work.
+    pub fn supported(self) -> bool {
+        self != Confinement::Snap
+    }
+
+    /// Why not, for the one case where it is not.
+    pub fn unsupported_reason(self) -> Option<&'static str> {
+        (!self.supported()).then_some("Cannot start other programs")
+    }
+
     /// What to add after the version to tell one Kodi from another, or
     /// `None` when there is nothing worth saying.
     ///
@@ -562,18 +577,9 @@ pub fn manual_step(confinement: Confinement) -> Option<ManualStep> {
                    TinePlayer. TinePlayer will not run it for you.",
             undo: Some("flatpak override --user --reset tv.kodi.Kodi"),
         }),
-        Confinement::Snap => Some(ManualStep {
-            what: "This Kodi may not be able to start TinePlayer at all",
-            why: "Kodi is installed as a Snap, which confines it to its own view \
-                  of the system and offers no supported way to start a program \
-                  outside that.",
-            command: None,
-            cost: "TinePlayer has been written into Kodi's player file, and it \
-                   may simply do nothing. A Kodi installed from your \
-                   distribution's packages, or from Flathub, is the way to have \
-                   this work.",
-            undo: None,
-        }),
+        // A Snap cannot be configured at all, so there is no step to
+        // describe. See Confinement::supported.
+        Confinement::Snap => None,
     }
 }
 
@@ -958,7 +964,9 @@ mod tests {
         assert!(flatpak.contains("tv.kodi.Kodi"));
         // Says what it costs, rather than only how to do it.
         assert!(flatpak.contains("anything on this machine"));
-        assert!(permission_note(Confinement::Snap).is_some());
+        // A Snap is refused before it can be configured, so it has no
+        // manual step to describe.
+        assert!(permission_note(Confinement::Snap).is_none());
     }
 
     #[test]

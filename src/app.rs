@@ -3817,23 +3817,29 @@ impl App {
         let (page, list, back, _slot) = list_page("Choose a Kodi Installation", true);
 
         let found = self.known_kodis();
-        let mut rows: Vec<(String, String)> = found
+        // An install that cannot be set up is still listed, and still says
+        // what it is: leaving one out looks like it was not found, which
+        // sends somebody hunting for a folder rather than telling them the
+        // answer.
+        let mut rows: Vec<(String, String, bool)> = found
             .iter()
             .map(|setup| {
-                let state = if setup.is_configured() {
-                    format!("Already set up - {}", setup.state.describe())
-                } else {
-                    setup.userdata().display().to_string()
+                let state = match setup.confinement.unsupported_reason() {
+                    Some(reason) => reason.to_string(),
+                    None if setup.is_configured() => {
+                        format!("Already set up - {}", setup.state.describe())
+                    }
+                    None => setup.userdata().display().to_string(),
                 };
-                (setup.label(), state)
+                (setup.label(), state, setup.confinement.supported())
             })
             .collect();
-        rows.push(("Custom install location".to_string(), String::new()));
+        rows.push(("Custom install location".to_string(), String::new(), true));
 
-        for (label, value) in &rows {
+        for (label, value, usable) in &rows {
             append_named(
                 &list,
-                &menu_row(label, value, true),
+                &menu_row(label, value, *usable),
                 &row_name(label, value),
             );
         }
