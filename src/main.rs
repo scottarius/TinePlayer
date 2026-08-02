@@ -504,9 +504,30 @@ fn main() -> std::process::ExitCode {
     // on defaults and says so. Output devices are a menu row, so there is no
     // separate setup step to reach, and refusing would put the only place to
     // fix it out of reach.
-    let (config, config_problem) = Config::load();
+    let (mut config, config_problem) = Config::load();
     if let Some(problem) = config_problem.as_deref() {
         eprintln!("{problem}");
+    }
+
+    // First run: somewhere to play, rather than nowhere.
+    //
+    // An unset primary output meant a menu that could be navigated but not
+    // played from, with the reason two screens away under Settings. Choosing
+    // the system default is what somebody would pick anyway, and it is a
+    // starting point rather than a decision - the row is still there and
+    // still says what it is set to.
+    //
+    // Saved rather than only defaulted in memory, so the settings row and
+    // config.yaml agree about what is in force. Only ever when nothing is
+    // set: a device chosen and later unplugged keeps its name, which is what
+    // makes the "may have been unplugged" message possible.
+    if config.primary_sink.is_none()
+        && let Some(device) = devices::default_output_device_name()
+    {
+        config.primary_sink = Some(device);
+        if let Err(e) = config.save() {
+            eprintln!("Could not save the default audio output: {e}");
+        }
     }
 
     // Set before GTK initializes: it reads these to find the compositor,

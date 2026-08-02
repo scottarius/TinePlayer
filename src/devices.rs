@@ -57,6 +57,34 @@ pub fn list_audio_output_devices() -> Result<Vec<gst::Device>, String> {
     Ok(devices.unwrap_or_default().into_iter().collect())
 }
 
+/// What to send audio to when nobody has chosen yet.
+///
+/// The system's own default where the platform says which that is, and
+/// otherwise the first device offered. Both are guesses, and a guess is worth
+/// making here: an unset primary output means a first run that opens the menu
+/// and cannot play anything from it, which reads as broken rather than as
+/// unconfigured.
+///
+/// The property naming the default differs by provider and none of them are
+/// guaranteed to be there, so all three spellings are tried and the answer is
+/// allowed to be "none of these said". PulseAudio and PipeWire use
+/// `is-default`; WASAPI and Core Audio have been seen with `default` and
+/// `device.default`.
+pub fn default_output_device_name() -> Option<String> {
+    let devices = list_audio_output_devices().ok()?;
+    devices
+        .iter()
+        .find(|device| {
+            device.properties().is_some_and(|properties| {
+                ["is-default", "default", "device.default"]
+                    .iter()
+                    .any(|key| properties.get::<bool>(*key).unwrap_or(false))
+            })
+        })
+        .or_else(|| devices.first())
+        .map(|device| device.display_name().to_string())
+}
+
 /// Re-find a previously chosen device by its display name (what we persist
 /// in the config file) on a later run.
 pub fn find_audio_output_device(name: &str) -> Result<gst::Device, String> {
