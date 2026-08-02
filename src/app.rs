@@ -606,24 +606,15 @@ impl App {
                     app.leave_controls();
                     glib::Propagation::Stop
                 }
-                // Backing out of the strip before backing out of playback: a
-                // press that quit the film while somebody was working through
-                // the buttons would be a nasty surprise.
-                gdk::Key::Escape if playing => {
-                    let showing = app
-                        .controls
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|controls| controls.is_showing());
-                    if showing {
-                        if let Some(controls) = app.controls.borrow().as_ref() {
-                            controls.hide();
-                        }
-                    } else {
-                        app.go_back();
-                    }
-                    glib::Propagation::Stop
-                }
+                // Straight out, whatever the strip happens to be doing. A
+                // keyboard already has Down for putting the strip away, so
+                // spending Escape on it as well made leaving a film two
+                // presses when it reads as one.
+                //
+                // The gamepad's B still steps out of the strip first, which is
+                // not an inconsistency: it has no second button to spare for
+                // it, and that is what its own comment above Action::Back is
+                // about.
                 gdk::Key::Escape => {
                     app.go_back();
                     glib::Propagation::Stop
@@ -1064,6 +1055,11 @@ impl App {
             self.window.fullscreen();
         } else {
             self.window.unfullscreen();
+            // The pointer only hides in fullscreen, and leaving takes the
+            // countdown that would have brought it back with it.
+            if let Some(controls) = self.controls.borrow().as_ref() {
+                controls.reveal_pointer();
+            }
         }
 
         let mut config = self.config.borrow_mut();
@@ -1506,6 +1502,9 @@ impl App {
         }
         if let Some(controls) = self.controls.borrow_mut().take() {
             controls.cancel();
+            // Playback ending with the pointer hidden would leave the menus
+            // behind it without one.
+            controls.reveal_pointer();
         }
         if let Some(playback) = self.playback.borrow_mut().take() {
             playback.stop();

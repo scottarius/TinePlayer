@@ -1068,6 +1068,9 @@ impl Controls {
     pub fn connect_motion(&self, handler: impl Fn() + 'static) {
         let motion = gtk::EventControllerMotion::new();
         let last = Cell::new((f64::NAN, f64::NAN));
+        // Weak, because the controller this closure lives in is attached to
+        // the very widget it holds.
+        let root = self.root.downgrade();
         motion.connect_motion(move |_, x, y| {
             let (previous_x, previous_y) = last.get();
             let moved = (x - previous_x).hypot(y - previous_y);
@@ -1079,6 +1082,14 @@ impl Controls {
             // straight back.
             if moved.is_nan() || moved >= MOVEMENT {
                 last.set((x, y));
+                // The only thing that brings the pointer back. A key or a
+                // gamepad press raises the strip without it: someone driving
+                // from the sofa is not reaching for a mouse, and putting one
+                // back on the picture every time they pause is the behaviour
+                // being avoided.
+                if let Some(root) = root.upgrade() {
+                    root.set_cursor(None);
+                }
                 handler();
             }
         });
@@ -1207,6 +1218,11 @@ impl Controls {
         self.cancel();
         self.release();
         self.strip.set_reveal_child(false);
+        // The pointer goes with it. This is the one path that takes the strip
+        // down without the countdown, so nothing else would ever hide it: it
+        // would sit on the picture until the mouse was moved, which is the
+        // opposite of what asking for the strip to go away means.
+        self.hide_pointer();
     }
 
     pub fn is_showing(&self) -> bool {
@@ -1217,6 +1233,34 @@ impl Controls {
     pub fn flash(self: &Rc<Self>, paused: bool) {
         self.buttons.set_reveal_child(true);
         self.show(paused);
+    }
+
+    /// Brings the pointer back, wherever it was taken away.
+    ///
+    /// Public because leaving fullscreen has to call it: the pointer is hidden
+    /// on a countdown that knows nothing about the window changing underneath
+    /// it, and a windowed player with no pointer is one nobody can drive.
+    pub fn reveal_pointer(&self) {
+        self.root.set_cursor(None);
+    }
+
+    /// Takes the pointer off the picture once the strip has gone with it.
+    ///
+    /// Fullscreen only. A window sits on a desktop that the pointer belongs to
+    /// as much as to us - there is a title bar above it and other windows
+    /// behind - and one that vanishes while crossing an application is one
+    /// somebody then has to go hunting for. Fullscreen is the case where the
+    /// picture is all there is, and a pointer resting over it is just
+    /// something left on screen.
+    fn hide_pointer(&self) {
+        let fullscreen = self
+            .root
+            .root()
+            .and_downcast::<gtk::Window>()
+            .is_some_and(|window| window.is_fullscreen());
+        if fullscreen {
+            self.root.set_cursor_from_name(Some("none"));
+        }
     }
 
     /// Puts the strip on screen and starts the countdown to taking it off
@@ -1246,6 +1290,7 @@ impl Controls {
             };
             if generation.get() == expected {
                 controls.strip.set_reveal_child(false);
+                controls.hide_pointer();
                 controls.release();
             }
         });
