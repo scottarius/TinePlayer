@@ -1817,7 +1817,10 @@ impl App {
                     if chosen.as_ref() == Some(&option.choice()) {
                         current = Some(position);
                     }
-                    entries.push((option.label().to_string(), Some(position)));
+                    entries.push((
+                        crate::languages::describe_tag(option.label()),
+                        Some(position),
+                    ));
                 }
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
@@ -1875,8 +1878,13 @@ impl App {
                     },
                     None,
                 ));
-                for (position, (_, name, _)) in crate::languages::LANGUAGES.iter().enumerate() {
-                    entries.push((name.to_string(), Some(position)));
+                for (position, (code, name, native, _)) in
+                    crate::languages::LANGUAGES.iter().enumerate()
+                {
+                    entries.push((
+                        crate::languages::menu_name(code, name, native),
+                        Some(position),
+                    ));
                 }
             }
             Setting::SubtitleLanguage => {
@@ -1896,14 +1904,19 @@ impl App {
                     .or_else(|| {
                         crate::languages::LANGUAGES
                             .iter()
-                            .position(|(code, _, _)| *code == setting)
+                            .position(|(code, _, _, _)| *code == setting)
                             .map(|position| modes + position)
                     });
                 for (position, (_, label)) in crate::subtitles::MODES.iter().enumerate() {
                     entries.push((label.to_string(), Some(position)));
                 }
-                for (position, (_, name, _)) in crate::languages::LANGUAGES.iter().enumerate() {
-                    entries.push((name.to_string(), Some(modes + position)));
+                for (position, (code, name, native, _)) in
+                    crate::languages::LANGUAGES.iter().enumerate()
+                {
+                    entries.push((
+                        crate::languages::menu_name(code, name, native),
+                        Some(modes + position),
+                    ));
                 }
             }
             Setting::SubtitleSize => {
@@ -2116,7 +2129,7 @@ impl App {
             .borrow()
             .iter()
             .find(|option| option.choice() == chosen)
-            .map(|option| option.label().to_string())
+            .map(|option| crate::languages::describe_tag(option.label()))
             .unwrap_or_else(|| "None".to_string())
     }
 
@@ -2226,7 +2239,7 @@ impl App {
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let picked = choice
                     .and_then(|index| crate::languages::LANGUAGES.get(index))
-                    .map(|(code, _, _)| code.to_string());
+                    .map(|(code, _, _, _)| code.to_string());
                 let mut config = self.config.borrow_mut();
                 if setting == Setting::PrimaryLanguage {
                     config.primary_language = picked;
@@ -5736,7 +5749,7 @@ fn language_position(code: Option<&str>) -> Option<usize> {
     let code = code?;
     crate::languages::LANGUAGES
         .iter()
-        .position(|(stored, _, _)| *stored == code)
+        .position(|(stored, _, _, _)| *stored == code)
 }
 
 fn last_row_index(list: &gtk::ListBox) -> i32 {
@@ -5748,7 +5761,16 @@ fn last_row_index(list: &gtk::ListBox) -> i32 {
 }
 
 fn describe_audio_track(track: &AudioTrack) -> String {
-    let mut text = format!("{} — {} {}ch", track.language, track.codec, track.channels);
+    // Checked against the title, which is where a language most often gets
+    // named twice: a track tagged `eng` and titled "English Commentary" needs
+    // no help, and would otherwise read "eng (English) - ... - English
+    // Commentary".
+    let mut text = format!(
+        "{} — {} {}ch",
+        crate::languages::describe_tag_unless(&track.language, &track.title),
+        track.codec,
+        track.channels
+    );
     if !track.title.is_empty() {
         text.push_str(&format!(" — {}", track.title));
     }
