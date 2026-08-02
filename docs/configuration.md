@@ -17,9 +17,9 @@ It lives in the per-user config directory:
 | Theme                                                    | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                                                                      |
 | Interface Size                                           | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution                                                    |
 | Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
-| Primary Audio Device                                     | `primary_sink`       | Unset       | Primary output device name. Required                                                                                                           |
+| [Primary Audio Device](#output-devices)                  | `primary_sink`       | Unset       | Primary output device name. Required                                                                                                           |
 | Primary Language Preference                              | `primary_language`   | Unset       | Preferred primary [language code](#languages) <br/>If unset defaults to the first track                                                        |
-| Secondary Audio Device                                   | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
+| [Secondary Audio Device](#output-devices)                | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
 | Secondary Language Preference                            | `secondary_language` | Unset       | Preferred secondary [language code](#languages) <br/>If unset defaults to the second track                                                     |
 | [Subtitle Preference](#choosing-subtitles-automatically) | `subtitle_language`  | `primary_forced` | How a subtitle is chosen automatically: `none`, `primary_forced`, `primary`, `secondary_forced`, `secondary`, or a [language code](#languages) |
 | Subtitle Size                                            | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's                                                                                    |
@@ -68,11 +68,16 @@ subtitle_size: 12
 subtitle_font: Sans Bold
 ```
 
-Device names are the ones the settings menu lists, which are also what
-`primary_sink` and `secondary_sink` are matched against. They differ by
-platform: `Speakers (Realtek High Definition Audio)` on Windows looks nothing
-like the example above.
+## Output Devices
 
+The two output devices,`primary_sink` and `secondary_sink`, are set by device name and can differ by
+platform.
+
+To get the available device names, run TinePlayer with the following argument from the command line:
+
+```sh
+tineplayer --list-devices
+```
 ## Volumes
 
 Each output carries its own level and can be adjusted or muted independently.
@@ -84,7 +89,7 @@ primary volume button will mute both immediately, and holding it again restores
 what each output was doing. Adjusting anything in the panel keeps the muted
 state instead, and your change applies from there.
 
-## Audio description
+## Audio Description
 
 An audio description track narrates what is happening on screen, for a viewer
 who is blind or has low vision. Because each output picks its own track, one
@@ -95,7 +100,7 @@ Set **Prefer Audio Description** to Yes under either output to have described
 tracks chosen automatically. It can be combined with a language preference,
 and a described track in another language is never chosen.
 
-### Where to find described audio
+### Where to Find Described Audio
 
 If you have a video file without a described audio track, you can check
 [Audiovault](https://audiovault.net/) to find one, and use [this fork of
@@ -107,7 +112,7 @@ which makes the resulting file usable with TinePlayer.
 Both are third-party projects with no connection to TinePlayer, mentioned
 because they answer a real question rather than as a recommendation.
 
-## Choosing subtitles automatically
+## Choosing Subtitles Automatically
 
 `subtitle_language` decides what to show for a video you have not yet picked
 subtitles for yourself. A choice you make for a video is remembered and always
@@ -136,7 +141,7 @@ language but will fall back to the other, then to none.
 > or a file named `Film.en.forced.srt`, is recognized; one that is forced in
 > fact but named something else is not.
 
-## Subtitle fonts
+## Subtitle Fonts
 
 `subtitle_font` is a font family followed by optional style words. It carries
 no size; that is `subtitle_size`.

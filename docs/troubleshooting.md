@@ -58,6 +58,12 @@ check that one of them is running and can see your hardware:
 pactl list short sinks
 ```
 
+To see the list TinePlayer itself has, which is what the menu offers:
+
+```sh
+tineplayer --list-devices
+```
+
 A machine with only ALSA will play through the primary output but has no
 device list to choose from.
 

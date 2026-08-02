@@ -159,6 +159,7 @@ Track numbers are those `--list-tracks` prints.
 | `--primary <T>`   | Audio for the primary output, see [Choosing audio on the command line](#choosing-audio-on-the-command-line) |
 | `--secondary <T>` | Audio for the secondary output, same as above                                                            |
 | `--subtitle <S>`  | Subtitles to show, see [Choosing subtitles on the command line](#choosing-subtitles-on-the-command-line) |
+| `--list-devices`  | Print this machine's audio output device names, as [`config.yaml`](configuration.md) wants them          |
 | `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers                                           |
 | `--restart`       | Start video from the beginning, ignoring any saved position                                              |
 | `--forget`        | Forget the saved positions and track choices. Pass a FILE to limit to a single video                     |

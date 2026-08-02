@@ -75,6 +75,11 @@ struct Args {
     #[arg(long)]
     list_tracks: bool,
 
+    /// Print the names of this machine's audio output devices, as
+    /// primary_sink and secondary_sink want them
+    #[arg(long)]
+    list_devices: bool,
+
     /// Start video from the beginning, ignoring any saved position
     #[arg(long)]
     restart: bool,
@@ -204,6 +209,22 @@ fn forget(source: Option<&source::Source>) -> Result<String, String> {
     } else {
         format!("Nothing was remembered about {}.", source.label())
     })
+}
+
+/// Prints the audio outputs this machine has, one per line.
+///
+/// Exactly the strings the settings menu shows and `primary_sink` matches
+/// against, with nothing added: a name with a space in it is common, so
+/// decorating the list would mean explaining how to undecorate it.
+fn list_devices() -> Result<(), String> {
+    let names = devices::output_device_names()?;
+    if names.is_empty() {
+        return Err("No audio output devices found.".to_string());
+    }
+    for name in names {
+        println!("{name}");
+    }
+    Ok(())
 }
 
 fn list_tracks(source: &source::Source) -> Result<(), String> {
@@ -416,6 +437,20 @@ fn main() -> std::process::ExitCode {
                 println!("{said}");
                 std::process::ExitCode::SUCCESS
             }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+
+    // Before anything that needs a file: this asks about the machine rather
+    // than about a video, and wanting the device names is a common reason to
+    // run TinePlayer from a terminal at all - they are what primary_sink and
+    // secondary_sink are matched against, and they cannot be guessed.
+    if args.list_devices {
+        return match list_devices() {
+            Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("{e}");
                 std::process::ExitCode::FAILURE
