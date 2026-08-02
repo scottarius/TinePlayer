@@ -2,9 +2,21 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// What the per-user folder is called.
+///
+/// Capitalized on Windows, where `AppData\Local` is a list of application
+/// names written the way their applications write them, and a lowercase one
+/// reads as something that escaped rather than something that was chosen.
+/// Lowercase everywhere else, which is the convention under `~/.config` and
+/// `~/.local/share` and what anyone typing the path would expect.
+#[cfg(windows)]
+pub const DIR_NAME: &str = "TinePlayer";
+#[cfg(not(windows))]
+pub const DIR_NAME: &str = "tineplayer";
+
 /// Per-user application directory under `base`, created if missing.
 fn app_dir(base: PathBuf) -> PathBuf {
-    let dir = base.join("tineplayer");
+    let dir = base.join(DIR_NAME);
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

@@ -335,7 +335,7 @@ fn use_bundled_resources() {
 /// build does not fight over the one belonging to an installed GStreamer.
 #[cfg(target_os = "windows")]
 fn dirs_cache() -> Option<std::path::PathBuf> {
-    let cache = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("tineplayer");
+    let cache = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join(config::DIR_NAME);
     std::fs::create_dir_all(&cache).ok()?;
     Some(cache)
 }

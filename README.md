@@ -100,7 +100,10 @@ Downloads for each platform are on the
 [releases page](https://github.com/scottarius/TinePlayer/releases).
 
 **Windows** - run the installer, or unpack the portable ZIP anywhere you like
-and run `TinePlayer.exe`.
+and run `TinePlayer.exe`. The installer upgrades an existing copy in place.
+Upgrading the ZIP means deleting the old folder first rather than unpacking
+over it, which would leave the previous version's libraries mixed in with the
+new ones.
 
 **macOS** - open the disk image and drag TinePlayer to Applications. 
 
