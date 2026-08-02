@@ -203,6 +203,21 @@ pub struct App {
     /// gamepad has no events to hand to GTK, so it needs to move the
     /// selection itself and therefore needs to know what it is moving.
     nav_list: RefCell<Option<gtk::ListBox>>,
+    /// A second list beside the main one, waiting to be put into the tab
+    /// order.
+    ///
+    /// Held rather than added directly because a screen builds its column
+    /// before it wires its navigation, and `set_nav` rebuilds the order from
+    /// scratch - so anything added ahead of it was thrown away again.
+    nav_side_list: RefCell<Option<gtk::ListBox>>,
+    /// What Tab moves between on this screen, in order: the header buttons,
+    /// the lists, then the footer buttons.
+    ///
+    /// Kept because GTK will not do it. A GtkListBox implements focus
+    /// traversal by moving between its rows, so once no row can take focus it
+    /// reports that it cannot be focused at all and Tab steps straight over
+    /// it - even though focusing the list directly works perfectly well.
+    nav_stops: RefCell<Vec<gtk::Widget>>,
     /// The sliders on the settings screen, by the row each one sits in, so
     /// left and right can find the one that is selected. Emptied whenever a
     /// screen without them is built.
@@ -358,6 +373,8 @@ impl App {
             sounds: RefCell::new(sounds),
             restart,
             nav_list: RefCell::new(None),
+            nav_side_list: RefCell::new(None),
+            nav_stops: RefCell::new(Vec::new()),
             settings_sliders: RefCell::new(Vec::new()),
             about_scroll: RefCell::new(None),
             copy_root: RefCell::new(None),
@@ -609,6 +626,37 @@ impl App {
                 }
                 gdk::Key::Escape => {
                     app.go_back();
+                    glib::Propagation::Stop
+                }
+                // Ours rather than GTK's, which cannot see the lists at all.
+                // Shift+Tab arrives as ISO_Left_Tab on X11 and Wayland both,
+                // so the modifier is not enough to tell them apart.
+                gdk::Key::Tab | gdk::Key::ISO_Left_Tab => {
+                    let backwards = key == gdk::Key::ISO_Left_Tab
+                        || state.contains(gdk::ModifierType::SHIFT_MASK);
+                    if app.move_focus_stop(if backwards { -1 } else { 1 }) {
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
+                }
+                // Between the two panes of the browser, and along a slider
+                // where the selected row carries one. Same order the gamepad
+                // uses, so the two cannot disagree.
+                gdk::Key::Left | gdk::Key::Right if !playing => {
+                    let delta = if key == gdk::Key::Left { -1 } else { 1 };
+                    if app.settings_slider(delta) || app.move_between_lists(delta) {
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
+                }
+                // Rows cannot take focus, so GTK no longer activates one for
+                // us: pressing a row is now this. A button keeps its own
+                // behaviour, and a text field consumes the key before this
+                // sees it.
+                gdk::Key::Return | gdk::Key::KP_Enter => {
+                    app.activate_focused();
                     glib::Propagation::Stop
                 }
                 // Available on every screen, not just during playback: on a
@@ -1033,6 +1081,18 @@ impl App {
         *self.nav_list.borrow_mut() = list.cloned();
         *self.nav_header.borrow_mut() = header.to_vec();
         *self.nav_footer.borrow_mut() = footer.to_vec();
+
+        let mut stops: Vec<gtk::Widget> = header.iter().map(|b| b.clone().upcast()).collect();
+        // A column beside the list comes first, being to its left.  Taken
+        // rather than read, so it belongs to this screen only.
+        if let Some(side) = self.nav_side_list.borrow_mut().take() {
+            stops.push(side.upcast());
+        }
+        if let Some(list) = list {
+            stops.push(list.clone().upcast());
+        }
+        stops.extend(footer.iter().map(|b| b.clone().upcast()));
+        *self.nav_stops.borrow_mut() = stops;
     }
 
     /// The button Down from the list should land on.
@@ -1058,13 +1118,19 @@ impl App {
             Action::Down => self.move_selection(1),
             Action::Left if self.playback.borrow().is_some() => self.controls_left_right(-1),
             Action::Right if self.playback.borrow().is_some() => self.controls_left_right(1),
+            // The same three in the same order the arrow keys use: a slider on
+            // the selected row, then the panes of the browser, then whatever
+            // GTK can find. move_between_lists has to be in here explicitly -
+            // child_focus cannot reach a list, because the rows are not
+            // focusable and the list being a focus stop is our arrangement
+            // rather than something GTK's directional search knows about.
             Action::Left => {
-                if !self.settings_slider(-1) {
+                if !self.settings_slider(-1) && !self.move_between_lists(-1) {
                     self.window.child_focus(gtk::DirectionType::Left);
                 }
             }
             Action::Right => {
-                if !self.settings_slider(1) {
+                if !self.settings_slider(1) && !self.move_between_lists(1) {
                     self.window.child_focus(gtk::DirectionType::Right);
                 }
             }
@@ -1096,6 +1162,14 @@ impl App {
             Action::DirectionReleased => self.end_scrub(),
             Action::PageUp => self.move_selection(-PAGE_ROWS),
             Action::PageDown => self.move_selection(PAGE_ROWS),
+            // Harmless during playback, where there are no stops to move
+            // between and this does nothing.
+            Action::FocusNext => {
+                self.move_focus_stop(1);
+            }
+            Action::FocusPrevious => {
+                self.move_focus_stop(-1);
+            }
             // Whatever is on screen goes away first, whether it is being
             // driven or simply lingering: backing out of the film while the
             // strip is up would be a surprise either way.
@@ -1211,11 +1285,17 @@ impl App {
         };
         let list = self.nav_list.borrow().clone();
 
-        if let Some(row) = widget.downcast_ref::<gtk::ListBoxRow>().cloned()
-            && let Some(list) = list
+        // A list is one focus stop now, so what gets activated is the row it
+        // has selected rather than the widget holding focus - there is no
+        // focused row any more to ask.
+        let focused_list = widget
+            .downcast_ref::<gtk::ListBox>()
+            .cloned()
+            .or_else(|| list.filter(|list| list.has_focus()));
+        if let Some(list) = focused_list
+            && let Some(row) = list.selected_row()
         {
             self.sounds.borrow().click();
-            list.select_row(Some(&row));
             list.emit_by_name::<()>("row-activated", &[&row]);
             return;
         }
@@ -2005,95 +2085,43 @@ impl App {
         footer: &[gtk::Button],
     ) {
         self.set_nav(Some(list), header, footer);
+
+        // Every arrow key goes through move_selection, which already knows
+        // where the focus is and what should happen at each boundary - it is
+        // what the gamepad and the page keys have always used.
+        //
+        // It has to, now that rows are not focusable: GtkListBox moves the
+        // cursor by moving focus between rows, and with nothing in the list
+        // able to take focus that does nothing at all. Capture phase so this
+        // runs before the list's own bindings rather than after they have
+        // swallowed the key.
+        self.wire_arrows(list.upcast_ref());
+        for button in header.iter().chain(footer.iter()) {
+            self.wire_arrows(button.upcast_ref());
+        }
+
+        // Tabbing into a list has to land somewhere. GTK selects nothing on
+        // its own now that no row takes focus, which left the list holding
+        // focus with nothing highlighted and the arrow keys apparently dead.
         {
-            let app = self.clone();
             let list_weak = list.downgrade();
-            let footer: Vec<glib::WeakRef<gtk::Button>> =
-                footer.iter().map(|b| b.downgrade()).collect();
-            let header_up: Vec<glib::WeakRef<gtk::Button>> =
-                header.iter().map(|b| b.downgrade()).collect();
-            let controller = gtk::EventControllerKey::new();
-            controller.connect_key_pressed(move |_, key, _, _| {
+            let controller = gtk::EventControllerFocus::new();
+            controller.connect_enter(move |_| {
                 let Some(list) = list_weak.upgrade() else {
-                    return glib::Propagation::Proceed;
+                    return;
                 };
-                if key != gdk::Key::Down && key != gdk::Key::Up {
-                    return glib::Propagation::Proceed;
+                if list.selected_row().is_some() {
+                    return;
                 }
-
-                let last = last_row_index(&list);
-                let current = list.selected_row().map(|r| r.index());
-
-                if key == gdk::Key::Down && current == Some(last) {
-                    let buttons: Vec<gtk::Button> =
-                        footer.iter().filter_map(|b| b.upgrade()).collect();
-                    if let Some(button) = App::first_footer(&buttons) {
-                        app.sounds.borrow().click();
-                        button.grab_focus();
-                    }
-                    return glib::Propagation::Stop;
+                let first = (0..).find(|index| {
+                    list.row_at_index(*index)
+                        .is_none_or(|row| row.is_sensitive())
+                });
+                if let Some(row) = first.and_then(|index| list.row_at_index(index)) {
+                    list.select_row(Some(&row));
                 }
-                if key == gdk::Key::Up && current == Some(0) {
-                    let buttons: Vec<gtk::Button> =
-                        header_up.iter().filter_map(|b| b.upgrade()).collect();
-                    // The rightmost, which is the folder you are in: moving
-                    // left from there walks back up the tree.
-                    if let Some(button) = App::last_header(&buttons) {
-                        app.sounds.borrow().click();
-                        button.grab_focus();
-                    }
-                    return glib::Propagation::Stop;
-                }
-
-                app.sounds.borrow().click();
-                glib::Propagation::Proceed
             });
             list.add_controller(controller);
-        }
-
-        // Down from any header button returns to the top of the list.
-        for button in header {
-            let app = self.clone();
-            let list_weak = list.downgrade();
-            let controller = gtk::EventControllerKey::new();
-            controller.connect_key_pressed(move |_, key, _, _| {
-                if key != gdk::Key::Down {
-                    return glib::Propagation::Proceed;
-                }
-                let Some(list) = list_weak.upgrade() else {
-                    return glib::Propagation::Proceed;
-                };
-                if let Some(row) = list.row_at_index(0) {
-                    app.sounds.borrow().click();
-                    list.select_row(Some(&row));
-                    settle_on(&row);
-                }
-                glib::Propagation::Stop
-            });
-            button.add_controller(controller);
-        }
-
-        // Wired on every button, so Up returns to the list from whichever
-        // one happens to hold focus.
-        for button in footer {
-            let app = self.clone();
-            let list_weak = list.downgrade();
-            let controller = gtk::EventControllerKey::new();
-            controller.connect_key_pressed(move |_, key, _, _| {
-                if key != gdk::Key::Up {
-                    return glib::Propagation::Proceed;
-                }
-                let Some(list) = list_weak.upgrade() else {
-                    return glib::Propagation::Proceed;
-                };
-                if let Some(row) = list.row_at_index(last_row_index(&list)) {
-                    app.sounds.borrow().click();
-                    list.select_row(Some(&row));
-                    row.grab_focus();
-                }
-                glib::Propagation::Stop
-            });
-            button.add_controller(controller);
         }
     }
 
@@ -2803,11 +2831,17 @@ impl App {
         }
 
         self.remember_origin();
+        // Its own tab order: the field, then the two buttons. Without stops
+        // of its own there is nothing for Tab to move between, and the Open
+        // button cannot be reached without a pointer.
+        self.set_nav(None, &[], &[]);
+        self.add_nav_stop(&field);
+        self.add_nav_stop(&cancel);
+        self.add_nav_stop(&open);
         *self.screen.borrow_mut() = Screen::PasteUri;
         self.window.set_child(Some(&self.modal(&page)));
-        // Nothing here moves a selection, and the field wants the caret from
-        // the moment it opens: this screen exists to be typed into.
-        self.set_nav(None, &[], &[]);
+        // The field wants the caret from the moment it opens: this screen
+        // exists to be typed into.
         field.grab_focus();
 
         // Filled in for you when the clipboard already holds something this
@@ -3800,7 +3834,10 @@ impl App {
         self.show_kodi_dialog(
             &format!("Remove configuration from\n{}?", setup.label()),
             &["TinePlayer's entry will be removed from Kodi's configuration file"],
-            "Remove",
+            Confirm {
+                label: "Remove",
+                destructive: true,
+            },
             Screen::KodiConfirm,
             back,
             move || {
@@ -3985,7 +4022,100 @@ impl App {
             .width_request((220.0 * self.scale.get()).round() as i32)
             .child(&list)
             .build();
+        scroller.set_focusable(false);
+        list.set_focusable(true);
         Some((scroller, list))
+    }
+
+    /// Sends this widget's up and down keys through `move_selection`, which
+    /// knows where the focus is and what each boundary should do.
+    ///
+    /// Needed on anything that can hold focus beside a list, now that rows
+    /// cannot: GtkListBox moves its cursor by moving focus between rows, and
+    /// with nothing able to take it that does nothing at all. Capture phase,
+    /// so this runs before the list's own bindings swallow the key.
+    fn wire_arrows(self: &Rc<Self>, widget: &gtk::Widget) {
+        let app = self.clone();
+        let controller = gtk::EventControllerKey::new();
+        controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        controller.connect_key_pressed(move |_, key, _, _| match key {
+            gdk::Key::Up => {
+                app.move_selection(-1);
+                glib::Propagation::Stop
+            }
+            gdk::Key::Down => {
+                app.move_selection(1);
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+        widget.add_controller(controller);
+    }
+
+    /// Puts a widget into the tab order at the end.
+    fn add_nav_stop(&self, widget: &impl IsA<gtk::Widget>) {
+        self.nav_stops.borrow_mut().push(widget.clone().upcast());
+    }
+
+    /// Moves to the next or previous thing on this screen worth stopping on.
+    ///
+    /// Returns whether it did, so a screen with no stops of its own - a text
+    /// panel, say - falls back to GTK's own handling rather than trapping the
+    /// key.
+    fn move_focus_stop(self: &Rc<Self>, delta: isize) -> bool {
+        let stops = self.nav_stops.borrow().clone();
+        if stops.is_empty() {
+            return false;
+        }
+        let focused = gtk::prelude::GtkWindowExt::focus(&self.window);
+        // Which stop the focus is in, rather than which stop it is: focus on
+        // a button inside a stop still counts as being there.
+        let at = focused.and_then(|widget| {
+            stops.iter().position(|stop| {
+                *stop == widget || stop.is_ancestor(&widget) || widget.is_ancestor(stop)
+            })
+        });
+        let next = match at {
+            Some(at) => (at as isize + delta).rem_euclid(stops.len() as isize) as usize,
+            // Nowhere in particular yet: forwards starts at the beginning,
+            // backwards at the end.
+            None if delta > 0 => 0,
+            None => stops.len() - 1,
+        };
+        if let Some(stop) = stops.get(next) {
+            self.sounds.borrow().click();
+            stop.grab_focus();
+        }
+        true
+    }
+
+    /// Moves between two lists sitting side by side, and does nothing
+    /// anywhere else: left and right are for the panes of the browser, not a
+    /// second way to reach the buttons.
+    fn move_between_lists(self: &Rc<Self>, delta: isize) -> bool {
+        let stops = self.nav_stops.borrow().clone();
+        let Some(focused) = gtk::prelude::GtkWindowExt::focus(&self.window) else {
+            return false;
+        };
+        let Some(at) = stops.iter().position(|stop| {
+            *stop == focused || stop.is_ancestor(&focused) || focused.is_ancestor(stop)
+        }) else {
+            return false;
+        };
+        if !stops[at].is::<gtk::ListBox>() {
+            return false;
+        }
+        let next = at as isize + delta;
+        if next < 0 || next as usize >= stops.len() {
+            return false;
+        }
+        let next = &stops[next as usize];
+        if !next.is::<gtk::ListBox>() {
+            return false;
+        }
+        self.sounds.borrow().click();
+        next.grab_focus();
+        true
     }
 
     /// Makes a list the one the gamepad drives whenever it holds the focus.
@@ -4031,6 +4161,11 @@ impl App {
         // down one side of the screen.
         places.set_hexpand(false);
         listing.set_hexpand(true);
+
+        // Handed to set_nav, which puts it in the order ahead of the listing
+        // it sits left of, and driven by the same keys once it has focus.
+        *self.nav_side_list.borrow_mut() = Some(list.clone());
+        self.wire_arrows(list.upcast_ref());
 
         // Up from the top of the column reaches the trail above it, the same
         // way it does from the listing.
@@ -4196,7 +4331,9 @@ impl App {
             });
         }
 
-        self.wire_navigation(&list, &crumb_buttons, &[choose.clone(), cancel.clone()]);
+        // Same order they are laid out in, or moving between them runs
+        // backwards against what is on screen.
+        self.wire_navigation(&list, &crumb_buttons, &[cancel.clone(), choose.clone()]);
         *self.screen.borrow_mut() = Screen::KodiFolder;
         self.window.set_child(Some(&self.modal(&page)));
         if let Some(row) = list.row_at_index(0) {
@@ -4339,18 +4476,10 @@ impl App {
             });
         }
 
-        // Marked with whatever this Kodi is already set to, so re-running the
-        // setup shows what is in force rather than a default.
-        let current = self
-            .draft_userdata()
-            .map(|userdata| {
-                crate::kodi_setup::reads_as_playing(&userdata.join("playercorefactory.xml"))
-            })
-            .unwrap_or(false);
-        if let Some(row) = list.row_at_index(if current { 0 } else { 1 }) {
-            row.add_css_class("tp-current");
-        }
-
+        // Nothing is marked as current here. The absence of --play reads as
+        // "show the menu", so an unconfigured Kodi - the ordinary case on the
+        // way through this wizard - marked that row every time, presenting a
+        // default as though it were a setting already in force.
         self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
         *self.screen.borrow_mut() = Screen::KodiHandover;
         self.window.set_child(Some(&page));
@@ -4370,6 +4499,20 @@ impl App {
         }
     }
 
+    /// Back out of the summary onto whichever screen led to it: the manual
+    /// step where the installation needs one, and the handover question where
+    /// it does not. Chosen the same way the forward path chooses, so a Back
+    /// press cannot land somewhere the viewer never came through.
+    fn show_kodi_back_from_summary(self: &Rc<Self>) {
+        let confinement = self
+            .draft_userdata()
+            .map(|userdata| crate::kodi_setup::setup_at(userdata).confinement);
+        match confinement.and_then(crate::kodi_setup::manual_step) {
+            Some(manual) => self.show_kodi_manual(manual),
+            None => self.show_kodi_handover(),
+        }
+    }
+
     /// Something TinePlayer cannot do for you, and will not do quietly.
     /// Continuing is what says it has been done.
     fn show_kodi_manual(self: &Rc<Self>, manual: crate::kodi_setup::ManualStep) {
@@ -4381,13 +4524,16 @@ impl App {
 
         let back = {
             let app = self.clone();
-            move || app.show_kodi_how()
+            move || app.show_kodi_handover()
         };
         let app = self.clone();
         self.show_kodi_dialog(
             "One thing to do yourself",
             &lines,
-            "Continue",
+            Confirm {
+                label: "Continue",
+                destructive: false,
+            },
             Screen::KodiManual,
             back,
             move || app.show_kodi_summary(),
@@ -4440,13 +4586,16 @@ impl App {
 
         let back = {
             let app = self.clone();
-            move || app.show_kodi_how()
+            move || app.show_kodi_back_from_summary()
         };
         let app = self.clone();
         self.show_kodi_dialog(
             "Confirm Configuration",
             &lines.iter().map(String::as_str).collect::<Vec<_>>(),
-            "Configure",
+            Confirm {
+                label: "Configure",
+                destructive: false,
+            },
             Screen::KodiSummary,
             back,
             move || app.apply_kodi_draft(),
@@ -4559,7 +4708,7 @@ impl App {
         self: &Rc<Self>,
         title: &str,
         lines: &[&str],
-        confirm_label: &str,
+        confirm: Confirm<'_>,
         screen: Screen,
         back: impl Fn() + 'static,
         action: impl Fn() + 'static,
@@ -4577,11 +4726,19 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
+        // The red is a warning, so it belongs on whichever button does the
+        // damage. Backing out of something destructive is the safe choice and
+        // should not be the one painted like a hazard.
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
-        let confirm = gtk::Button::with_label(confirm_label);
+        let destructive = confirm.destructive;
+        let confirm = gtk::Button::with_label(confirm.label);
         confirm.add_css_class("tp-button");
+        if destructive {
+            confirm.add_css_class("tp-cancel");
+        } else {
+            cancel.add_css_class("tp-cancel");
+        }
         row.append(&cancel);
         row.append(&confirm);
         page.append(&row);
@@ -5326,6 +5483,11 @@ fn list_page_with(
         .vexpand(true)
         .child(&list)
         .build();
+    // Tab has to land on the list itself. The rows cannot take focus, and a
+    // ScrolledWindow will take it to scroll with the arrow keys, so without
+    // this the stop is the scroller and every key goes to it instead.
+    scroller.set_focusable(false);
+    list.set_focusable(true);
     page.append(&scroller);
 
     (page, list, back, slot)
@@ -5428,6 +5590,14 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
     list.append(child);
     if let Some(row) = child.as_ref().parent().and_downcast::<gtk::ListBoxRow>() {
         name_it(&row, name);
+        // The list is one stop in the tab order, not one per row. A folder of
+        // two hundred files is otherwise two hundred presses between you and
+        // the button below it, which is the difference between usable and
+        // not for anyone who navigates by Tab.
+        //
+        // Arrow keys move within the list instead, which is the ordinary
+        // arrangement for a list widget and what a screen reader expects.
+        row.set_focusable(false);
     }
 }
 
@@ -5480,6 +5650,17 @@ fn volume_label(level: f64, muted: bool) -> String {
 /// Every field is optional because the wizard fills them in one screen at a
 /// time, and none of it has been written to Kodi: dropping this is what
 /// Cancel does, and it costs nothing.
+/// The go-ahead button on a dialog: what it says, and whether pressing it
+/// destroys something.
+///
+/// The two travel together because the second decides which button wears the
+/// warning colour, and answering one without the other is what produced a red
+/// Cancel sitting beside a plain Remove.
+struct Confirm<'a> {
+    label: &'a str,
+    destructive: bool,
+}
+
 #[derive(Default)]
 struct KodiDraft {
     userdata: Option<std::path::PathBuf>,
@@ -5691,7 +5872,12 @@ fn about_text(text: &str) -> gtk::Label {
 /// So the scroll is done by hand, and not until the row has been mapped -
 /// which is the point at which it knows where it is.
 fn settle_on(row: &gtk::ListBoxRow) {
-    row.grab_focus();
+    // The list takes the focus, since the row cannot. Selection is what says
+    // which row you are on, and the stylesheet draws it only while the list
+    // holds focus, so the two together read exactly as before.
+    if let Some(list) = row.parent().and_downcast::<gtk::ListBox>() {
+        list.grab_focus();
+    }
     // Setting the window's child maps the new page there and then, so by the
     // time a screen picks its row the row is usually mapped already and
     // waiting for the signal would be waiting forever. Only the first screen

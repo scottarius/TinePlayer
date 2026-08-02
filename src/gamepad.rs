@@ -34,6 +34,11 @@ pub enum Action {
     SubtitlesReleased,
     PageUp,
     PageDown,
+    /// The next or previous thing worth stopping on, which is what Tab does
+    /// on a keyboard: out of a list and onto the buttons, rather than another
+    /// step within it.
+    FocusNext,
+    FocusPrevious,
     PlayPause,
     Fullscreen,
     Subtitles,
@@ -127,8 +132,14 @@ fn button_action(button: Button) -> Option<Action> {
         Button::West => Some(Action::Subtitles),
         // Shoulder buttons jump a screenful, which is what makes a folder of
         // a hundred films navigable one press at a time.
-        Button::LeftTrigger => Some(Action::PageUp),
-        Button::RightTrigger => Some(Action::PageDown),
+        // The bumpers move between elements and the triggers move by the
+        // page, which puts the coarser jump on the harder pull. gilrs names
+        // the bumpers LeftTrigger and the triggers LeftTrigger2, which reads
+        // backwards but is what the crate calls them.
+        Button::LeftTrigger => Some(Action::FocusPrevious),
+        Button::RightTrigger => Some(Action::FocusNext),
+        Button::LeftTrigger2 => Some(Action::PageUp),
+        Button::RightTrigger2 => Some(Action::PageDown),
         Button::Start => Some(Action::PlayPause),
         // Clicking the right stick: a deliberate press that nothing else
         // wants, for a readout somebody either cares about or never touches.

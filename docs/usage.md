@@ -91,9 +91,10 @@ Everything is reachable with a keyboard or a gamepad. A mouse is not required, b
 | Key | Gamepad | Action                                |
 | --- | --- |---------------------------------------|
 | Arrow keys | <kbd>D-pad</kbd> or <kbd>Left stick</kbd> | Navigate the UI                       |
-| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | <kbd>LB</kbd> <kbd>RB</kbd> / <kbd>L1</kbd> <kbd>R1</kbd> | Jump a screenful, for long folders    |
+| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | <kbd>LT</kbd> <kbd>RT</kbd> / <kbd>L2</kbd> <kbd>R2</kbd> | Page up or down a scrollable list     |
+| <kbd>Tab</kbd> <kbd>Shift</kbd>+<kbd>Tab</kbd> | <kbd>RB</kbd> <kbd>LB</kbd> / <kbd>R1</kbd> <kbd>L1</kbd> | Move to next / previous UI element    |
 | <kbd>Enter</kbd> | <kbd>A</kbd> / <kbd>Cross</kbd> | Select                                |
-| <kbd>Esc</kbd> | <kbd>B</kbd> / <kbd>Circle</kbd> | Back one screen                       |
+| <kbd>Esc</kbd> | <kbd>B</kbd> / <kbd>Circle</kbd> | Cancel / Back                         |
 | <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser, from main menu |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL, from main menu   |
 

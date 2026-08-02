@@ -446,18 +446,6 @@ fn confinement_of(userdata: &Path) -> Confinement {
     }
 }
 
-/// Whether the entry in a file asks TinePlayer to start playing, so the wizard
-/// can open on what is already set rather than on a default.
-pub fn reads_as_playing(file: &Path) -> bool {
-    std::fs::read_to_string(file)
-        .map(|xml| {
-            xml.lines()
-                .filter(|line| line.contains("<args>") && line.contains("--kodi"))
-                .any(|line| line.contains("--play"))
-        })
-        .unwrap_or(false)
-}
-
 /// What a file says about us: whether our player is in it, and whether a rule
 /// hands it everything.
 fn read_state(xml: &str) -> Registration {
@@ -993,28 +981,6 @@ mod tests {
         let menu = args_of(&insert(FOREIGN, &direct(), false).unwrap());
         assert!(menu.contains("--kodi</args>"));
         assert!(!menu.contains("--play"));
-    }
-
-    /// Reading a file back says which way it was set up, so re-running the
-    /// setup can show what is in force.
-    #[test]
-    fn a_written_file_reports_its_handover() {
-        let dir = std::env::temp_dir().join(format!("tine-handover-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("playercorefactory.xml");
-
-        let playing = Launch {
-            filename: "/opt/tineplayer".to_string(),
-            prefix: String::new(),
-            play: true,
-        };
-        std::fs::write(&file, insert(FOREIGN, &playing, false).unwrap()).unwrap();
-        assert!(reads_as_playing(&file));
-
-        std::fs::write(&file, insert(FOREIGN, &direct(), false).unwrap()).unwrap();
-        assert!(!reads_as_playing(&file));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Which Kodi we are looking at is worked out from where its settings are,
