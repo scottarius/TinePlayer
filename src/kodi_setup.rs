@@ -29,6 +29,8 @@ const TEMPLATE: &str = include_str!("../data/templates/playercorefactory.xml");
 /// arguments to get from there to TinePlayer.
 const PLACEHOLDER: &str = "TINEPLAYER_BINARY";
 const PLACEHOLDER_ARGS: &str = "TINEPLAYER_LAUNCH";
+/// Where `--play` goes, or nothing when Kodi should hand over to the menu.
+const PLACEHOLDER_PLAY: &str = "TINEPLAYER_PLAY";
 
 /// The Flatpak application id, which is how a Flatpak build is started from
 /// outside its own sandbox. Matches the id in `main.rs` and the manifest.
@@ -274,6 +276,8 @@ struct Launch {
     /// is not empty. Everything between starting that program and it being
     /// TinePlayer receiving a file.
     prefix: String,
+    /// Whether Kodi's hand-off should start the film or open the menu.
+    play: bool,
 }
 
 impl Launch {
@@ -281,6 +285,7 @@ impl Launch {
     fn fill(&self, xml: &str) -> String {
         xml.replace(PLACEHOLDER, &self.filename)
             .replace(PLACEHOLDER_ARGS, &self.prefix)
+            .replace(PLACEHOLDER_PLAY, if self.play { " --play" } else { "" })
     }
 }
 
@@ -441,6 +446,18 @@ fn confinement_of(userdata: &Path) -> Confinement {
     }
 }
 
+/// Whether the entry in a file asks TinePlayer to start playing, so the wizard
+/// can open on what is already set rather than on a default.
+pub fn reads_as_playing(file: &Path) -> bool {
+    std::fs::read_to_string(file)
+        .map(|xml| {
+            xml.lines()
+                .filter(|line| line.contains("<args>") && line.contains("--kodi"))
+                .any(|line| line.contains("--play"))
+        })
+        .unwrap_or(false)
+}
+
 /// What a file says about us: whether our player is in it, and whether a rule
 /// hands it everything.
 fn read_state(xml: &str) -> Registration {
@@ -479,11 +496,12 @@ fn read_state(xml: &str) -> Registration {
 /// searches there for libraries first - so GStreamer's DLLs lose to Kodi's
 /// copies and the player dies before `main`. With the libraries beside the
 /// executable there is nothing to lose to.
-fn launch(confinement: Confinement) -> Result<Launch, String> {
+fn launch(confinement: Confinement, play: bool) -> Result<Launch, String> {
     let launch = if we_are_flatpak() {
         Launch {
             filename: "flatpak".to_string(),
             prefix: format!("run {FLATPAK_ID} "),
+            play,
         }
     } else {
         let exe = std::env::current_exe()
@@ -510,6 +528,7 @@ fn launch(confinement: Confinement) -> Result<Launch, String> {
         Launch {
             filename: exe.display().to_string(),
             prefix: String::new(),
+            play,
         }
     };
 
@@ -535,6 +554,7 @@ fn escape_from(launch: Launch, confinement: Confinement) -> Launch {
             // the runtime and always exactly here.
             prefix: format!("--host {} {}", launch.filename, launch.prefix),
             filename: "/usr/bin/flatpak-spawn".to_string(),
+            play: launch.play,
         },
     }
 }
@@ -737,18 +757,26 @@ fn back_up(file: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// Sets Kodi up, or takes us back out of it. Returns what to tell the viewer.
-pub fn apply(setup: &Setup, want: Registration, backup: Option<&Path>) -> Result<String, String> {
+pub fn apply(
+    setup: &Setup,
+    want: Registration,
+    backup: Option<&Path>,
+    play: bool,
+) -> Result<String, String> {
     let existing = std::fs::read_to_string(&setup.file).ok();
 
     let xml = match (&existing, want) {
         (Some(existing), Registration::Absent) => remove_from(existing)?,
         (Some(existing), _) => insert(
             existing,
-            &launch(setup.confinement)?,
+            &launch(setup.confinement, play)?,
             want == Registration::Default,
         )?,
         (None, Registration::Absent) => return Ok("Kodi was not set up to begin with.".to_string()),
-        (None, _) => fresh(&launch(setup.confinement)?, want == Registration::Default),
+        (None, _) => fresh(
+            &launch(setup.confinement, play)?,
+            want == Registration::Default,
+        ),
     };
 
     // Nothing to do, so nothing done: no write, and above all no backup.
@@ -811,6 +839,7 @@ mod tests {
         Launch {
             filename: "/opt/tineplayer".to_string(),
             prefix: String::new(),
+            play: false,
         }
     }
 
@@ -871,6 +900,7 @@ mod tests {
         Launch {
             filename: "flatpak".to_string(),
             prefix: format!("run {FLATPAK_ID} "),
+            play: false,
         }
     }
 
@@ -934,6 +964,57 @@ mod tests {
             let added = insert(FOREIGN, &launch, true).unwrap();
             assert_eq!(remove_from(&added).unwrap(), FOREIGN);
         }
+    }
+
+    /// The hand-over choice has to reach Kodi's arguments, and has to be
+    /// absent rather than false when the menu is wanted: there is no
+    /// --no-play, so writing nothing is what says "show the menu".
+    #[test]
+    fn the_handover_choice_lands_in_the_arguments() {
+        let playing = Launch {
+            filename: "/opt/tineplayer".to_string(),
+            prefix: String::new(),
+            play: true,
+        };
+        // The arguments line rather than the whole file: the player element
+        // carries a comment explaining how to add the flag by hand, so the
+        // string appears either way and only its place in <args> means
+        // anything.
+        let args_of = |xml: &str| -> String {
+            xml.lines()
+                .find(|line| line.contains("<args>"))
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        let playing = args_of(&insert(FOREIGN, &playing, false).unwrap());
+        assert!(playing.contains("--kodi --play</args>"));
+
+        let menu = args_of(&insert(FOREIGN, &direct(), false).unwrap());
+        assert!(menu.contains("--kodi</args>"));
+        assert!(!menu.contains("--play"));
+    }
+
+    /// Reading a file back says which way it was set up, so re-running the
+    /// setup can show what is in force.
+    #[test]
+    fn a_written_file_reports_its_handover() {
+        let dir = std::env::temp_dir().join(format!("tine-handover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("playercorefactory.xml");
+
+        let playing = Launch {
+            filename: "/opt/tineplayer".to_string(),
+            prefix: String::new(),
+            play: true,
+        };
+        std::fs::write(&file, insert(FOREIGN, &playing, false).unwrap()).unwrap();
+        assert!(reads_as_playing(&file));
+
+        std::fs::write(&file, insert(FOREIGN, &direct(), false).unwrap()).unwrap();
+        assert!(!reads_as_playing(&file));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Which Kodi we are looking at is worked out from where its settings are,

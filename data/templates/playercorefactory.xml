@@ -1,53 +1,84 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Offers TinePlayer to Kodi as an external player. Written into Kodi's userdata
-  directory by TinePlayer itself, under Settings, which puts a real command in
-  place of the two placeholders below.
+  Offers TinePlayer to Kodi as an external player, fully commented.
 
-  What that command is depends on how both programs were installed, so there
-  are two placeholders rather than one. A build from source is run directly,
-  by path. A Flatpak cannot be, because the path inside the sandbox means
-  nothing outside it, so it is run as "flatpak run app.tineplayer.TinePlayer".
-  And if Kodi is itself a Flatpak, whichever of those it is has to be handed
-  to flatpak-spawn --host first, because Kodi would otherwise start the player
-  inside its own sandbox - where there is no GTK, and no sight of your files.
+  TinePlayer writes this file for you: open Settings and choose Kodi, which is
+  the easier route. This copy is for setting it up by hand, or for merging into
+  a playercorefactory.xml that already configures other players.
 
-  This is the template the application consumes, so it keeps the placeholders
-  and the RULES markers it cuts on. examples/playercorefactory.xml says the
-  same thing to people rather than to a program, with the settings explained
-  and nothing to substitute, and wants changing alongside this one.
+  Put it in Kodi's userdata directory and restart Kodi:
 
-  Kodi launches the player, waits for it to exit, then carries on. It passes
-  only the file, as {1}, so TinePlayer's own resume position and remembered
-  track choices are what apply.
+    Linux:    ~/.kodi/userdata/playercorefactory.xml
+    Windows:  %APPDATA%\Kodi\userdata\playercorefactory.xml
 
-  Without the rules block at the end, Kodi keeps playing videos itself and
-  TinePlayer appears under "Play using..." in a video's context menu. With it,
-  TinePlayer becomes the default for every video. TinePlayer includes that
-  block only when asked to be the default player.
+  Kodi has no interface for any of this, which is why the file is edited by
+  hand at all.
 -->
 <playercorefactory>
   <players>
     <player name="TinePlayer" type="ExternalPlayer" audio="false" video="true">
+      <!-- The full path to the player.
+
+           An installed TinePlayer is pointed at directly on every platform:
+           TinePlayer.exe on Windows, TinePlayer inside the .app bundle on
+           macOS, /usr/bin/tineplayer on Linux.
+
+           A build from source on Windows may need launch-tineplayer-windows.cmd,
+           at the top of the source tree, rather than the executable. 
+
+           If Kodi itself is a Flatpak, none of the above is reachable from
+           inside its sandbox. Use /usr/bin/flatpak-spawn here, and begin the
+           args below with --host and then the path. Kodi also needs
+           permission for that; see docs/integrations.md. -->
       <filename>TINEPLAYER_BINARY</filename>
-      <args>TINEPLAYER_LAUNCH"{1}" --fullscreen --kodi</args>
+
+      <!-- {1} is the video Kodi wants played, and is the only substitution
+           Kodi makes here.
+
+           The fullscreen flag suits a television. Drop it to play in a window.
+
+           The kodi flag is what tells TinePlayer that Kodi launched it, rather
+           than it being guessed at: it takes the resume position from Kodi's
+           library, reports progress back while playing, and leaves choosing
+           the video to Kodi. Without it the player still works, but the two
+           keep separate ideas of where you are in a film.
+           
+           Add --play to have the film start as soon as Kodi
+           hands it over, using the tracks remembered for that video or your
+           language preferences. Without it TinePlayer opens its own menu so
+           the audio tracks and subtitles can be chosen for each video. -->
+      <args>TINEPLAYER_LAUNCH"{1}" --fullscreen --kodiTINEPLAYER_PLAY</args>
+
       <!-- Gets Kodi out of the way while the film plays, which matters on a
            television where both are fullscreen. -->
       <hidexbmc>true</hidexbmc>
-      <!-- On Windows the player is started through a small script, which would
-           otherwise sit on screen as a console window for the whole film.
-           Ignored on Linux, where the player is started directly. -->
+
+      <!-- Windows only, and only relevant when filename points at the launcher
+           script above: without this its console window sits on screen for the
+           whole film. Ignored on Linux. -->
       <hideconsole>true</hideconsole>
-      <!-- Stops Kodi writing its own progress when the player exits, which it
-           does knowing only how long the player ran, not where it got to. Past
-           this many seconds it marks the video fully watched and drops the
-           resume point; the default of 10 threw away the real position after
-           any real viewing. Below it Kodi saves nothing at all, which is what
-           we want, because TinePlayer reports the actual position and watched
-           state itself while playing. Set beyond any possible running time. -->
+
+      <!-- How long the player must run before Kodi marks the video watched
+           itself, deliberately set beyond any possible running time.
+
+           Kodi only knows how long the player ran, not where it got to, so
+           when the player exits it just writes a bookmark saying "watched" or
+           nothing at all.
+
+           With this value, Kodi doesn't set watch percentage itself and 
+           allows TinePlayer to report the correct values, as long as the
+           kodi flag was passed as described above. -->
       <playcountminimumtime>2147483647</playcountminimumtime>
     </player>
   </players>
+  <!-- Without a rules block, Kodi goes on playing video itself and TinePlayer
+       appears under "Play using..." in a video's context menu.
+
+       Uncomment this to send every video to TinePlayer instead. Worth knowing:
+       on Kodi 20 and earlier "Play using..." only appears under Videos → Files
+       and never in the Movies or TV Shows libraries, so this is the practical
+       choice there. -->
+  
 <!-- RULES START -->
   <rules action="prepend">
     <!-- Video only: music and everything else stay with Kodi's own player. -->

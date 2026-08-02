@@ -131,6 +131,7 @@ enum Screen {
     KodiChoose,
     KodiFolder,
     KodiHow,
+    KodiHandover,
     KodiManual,
     KodiSummary,
     KodiConfirm,
@@ -169,6 +170,8 @@ pub struct Launch {
     pub external: bool,
     /// That something else is Kodi, which can also be talked to.
     pub kodi: bool,
+    /// Start playing rather than opening the menu.
+    pub play: bool,
 }
 
 /// Everything the menu can act on. Devices persist to the config file;
@@ -301,6 +304,7 @@ impl App {
             locked_fullscreen,
             external,
             kodi,
+            play,
         } = launch;
         let dark = appearance::apply_theme(config.theme);
         suppress_error_bell();
@@ -442,72 +446,89 @@ impl App {
             None => None,
         };
 
-        // Command-line track choices go straight to playback, but only when
-        // there's actually somewhere to play them.
-        let ready = app.config.borrow().primary_sink.is_some();
-        match preset {
-            Some(preset) if ready && app.file.borrow().is_some() => {
-                let resolve = |spec: Option<&str>| -> Option<u32> {
-                    let spec = spec?;
-                    match crate::probe::resolve_audio(spec, &app.tracks.borrow()) {
-                        Ok(choice) => choice,
-                        // Reported rather than obeyed silently, the same way a
-                        // subtitle that cannot be resolved is: playing the
-                        // wrong track is not what was asked for either.
-                        Err(e) => {
-                            eprintln!("{e}");
-                            None
-                        }
-                    }
-                };
-                *app.primary_track.borrow_mut() = resolve(preset.primary.as_deref());
-                *app.secondary_track.borrow_mut() = resolve(preset.secondary.as_deref());
-
-                // Only touched when asked for, so a video's remembered
-                // subtitle survives being launched with audio flags alone.
-                if let Some(spec) = preset.subtitle.as_deref() {
-                    // The languages actually going to the outputs, so a mode
-                    // like "primary_forced" means the same on the command line
-                    // as it does in the settings.
-                    let language_of = |index: Option<u32>| {
-                        index.and_then(|index| {
-                            app.tracks
-                                .borrow()
-                                .iter()
-                                .find(|track| track.index == index)
-                                .map(|track| track.language.clone())
-                        })
-                    };
-                    let primary = language_of(*app.primary_track.borrow());
-                    let secondary = language_of(*app.secondary_track.borrow());
-                    match crate::subtitles::resolve(
-                        spec,
-                        &app.subtitle_options.borrow(),
-                        primary.as_deref(),
-                        secondary.as_deref(),
-                    ) {
-                        Ok(choice) => *app.subtitle.borrow_mut() = choice,
-                        // Reported rather than obeyed silently: playing with
-                        // the wrong subtitles, or none, is not what was asked
-                        // for either way.
-                        Err(e) => eprintln!("{e}"),
+        // Track choices from the command line are applied whether or not
+        // playback is starting. Without --play they simply arrive already
+        // made, so the menu opens on them and they can be checked before
+        // pressing Play.
+        if let Some(preset) = preset.as_ref()
+            && app.file.borrow().is_some()
+        {
+            let resolve = |spec: Option<&str>| -> Option<u32> {
+                let spec = spec?;
+                match crate::probe::resolve_audio(spec, &app.tracks.borrow()) {
+                    Ok(choice) => choice,
+                    // Reported rather than obeyed silently, the same way a
+                    // subtitle that cannot be resolved is: playing the
+                    // wrong track is not what was asked for either.
+                    Err(e) => {
+                        eprintln!("{e}");
+                        None
                     }
                 }
-                app.start_playback(app.restart);
+            };
+            *app.primary_track.borrow_mut() = resolve(preset.primary.as_deref());
+            *app.secondary_track.borrow_mut() = resolve(preset.secondary.as_deref());
+
+            // Only touched when asked for, so a video's remembered
+            // subtitle survives being launched with audio flags alone.
+            if let Some(spec) = preset.subtitle.as_deref() {
+                // The languages actually going to the outputs, so a mode
+                // like "primary_forced" means the same on the command line
+                // as it does in the settings.
+                let language_of = |index: Option<u32>| {
+                    index.and_then(|index| {
+                        app.tracks
+                            .borrow()
+                            .iter()
+                            .find(|track| track.index == index)
+                            .map(|track| track.language.clone())
+                    })
+                };
+                let primary = language_of(*app.primary_track.borrow());
+                let secondary = language_of(*app.secondary_track.borrow());
+                match crate::subtitles::resolve(
+                    spec,
+                    &app.subtitle_options.borrow(),
+                    primary.as_deref(),
+                    secondary.as_deref(),
+                ) {
+                    Ok(choice) => *app.subtitle.borrow_mut() = choice,
+                    // Reported rather than obeyed silently: playing with
+                    // the wrong subtitles, or none, is not what was asked
+                    // for either way.
+                    Err(e) => eprintln!("{e}"),
+                }
             }
+        }
+
+        match (&unopenable, &config_problem) {
             // Nothing to choose from if the video could not be read, so the
             // reason is shown instead of an empty menu.
             //
             // The video comes first when both went wrong: it is what someone
             // asked for, and settings that failed to load can be seen for
             // themselves in the menu behind.
-            _ => match (&unopenable, &config_problem) {
-                (Some((source, error)), _) => app.show_source_error(source, error, true),
-                // Not fatal: Back lands in the menu, which is where the
-                // settings would be put right.
-                (None, Some(problem)) => app.show_error(problem, false),
-                (None, None) => app.show_menu(),
-            },
+            (Some((source, error)), _) => app.show_source_error(source, error, true),
+            // Not fatal: Back lands in the menu, which is where the settings
+            // would be put right.
+            (None, Some(problem)) => app.show_error(problem, false),
+            // Asked for outright rather than inferred. Refused out loud when
+            // there is nowhere to play to, since silently showing the menu
+            // instead would leave a launcher waiting on a film that never
+            // started, with nothing said about why.
+            (None, None) if play => {
+                if app.config.borrow().primary_sink.is_some() {
+                    app.start_playback(app.restart);
+                } else {
+                    app.show_error(
+                        "No audio output has been chosen yet, so there is nowhere to play.
+
+                         Choose one under Settings, or run with --list-devices and set                          primary_sink in config.yaml.",
+                        false,
+                    );
+                }
+            }
+            (None, None) => app.show_menu(),
         }
 
         window.present();
@@ -729,7 +750,8 @@ impl App {
             Screen::KodiChoose | Screen::KodiConfirm | Screen::KodiDone => self.show_kodi(),
             Screen::KodiFolder => self.show_kodi_choose(),
             Screen::KodiHow => self.show_kodi_choose(),
-            Screen::KodiManual | Screen::KodiSummary => self.show_kodi_how(),
+            Screen::KodiHandover => self.show_kodi_how(),
+            Screen::KodiManual | Screen::KodiSummary => self.show_kodi_handover(),
             Screen::KodiError => self.show_kodi_summary(),
             // Nothing to go back to when the video we were started for could
             // not be opened.
@@ -3774,6 +3796,7 @@ impl App {
                     &setup,
                     crate::kodi_setup::Registration::Absent,
                     None,
+                    false,
                 ) {
                     Ok(_) => {
                         // A folder named by hand is only worth remembering
@@ -4233,7 +4256,7 @@ impl App {
                 app.sounds.borrow().click();
                 if let Some((_, _, want)) = choices.get(row.index() as usize) {
                     app.with_draft(|draft| draft.want = Some(*want));
-                    app.show_kodi_manual_or_summary();
+                    app.show_kodi_handover();
                 }
             });
         }
@@ -4247,6 +4270,76 @@ impl App {
 
         self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
         *self.screen.borrow_mut() = Screen::KodiHow;
+        self.window.set_child(Some(&page));
+        Self::open_on_first_usable(&list, &back);
+    }
+
+    /// What should happen when Kodi hands a video over: start the film, or
+    /// open the menu so the tracks can be chosen for it.
+    ///
+    /// Worth asking rather than assuming. A television with one pair of
+    /// headphones on it wants the film to start; a household that picks
+    /// different languages each time wants the menu. The answer is written as
+    /// `--play` in Kodi's own configuration, so it can be changed there by
+    /// hand afterwards as well.
+    fn show_kodi_handover(self: &Rc<Self>) {
+        if self.draft_userdata().is_none() {
+            return self.show_kodi();
+        }
+        let (page, list, back, _slot) = list_page("When TinePlayer Starts", true);
+
+        let choices = [
+            (
+                "Play Video",
+                "Play video right away with default options",
+                true,
+            ),
+            (
+                "Show the Menu",
+                "Choose the audio tracks and subtitles for each video",
+                false,
+            ),
+        ];
+        for (label, value, _) in &choices {
+            append_named(
+                &list,
+                &menu_row(label, value, true),
+                &row_name(label, value),
+            );
+        }
+
+        {
+            let app = self.clone();
+            list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                if let Some((_, _, play)) = choices.get(row.index() as usize) {
+                    app.with_draft(|draft| draft.play = *play);
+                    app.show_kodi_manual_or_summary();
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_kodi_how();
+            });
+        }
+
+        // Marked with whatever this Kodi is already set to, so re-running the
+        // setup shows what is in force rather than a default.
+        let current = self
+            .draft_userdata()
+            .map(|userdata| {
+                crate::kodi_setup::reads_as_playing(&userdata.join("playercorefactory.xml"))
+            })
+            .unwrap_or(false);
+        if let Some(row) = list.row_at_index(if current { 0 } else { 1 }) {
+            row.add_css_class("tp-current");
+        }
+
+        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        *self.screen.borrow_mut() = Screen::KodiHandover;
         self.window.set_child(Some(&page));
         Self::open_on_first_usable(&list, &back);
     }
@@ -4293,6 +4386,11 @@ impl App {
         let Some((userdata, want)) = self.draft_parts() else {
             return self.show_kodi();
         };
+        let play = self
+            .kodi_draft
+            .borrow()
+            .as_ref()
+            .is_some_and(|draft| draft.play);
         let setup = crate::kodi_setup::setup_at(userdata);
 
         // Settled here rather than at write time, because this screen names
@@ -4318,6 +4416,14 @@ impl App {
             lines.push(format!("Backup file: {}", name.to_string_lossy()));
         }
         lines.push(format!("Add TinePlayer as {}", want.describe()));
+        lines.push(
+            if play {
+                "Start playing when Kodi hands a video over"
+            } else {
+                "Open the menu when Kodi hands a video over"
+            }
+            .to_string(),
+        );
 
         let back = {
             let app = self.clone();
@@ -4347,7 +4453,12 @@ impl App {
             .borrow()
             .as_ref()
             .and_then(|draft| draft.backup_to.clone());
-        match crate::kodi_setup::apply(&setup, want, backup_to.as_deref()) {
+        let play = self
+            .kodi_draft
+            .borrow()
+            .as_ref()
+            .is_some_and(|draft| draft.play);
+        match crate::kodi_setup::apply(&setup, want, backup_to.as_deref(), play) {
             Ok(_) => {
                 // A folder named by hand is worth keeping track of now that
                 // something is set up in it, so it can be found again to
@@ -5360,6 +5471,9 @@ fn volume_label(level: f64, muted: bool) -> String {
 struct KodiDraft {
     userdata: Option<std::path::PathBuf>,
     want: Option<crate::kodi_setup::Registration>,
+    /// Whether Kodi's hand-off should start the film rather than open the
+    /// menu. Written as `--play` in Kodi's arguments.
+    play: bool,
     /// The exact file a backup would be copied to, settled when the summary
     /// names it so that what was promised is what gets written.
     backup_to: Option<std::path::PathBuf>,

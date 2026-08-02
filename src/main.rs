@@ -71,6 +71,15 @@ struct Args {
     #[arg(long, value_name = "S")]
     subtitle: Option<String>,
 
+    /// Start playing straight away, without the menu. Needs a FILE and a
+    /// primary output device already set
+    // Deliberately its own flag rather than inferred from the track options
+    // being present: "did the user want the menu" is a question those options
+    // cannot answer, and guessing it meant --primary alone silently skipped
+    // the menu while --fullscreen alone did not.
+    #[arg(long, requires = "file")]
+    play: bool,
+
     /// Print the file's audio tracks and subtitles with their numbers
     #[arg(long)]
     list_tracks: bool,
@@ -559,6 +568,7 @@ fn main() -> std::process::ExitCode {
         // remembered preference does not count - only being told so here.
         let locked_fullscreen = args.fullscreen && external;
         let kodi = args.kodi;
+        let play = args.play;
         gtk_app.connect_activate(move |gtk_app| {
             // A second launch arrives here, in the process already running.
             // Raising what is open is the whole of the answer: no error, no
@@ -578,6 +588,7 @@ fn main() -> std::process::ExitCode {
                     locked_fullscreen,
                     external,
                     kodi,
+                    play,
                 },
                 config_problem.clone(),
             );

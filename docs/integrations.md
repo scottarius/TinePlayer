@@ -80,13 +80,28 @@ configured.
 **Add Configuration** starts the configuration wizard with the 
 following steps:
 
-1. **Choose a Kodi Installation.** Choose one of the detected installs. 
-   Picking one that is already configured will update it's configuration.
-   If yours is somewhere unusual, **Custom install
-   location** opens a folder browser to point at Kodi's `userdata` folder.
-2. **How to Configure.** Default Player or Optional Player, as above.
-3. **Confirm Configuration.** Shows the file that will be changed, the backup that
-   will be kept, and what will be added. Choose **Configure** to write the configuration.
+1. **Choose a Kodi Installation**
+
+   Choose one of the detected installs. Picking one that is already configured
+   will update its configuration. If yours is somewhere unusual, **Custom
+   install location** opens a folder browser to point at Kodi's `userdata`
+   folder.
+
+2. **How to Configure**
+
+   Default Player or Optional Player, as above.
+
+3. **When TinePlayer Starts**
+
+   **Play Video** starts the film right away, using the tracks remembered for
+   that video or your language preferences. **Show the Menu** opens
+   TinePlayer's menu so the audio tracks and subtitles can be chosen for each
+   video.
+
+4. **Confirm Configuration**
+
+   Shows the file that will be changed, the backup that will be kept, and what
+   will be added. Choose **Configure** to write the configuration.
 
 To remove a configuration from Kodi, choose it in the list and confirm.
 

@@ -153,66 +153,61 @@ playback if required options are provided.
 
 Track numbers are those `--list-tracks` prints.
 
-| Option            | Meaning                                                                                                  |
-|-------------------|----------------------------------------------------------------------------------------------------------|
-| `FILE`            | The video to play, see [Video sources](#video-sources)                                                   |
-| `--primary <T>`   | Audio for the primary output, see [Choosing audio on the command line](#choosing-audio-on-the-command-line) |
-| `--secondary <T>` | Audio for the secondary output, same as above                                                            |
-| `--subtitle <S>`  | Subtitles to show, see [Choosing subtitles on the command line](#choosing-subtitles-on-the-command-line) |
-| `--list-devices`  | Print this machine's audio output device names, as [`config.yaml`](configuration.md) wants them          |
-| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers                                           |
-| `--restart`       | Start video from the beginning, ignoring any saved position                                              |
-| `--forget`        | Forget the saved positions and track choices. Pass a FILE to limit to a single video                     |
-| `--fullscreen`    | Start fullscreen. With `--external` it's fixed, see [below](#fixed-fullscreen)                           |
-| `--windowed`      | Start windowed, overriding a remembered fullscreen preference                                            |
-| `--external`      | Used for launching from another application, see [Integrations](integrations.md)                         |
-| `--kodi`          | Used by [Kodi Integration](integrations.md#kodi), Implies `--external`                                   |
-| `-V`, `--version` | Print the version                                                                                        |
-| `-h`, `--help`    | Print help                                                                                               |
+| Option            | Meaning                                                                                                     |
+|-------------------|-------------------------------------------------------------------------------------------------------------|
+| `FILE`            | The video to play, see [Video sources](#video-sources)                                                      |
+| `--primary <T>`   | Audio for the primary output, see [Choosing Audio on the Command Line](#choosing-audio-on-the-command-line) |
+| `--secondary <T>` | Audio for the secondary output, same as above                                                               |
+| `--subtitle <S>`  | Subtitles to show, see [Choosing Subtitles on the Command Line](#choosing-subtitles-on-the-command-line)    |
+| `--list-devices`  | Print this machine's audio output device names, as [`config.yaml`](configuration.md) wants them             |
+| `--play`          | Skip the menu and start playback immediately. See [Playing a Video Directly](#playing-a-video-directly)     |
+| `--list-tracks`   | Print the file's audio tracks and subtitles with their numbers                                              |
+| `--restart`       | Start video from the beginning, ignoring any saved position                                                 |
+| `--forget`        | Forget the saved positions and track choices. Pass a FILE to limit to a single video                        |
+| `--fullscreen`    | Start fullscreen. With `--external` it's fixed, see [Fixed Fullscreen](#fixed-fullscreen)                   |
+| `--windowed`      | Start windowed, overriding a remembered fullscreen preference                                               |
+| `--external`      | Used for launching from another application, see [Integrations](integrations.md)                            |
+| `--kodi`          | Used by [Kodi Integration](integrations.md#kodi), Implies `--external`                                      |
+| `-V`, `--version` | Print the version                                                                                           |
+| `-h`, `--help`    | Print help                                                                                                  |
 
 ```sh
 TinePlayer --list-tracks video.mkv
 TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
 ```
 
-### Playing a video directly
+### Playing a Video Directly
 
-A video on its own opens in the menu, with its tracks and subtitles still to
-choose. Playback starts without the menu only when all three of these are
-true:
-
-1. A video is given, and can be opened.
-2. At least one of `--primary`, `--secondary` or `--subtitle` is given. These
-   are what say which tracks to use, and without any of them there is nothing
-   to skip the menu with.
-3. A primary output device is already set, from an earlier run or in
-   [`config.yaml`](configuration.md). There is nowhere to play to otherwise.
-
-Nothing is chosen on your behalf for the options you leave out. `--primary`
-alone plays nothing on the secondary output, and a subtitle you do not name
-keeps whatever was remembered for that video.
+Normally TinePlayer opens to the playback options menu, with track 
+and subtitle choices. Passing `--play` skips the menu and starts playback immediately.
 
 ```sh
-# Straight to playback: track 5 to the primary output, 1 to the secondary
-TinePlayer film.mkv --primary 5 --secondary 1
-
-# Opens the menu, because no tracks were named
-TinePlayer film.mkv --fullscreen
+tineplayer film.mkv --play
 ```
 
-`--external` does not start playback by itself. It puts TinePlayer into
-integration mode - only the video given, no file browser, exits when the video
-ends - and the tracks are still chosen from the menu unless the options above
-are given too. See [Integrations](integrations.md).
+By default it uses whatever settings was saved for that video, or your 
+language preferences if it has not been played before.
 
-### Fixed fullscreen
+Additionally, you can pass any combination of arguments to override the various settings.
+
+```sh
+# Straight to playback with specific audio tracks
+tineplayer film.mkv --play --primary 5 --secondary 1
+
+# The menu, with those tracks pre-chosen
+tineplayer film.mkv --primary 5 --secondary 1
+```
+
+The only argument required with `--play` is a valid video path, and the primary output device setup. 
+
+### Fixed Fullscreen
 
 `--fullscreen` together with `--external` (or `--kodi`, which implies it) starts
 in fullscreen mode and disables toggling. Most integrations that ask for fullscreen
 are providing a fullscreen experience themselves and breaking out of that is a bad
 experience.
 
-### Choosing audio on the command line
+### Choosing Audio on the Command Line
 
 `--primary` and `--secondary` each take any of these:
 
@@ -227,7 +222,7 @@ experience.
 A language on its own never selects a described track, matching what the
 setting does: description is only ever played by asking for it.
 
-### Choosing subtitles on the command line
+### Choosing Subtitles on the Command Line
 
 Override the subtitle preference by passing in the `--subtitle` argument can override this behavior with the below
 options.

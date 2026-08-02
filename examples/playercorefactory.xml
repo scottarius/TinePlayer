@@ -42,7 +42,12 @@
            than it being guessed at: it takes the resume position from Kodi's
            library, reports progress back while playing, and leaves choosing
            the video to Kodi. Without it the player still works, but the two
-           keep separate ideas of where you are in a film. -->
+           keep separate ideas of where you are in a film.
+           
+           Add --play to have the film start as soon as Kodi
+           hands it over, using the tracks remembered for that video or your
+           language preferences. Without it TinePlayer opens its own menu so
+           the audio tracks and subtitles can be chosen for each video. -->
       <args>"{1}" --fullscreen --kodi</args>
 
       <!-- Gets Kodi out of the way while the film plays, which matters on a
