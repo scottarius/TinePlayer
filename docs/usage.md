@@ -1,35 +1,58 @@
 # Using TinePlayer
 
-Run it from the command line with or without arguments, or by double-clicking
-the executable.
+[Install TinePlayer](../README.md#install) by downloading the latest version from the
+[releases page](https://github.com/scottarius/TinePlayer/releases). Start it
+from your applications menu, or from a terminal with or without arguments.
 
-### Linux
+### Windows
 
-```sh
-./target/release/TinePlayer
-./target/release/TinePlayer ~/Videos/film.mkv --fullscreen
+Start TinePlayer from the Start menu, or from a terminal with arguments. Installed, it is on
+your `PATH`; from the portable ZIP, run it from wherever you unpacked it:
+
+```powershell
+TinePlayer.exe
+TinePlayer.exe "C:\Videos\film.mkv" --fullscreen
 ```
 
 ### macOS
 
+Start TinePlayer from Applications, or from the terminal with arguments:
+
 ```sh
-./target/release/TinePlayer
-./target/release/TinePlayer ~/Movies/film.mkv --fullscreen
+/Applications/TinePlayer.app/Contents/MacOS/TinePlayer ~/Movies/film.mkv --fullscreen
 ```
 
-### Windows
+### Linux
 
-```powershell
-.\target\release\TinePlayer.exe
-.\target\release\TinePlayer.exe "H:\Videos\film.mkv" --fullscreen
+Start TinePlayer from your applications menu, or from a terminal. It installs
+onto your `PATH` as `tineplayer`:
+
+```sh
+tineplayer
+tineplayer ~/Videos/film.mkv --fullscreen
 ```
 
-#### Launch script
-Useful for launching from another app or integration that has a different
-working directory if library conflicts cause errors.
+### Built from source
+
+The binary is at `./target/release/TinePlayer` on every platform, and takes the
+same arguments as above. See [Building from source](building.md).
+
+On Windows, a build from source may need starting through
+`launch-tineplayer-windows.cmd` when something else launches it. Windows looks
+for libraries in the working directory before anywhere else, so a program that
+starts TinePlayer from its own folder, and happens to ship its own copies of
+libraries GStreamer also uses, can have those found first. TinePlayer then
+fails to start, usually without saying why. The script sets the working
+directory before handing over:
+
 ```powershell
 .\launch-tineplayer-windows.cmd "H:\Videos\film.mkv" --fullscreen
 ```
+
+An installed build never needs this, because its libraries sit beside the
+executable and are found first.
+
+---
 
 Everything required for video playback is chosen from the main screen: the
 video, the output devices, the audio track for each, and the subtitles. The
@@ -40,46 +63,57 @@ settings menu contains more advanced settings and preferences. See
 
 A video can be given as a path or as a URL.
 
-| Given                       | Example                        | Notes                                              |
-|-----------------------------|--------------------------------|----------------------------------------------------|
-| A file on this machine      | `~/Videos/film.mkv`            |                                                    |
-| A network share, by path    | `\\server\media\film.mkv`      | Whatever this machine can already open: a UNC path or mapped drive on Windows, a mounted path on Linux |
-| `http://` or `https://`     | `http://server/media/film.mkv` | A direct link to the file, including one from a media server |
-| `smb://`                    | `smb://server/media/film.mkv`  | Linux only, and only where the share is already reachable. Windows should use the UNC path instead |
+| Given                   | Example                                                     | Notes                                                                                        |
+|-------------------------|-------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| An absolute path        | `C:\Videos\film.mkv` <br/>`~/Videos/film.mkv`                                 | An absolute path on a local or mapped drive                                                  |
+| A network share         | `\\server\media\film.mkv` <br/>`/mnt/server/media/film.mkv` | Anything the machine already has access to: a UNC path on windows or a mounted path on Linux |
+| `http://` or `https://` | `http://server/media/film.mkv`                              | A direct link to the file, including one from a media server                                 |
+| `smb://`                | `smb://server/media/film.mkv`                               | Linux only, and only where the share is already reachable                                    |
 
-A share opened by path is an ordinary file as far as TinePlayer is concerned,
+A network share opened by path is an ordinary file as far as TinePlayer is concerned,
 which makes it the most dependable option: the machine has already handled
 reaching the share and any credentials it needed.
 
 Note that [external subtitle files](#subtitles) are only found for videos opened
-by path.
+by direct path, not `http://` or `smb://`
 
 ## Controls
 
-Everything is reachable with a keyboard or a gamepad. Nothing needs a mouse,
-though everything is also mouse interactable.
+Everything is reachable with a keyboard or a gamepad. A mouse is not required, but can be used.
 
 > [!NOTE]
-> Screen reader support is minimal: the menus are named, the playback controls
-> are not reachable at all. See [Accessibility](../README.md#accessibility).
+> Screen reader support is a work in progress. Menus and their rows are named
+> and announced; the playback controls can be reached and used, but are not
+> announced. See [Accessibility](../README.md#accessibility).
 
-| Key | Gamepad | Action                                                                                  |
-| --- | --- |-----------------------------------------------------------------------------------------|
-| Arrow keys | D-pad or left stick | Navigate the menus                                                                      |
-| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | Shoulder buttons | Jump a screenful, for long folders                                                      |
-| <kbd>Enter</kbd> | A / Cross | Select                                                                                  |
-| <kbd>Esc</kbd> | B / Circle | Back one menu; stop video playback                                                      |
-| <kbd>Space</kbd> | A / Cross, or Start | Pause / resume playback                                                                 |
-| <kbd>←</kbd> <kbd>→</kbd> | D-pad or left stick | In Video: Tap to skip 10 seconds; hold to scrub, navigate playback controls if visible. |
-| <kbd>↑</kbd> | D-pad or left stick | In Video: Show or navigate the playback controls                                        |
-| <kbd>↓</kbd> | D-pad or left stick | In Video: Hide or navigate the playback controls                                        |
-| <kbd>F</kbd> | Y / Triangle | Toggle fullscreen                                                                       |
-| <kbd>C</kbd> | X / Square | Show or hide subtitles, during playback                                                 |
-| <kbd>M</kbd> | Hold X / Square | Mute or restore both outputs at once                                                    |
-| <kbd>T</kbd> | Right stick click | Swap the right-hand readout between the length and the time left                        |
-| Hold <kbd>Enter</kbd> | Hold A / Cross | On the volume button: Mute or restore both outputs at once.                             |
-| <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser                                                                   |
-| <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL                                                                     |
+### In the menus
+
+| Key | Gamepad | Action                                |
+| --- | --- |---------------------------------------|
+| Arrow keys | <kbd>D-pad</kbd> or <kbd>Left stick</kbd> | Navigate the UI                       |
+| <kbd>Page Up</kbd> <kbd>Page Down</kbd> | <kbd>LB</kbd> <kbd>RB</kbd> / <kbd>L1</kbd> <kbd>R1</kbd> | Jump a screenful, for long folders    |
+| <kbd>Enter</kbd> | <kbd>A</kbd> / <kbd>Cross</kbd> | Select                                |
+| <kbd>Esc</kbd> | <kbd>B</kbd> / <kbd>Circle</kbd> | Back one screen                       |
+| <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser, from main menu |
+| <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL, from main menu   |
+
+### During playback
+
+| Key | Gamepad                                                    | Action                                                                                           |
+| --- |------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| <kbd>Space</kbd> | <kbd>A</kbd> / <kbd>Cross</kbd>, or <kbd>Start</kbd>       | Pause or resume                                                                                  |
+| <kbd>Esc</kbd> | <kbd>B</kbd> / <kbd>Circle</kbd>                           | Stop and return to the menu, or hide playback controls if showing                                |
+| <kbd>←</kbd> <kbd>→</kbd> | Left or Right on <kbd>D-pad</kbd> or <kbd>Left stick</kbd> | Tap to skip 10 seconds, hold to scrub. Moves between the playback controls while they are showing |
+| <kbd>↑</kbd> | Up on <kbd>D-pad</kbd> or <kbd>Left stick</kbd>            | Show the playback controls, then move up through them                                            |
+| <kbd>↓</kbd> | Down on <kbd>D-pad</kbd> or <kbd>Left stick</kbd>          | Move down through the playback controls, then hide them                                          |
+| <kbd>F</kbd> | <kbd>Y</kbd> / <kbd>Triangle</kbd>                         | Toggle fullscreen                                                                                |
+| <kbd>C</kbd> | <kbd>X</kbd> / <kbd>Square</kbd>                           | Show or hide subtitles                                                                           |
+| <kbd>M</kbd> | Hold <kbd>X</kbd> / <kbd>Square</kbd>                      | Mute or restore both outputs at once. Or long-press the volume button                            |
+| <kbd>T</kbd> | Click <kbd>Right stick</kbd>                               | Swap the right-hand readout between the video length and the time remaining                      |
+
+
+The playback controls hide themselves after a few seconds of stillness, and
+come back on any interaction.
 
 ## Subtitles
 
@@ -98,60 +132,19 @@ between the two becomes its label:
 | `Film (2019).en.hi.srt`       | `en.hi`    |
 | `Film (2019).srt`             | `External` |
 
-Your choice is remembered per video. For one you have not played before, the
-[Subtitle Preference](configuration.md#choosing-subtitles-automatically)
-setting chooses. By default that is forced subtitles in the language the
-primary output is playing.
+The [Subtitle Preference](configuration.md#choosing-subtitles-automatically)
+will attempt to automatically choose subtitles and defaults to Forced subtitles 
+matching the primary output language, but any manual choices are saved.
+To override either for a single playback, see [Choosing subtitles on the
+command line](#choosing-subtitles-on-the-command-line).
 
 > [!NOTE]
-> * Blu-ray PGS subtitles will not be shown as GStreamer ships no decoder for
->   them natively.
+> * Blu-ray PGS subtitles are not offered. They are images rather than text
+>   and GStreamer ships no decoder for them, so a track that could only draw
+>   nothing is left out of the list entirely.
 > * External subtitle files are only found for videos opened by path: local, a
 >   UNC path, or a mounted share. A video opened by URL, such as `http://` or
 >   `smb://`, offers only its embedded subtitles.
-
-### Choosing audio on the command line
-
-`--primary` and `--secondary` each take any of these:
-
-| Given     | Means                                                                  |
-|-----------|------------------------------------------------------------------------|
-| `3`       | the third entry `--list-tracks` prints                                 |
-| `en`      | the first track in that [language](configuration.md#languages)         |
-| `ad`      | the first [described](configuration.md#audio-description) track        |
-| `en:ad`   | the first described track in that language                             |
-| `0`       | no audio on this output                                                |
-
-A language on its own never selects a described track, matching what the
-setting does: description is only ever played by asking for it.
-
-### Choosing subtitles on the command line
-
-By default the [Subtitle
-Preference](configuration.md#choosing-subtitles-automatically) setting will
-auto-select subtitles or a previous saved choice will be used.
-
-Passing in the `--subtitle` argument can override this behavior with the below
-options.
-
-| Given                              | Means                                                                                            |
-|------------------------------------|--------------------------------------------------------------------------------------------------|
-| `primary_forced`, `primary`, `secondary_forced`, `secondary` | the same as the [Subtitle Preference](configuration.md#choosing-subtitles-automatically) setting |
-| `3`                                | the third entry `--list-tracks` prints                                                           |
-| `Film (2019).ru.hi.srt`            | that file, beside the video                                                                      |
-| `en.hi`                            | the entry with that label                                                                        |
-| `ru`                               | the first subtitle matching the [language code](configuration.md#languages)                      |
-| `0` or `none`                      | no subtitles                                                                                     |
-
-> [!NOTE]
-> Numbers from `--list-tracks` can change. Adding or removing a subtitle file
-> beside the video renumbers everything after it.
->
-> A subtitle file has to sit beside the video. Any path given is ignored and
-> only the file name is used.
-
-The font size and style can be configured in the settings, see
-[Configuration](configuration.md).
 
 ## Command line
 
@@ -181,6 +174,36 @@ TinePlayer --list-tracks video.mkv
 TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
 ```
 
+### Playing a video directly
+
+A video on its own opens in the menu, with its tracks and subtitles still to
+choose. Playback starts without the menu only when all three of these are
+true:
+
+1. A video is given, and can be opened.
+2. At least one of `--primary`, `--secondary` or `--subtitle` is given. These
+   are what say which tracks to use, and without any of them there is nothing
+   to skip the menu with.
+3. A primary output device is already set, from an earlier run or in
+   [`config.yaml`](configuration.md). There is nowhere to play to otherwise.
+
+Nothing is chosen on your behalf for the options you leave out. `--primary`
+alone plays nothing on the secondary output, and a subtitle you do not name
+keeps whatever was remembered for that video.
+
+```sh
+# Straight to playback: track 5 to the primary output, 1 to the secondary
+TinePlayer film.mkv --primary 5 --secondary 1
+
+# Opens the menu, because no tracks were named
+TinePlayer film.mkv --fullscreen
+```
+
+`--external` does not start playback by itself. It puts TinePlayer into
+integration mode - only the video given, no file browser, exits when the video
+ends - and the tracks are still chosen from the menu unless the options above
+are given too. See [Integrations](integrations.md).
+
 ### Fixed fullscreen
 
 `--fullscreen` together with `--external` (or `--kodi`, which implies it) starts
@@ -188,3 +211,41 @@ in fullscreen mode and disables toggling. Most integrations that ask for fullscr
 are providing a fullscreen experience themselves and breaking out of that is a bad
 experience.
 
+### Choosing audio on the command line
+
+`--primary` and `--secondary` each take any of these:
+
+| Given     | Means                                                                  |
+|-----------|------------------------------------------------------------------------|
+| `3`       | the third entry `--list-tracks` prints                                 |
+| `en`      | the first track in that [language](configuration.md#languages)         |
+| `ad`      | the first [described](configuration.md#audio-description) track        |
+| `en:ad`   | the first described track in that language                             |
+| `0`       | no audio on this output                                                |
+
+A language on its own never selects a described track, matching what the
+setting does: description is only ever played by asking for it.
+
+### Choosing subtitles on the command line
+
+Override the subtitle preference by passing in the `--subtitle` argument can override this behavior with the below
+options.
+
+| Given                              | Means                                                                                            |
+|------------------------------------|--------------------------------------------------------------------------------------------------|
+| `primary_forced`, `primary`, `secondary_forced`, `secondary` | the same as the [Subtitle Preference](configuration.md#choosing-subtitles-automatically) setting |
+| `3`                                | the third entry `--list-tracks` prints                                                           |
+| `Film (2019).ru.hi.srt`            | that file, beside the video                                                                      |
+| `en.hi`                            | the entry with that label                                                                        |
+| `ru`                               | the first subtitle matching the [language code](configuration.md#languages)                      |
+| `0` or `none`                      | no subtitles                                                                                     |
+
+> [!NOTE]
+> Numbers from `--list-tracks` can change. Adding or removing a subtitle file
+> beside the video renumbers everything after it.
+>
+> A subtitle file has to sit beside the video. Any path given is ignored and
+> only the file name is used.
+
+The font size and style can be configured in the settings, see
+[Configuration](configuration.md).

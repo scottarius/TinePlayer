@@ -1,11 +1,18 @@
 # Configuration
 
-Everything in the settings menu is stored in `config.yaml`, which can also be
-edited directly. It lives in the per-user config directory:
-* Linux: `~/.config/tineplayer/config.yaml`
-* Windows: `%LOCALAPPDATA%\tineplayer\config.yaml`
+All settings can be configured from the **Settings** menu inside TinePlayer, which will only offers values that make sense, and lists the
+audio devices this machine actually has.
 
-| Setting                                                  | Key                  | Default     | Meaning                                                                                                                                        |
+The same settings are stored in `config.yaml`, which can be edited directly. TinePlayer reads it at startup, so
+restart it after editing.
+
+It lives in the per-user config directory:
+* Windows: `%LOCALAPPDATA%\tineplayer\config.yaml`
+* macOS: `~/.config/tineplayer/config.yaml`
+* Linux: `~/.config/tineplayer/config.yaml`
+
+
+| Setting                                                  | Key                  | Default     | Description                                                                                                                                    |
 |----------------------------------------------------------|----------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | Theme                                                    | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                                                                      |
 | Interface Size                                           | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution                                                    |
@@ -17,11 +24,24 @@ edited directly. It lives in the per-user config directory:
 | [Subtitle Preference](#choosing-subtitles-automatically) | `subtitle_language`  | `primary_forced` | How a subtitle is chosen automatically: `none`, `primary_forced`, `primary`, `secondary_forced`, `secondary`, or a [language code](#languages) |
 | Subtitle Size                                            | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's                                                                                    |
 | [Subtitle Font](#subtitle-fonts)                         | `subtitle_font`      | `Sans Bold` | Font Family and style name                                                                                                                     |
-| Resume Threshold                                         | `resume_min_percent` | `5`         | How far in before stopping counts as somewhere to resume from, as a percentage of the running time <br/>Never less than 10 seconds             |
+| Resume Threshold                                         | `resume_min_percent` | `5`         | How far in before stopping counts as somewhere to resume from, as a percentage of the running time. Never less than 10 seconds                 |
 | Watched Threshold                                        | `watched_percent`    | `90`        | Past this percentage a video counts as watched, and its position is forgotten rather than saved                                                |
-| [Prefer Audio Description](#audio-description)           | `primary_audio_description` <br/>`secondary_audio_description` | `false` | Whether that output prefers a described track                                                              |
-| [Volume](#volumes)                                       | `primary_volume` <br/>`secondary_volume` | `1.0` | That output's level, from `0.0` to `1.0`                                                                                             |
-|                                                          | `primary_muted` <br/>`secondary_muted` | `false` | Whether that output is silenced                                                                                                        |
+| [Prefer Audio Description](#audio-description)           | `primary_audio_description` <br/>`secondary_audio_description` | `false` | Whether that output prefers a described track                                                                                                  |
+| [Volume](#volumes)                                       | `primary_volume` <br/>`secondary_volume` | `1.0` | That output's level, from `0.0` to `1.0`                                                                                                       |
+|                                                          | `primary_muted` <br/>`secondary_muted` | `false` | Whether that output is silenced                                                                                                                |
+
+## Remembered State
+
+Some settings are written by TinePlayer in order to remember state.
+They appear in `config.yaml` alongside everything else, and can be edited or
+deleted.
+
+| Key           | What it remembers                                                      |
+|---------------|------------------------------------------------------------------------|
+| `last_folder` | Where the file browser was, so it reopens there                        |
+| `last_video`  | The most recent video chosen, remembered when re-opening the app       |
+| `fullscreen`  | The remembered fullscreen toggled state                                |
+| `kodi_paths`  | Any custom Kodi integrations. See [Integrations](integrations.md#kodi) |
 
 ## Example
 
@@ -53,21 +73,11 @@ Device names are the ones the settings menu lists, which are also what
 platform: `Speakers (Realtek High Definition Audio)` on Windows looks nothing
 like the example above.
 
-The two thresholds match what media servers do: Jellyfin resumes past 5% and
-counts 90% as watched, and Plex and Kodi also treat 90% as watched. Raise
-`resume_min_percent` if you often start something, change your mind, and would
-rather it began again next time.
-
-TinePlayer writes a few keys of its own to the same file - `last_video`,
-`last_folder` and `fullscreen` - so it reopens where you left it. There is no
-need to set those by hand.
-
 ## Volumes
 
 Each output carries its own level and can be adjusted or muted independently.
 The volume settings persist between sessions. Set them from the settings menu
-under either output, or from the volume button during playback, which gives a
-slider per output rather than the fixed steps the menu offers.
+under either output, or from the volume button during playback.
 
 Holding or long-pressing the
 primary volume button will mute both immediately, and holding it again restores
@@ -99,18 +109,18 @@ because they answer a real question rather than as a recommendation.
 
 ## Choosing subtitles automatically
 
-`subtitle_language` decides what to show for a video you have not picked
+`subtitle_language` decides what to show for a video you have not yet picked
 subtitles for yourself. A choice you make for a video is remembered and always
-wins over this.
+wins.
 
 | Value                       | Chooses                                                         |
 |-----------------------------|-----------------------------------------------------------------|
-| `none`                      | nothing                                                         |
-| `primary_forced`            | forced only, preferring the primary output's language (default) |
-| `primary`                   | full subtitles in the primary output's language                 |
-| `secondary_forced`          | forced only, preferring the secondary output's language         |
-| `secondary`                 | full subtitles in the secondary output's language               |
-| [language code](#languages) | full subtitiles in a specific language                          |
+| `none`                      | Nothing                                                         |
+| `primary_forced`            | Forced only, preferring the primary output's language (default) |
+| `primary`                   | Full subtitles in the primary output's language                 |
+| `secondary_forced`          | Forced only, preferring the secondary output's language         |
+| `secondary`                 | Full subtitles in the secondary output's language               |
+| [language code](#languages) | Full subtitiles in a specific language                          |
 
 The language followed is the one actually playing on that output, not the
 Primary or Secondary Language Preference, so it stays right even when a
@@ -163,43 +173,84 @@ on most systems while something like `Arial` may not.
 
 ## Languages
 
-| Code   | Language   | Native name |
-|--------|------------|-------------|
-| `en`   | English    | English     |
-| `ru`   | Russian    | Русский     |
-| `es`   | Spanish    | Español     |
-| `fr`   | French     | Français    |
-| `de`   | German     | Deutsch     |
-| `it`   | Italian    | Italiano    |
-| `pt`   | Portuguese | Português   |
-| `nl`   | Dutch      | Nederlands  |
-| `pl`   | Polish     | Polski      |
-| `uk`   | Ukrainian  | Українська  |
-| `cs`   | Czech      | Čeština     |
-| `sv`   | Swedish    | Svenska     |
-| `no`   | Norwegian  | Norsk       |
-| `da`   | Danish     | Dansk       |
-| `fi`   | Finnish    | Suomi       |
-| `hu`   | Hungarian  | Magyar      |
-| `tr`   | Turkish    | Türkçe      |
-| `el`   | Greek      | Ελληνικά    |
-| `he`   | Hebrew     | עברית       |
-| `ar`   | Arabic     | العربية     |
-| `hi`   | Hindi      | हिन्दी         |
-| `ja`   | Japanese   | 日本語        |
-| `ko`   | Korean     | 한국어        |
-| `zh`   | Chinese    | 中文         |
+These are the languages TinePlayer offers for **Primary/Secondary Language
+Preference** and for **Subtitle Preference**. Use the code in `config.yaml`.
+
+The list is deliberately not every language ISO defines, but what generally 
+turns up as an alternate audio track on commercial discs and the rips made 
+from them. A language that is missing can still be played by choosing its 
+track by hand.
+
+| Code | Language | Native name |
+|------|----------|-------------|
+| `ar` | Arabic | العربية |
+| `hy` | Armenian | Հայերեն |
+| `az` | Azerbaijani | Azərbaycan |
+| `bn` | Bengali | বাংলা |
+| `bs` | Bosnian | Bosanski |
+| `bg` | Bulgarian | Български |
+| `yue` | Cantonese | 粵語 |
+| `ca` | Catalan | Català |
+| `zh` | Chinese | 中文 |
+| `hr` | Croatian | Hrvatski |
+| `cs` | Czech | Čeština |
+| `da` | Danish | Dansk |
+| `nl` | Dutch | Nederlands |
+| `en` | English | English |
+| `et` | Estonian | Eesti |
+| `fi` | Finnish | Suomi |
+| `fr` | French | Français |
+| `ka` | Georgian | ქართული |
+| `de` | German | Deutsch |
+| `el` | Greek | Ελληνικά |
+| `he` | Hebrew | עברית |
+| `hi` | Hindi | हिन्दी |
+| `hu` | Hungarian | Magyar |
+| `is` | Icelandic | Íslenska |
+| `id` | Indonesian | Bahasa Indonesia |
+| `it` | Italian | Italiano |
+| `ja` | Japanese | 日本語 |
+| `kk` | Kazakh | Қазақша |
+| `ko` | Korean | 한국어 |
+| `lv` | Latvian | Latviešu |
+| `lt` | Lithuanian | Lietuvių |
+| `ms` | Malay | Bahasa Melayu |
+| `ml` | Malayalam | മലയാളം |
+| `no` | Norwegian | Norsk |
+| `fa` | Persian | فارسی |
+| `pl` | Polish | Polski |
+| `pt` | Portuguese | Português |
+| `pa` | Punjabi | ਪੰਜਾਬੀ |
+| `ro` | Romanian | Română |
+| `ru` | Russian | Русский |
+| `sr` | Serbian | Српски |
+| `sk` | Slovak | Slovenčina |
+| `sl` | Slovenian | Slovenščina |
+| `es` | Spanish | Español |
+| `sv` | Swedish | Svenska |
+| `tl` | Tagalog | Tagalog |
+| `ta` | Tamil | தமிழ் |
+| `te` | Telugu | తెలుగు |
+| `th` | Thai | ไทย |
+| `tr` | Turkish | Türkçe |
+| `uk` | Ukrainian | Українська |
+| `ur` | Urdu | اردو |
+| `vi` | Vietnamese | Tiếng Việt |
 
 Only the leading letters are compared, so `en` matches a track tagged `eng` or
 `en-US`, and a subtitle file named `film.en.hi.srt`.
+
+If a language you need is missing,
+[say so](https://github.com/scottarius/TinePlayer/issues) and it can be added.
 
 ## Saved Playback Resume Data
 
 Details about resuming playback of a video that didn't finish are kept in
 `positions.json`, also in the per-user config directory:
 
-* Linux: `~/.local/share/tineplayer/positions.json`
 * Windows: `%LOCALAPPDATA%\tineplayer\positions.json`
+* macOS: `~/.local/share/tineplayer/positions.json`
+* Linux: `~/.local/share/tineplayer/positions.json`
 
 Entries are keyed by the video's full path:
 
@@ -232,8 +283,8 @@ used on something else.
 > Tracks are counted from `0` here, one lower than the numbering
 > `--list-tracks` prints and `--primary` takes, where `0` means no audio.
 
-A saved position under ten seconds is treated as no position at all - stopping
-a few seconds in is a false start rather than a place you left off.
+A saved position under the resume threshold setting is treated as no position at all as stopping
+a few seconds in is treated as a false start rather than a place you left off.
 
 The path is the key, so moving or renaming a video loses its entry. Deleting
 `positions.json` is harmless: it forgets every position and track choice, and

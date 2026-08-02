@@ -1,88 +1,122 @@
 # Integrations
 
 TinePlayer can be launched by another application to play a video, handing
-control back when playback ends. A media center does this to keep its own
-library browsing while TinePlayer handles playback, but a launcher does not
-have to be a library: a script, a file manager, or a keyboard shortcut works
+control back when playback ends. A media center app can do this to keep its
+own library browsing while TinePlayer handles playback, but a launcher does 
+not have to be a library: a script, a file manager, or a keyboard shortcut works
 the same way.
 
 Launch the executable by passing the video and the `--external` flag:
 
-### Linux
+### Windows
 
-```sh
-TinePlayer "/home/you/Videos/film.mkv" --external --fullscreen
+```powershell
+TinePlayer.exe "C:\Videos\film.mkv" --external --fullscreen
+```
+
+Or if built from source, prefer the launch script if pointing at the exe directly fails to launch:
+
+```powershell
+launch-tineplayer-windows.cmd "C:\Videos\film.mkv" --external --fullscreen
 ```
 
 ### macOS
 
 ```sh
-TinePlayer "/Users/you/Movies/film.mkv" --external --fullscreen
+/Applications/TinePlayer.app/Contents/MacOS/TinePlayer "/Users/you/Movies/film.mkv" --external --fullscreen
 ```
 
-### Windows
+### Linux
 
-```powershell
-TinePlayer.exe "H:\Videos\film.mkv" --external --fullscreen
+```sh
+tineplayer "/home/you/Videos/film.mkv" --external --fullscreen
 ```
-
-On Windows and if running from the source built version, point at
-`launch-tineplayer-windows.cmd` rather than the exe directly if you
-experience startup errors. See [the launch script
-usage](usage.md#launch-script).
 
 Passing `--external` puts TinePlayer into an integration mode, where it plays
 only the video provided (file browser is disabled) and exits immediately after
 the video finishes to return control to the launching application.
 
-Adding `--fullscreen` to that, as above, also fixes it there for the whole
+Adding `--fullscreen` forces fullscreen mode for the whole
 run: the fullscreen buttons are hidden and the shortcuts for it do nothing, so
 a viewer cannot end up on the desktop behind a launcher that is waiting. See
 [Fixed fullscreen](usage.md#fixed-fullscreen). Leave `--fullscreen` off if you
-would rather the window stayed changeable.
+would rather it stayed toggleable.
 
 Additionally, the `--primary`, `--secondary` and `--subtitle` arguments can be
-supplied to skip the menu entirely and go directly to playback. See [the
-command line](usage.md#command-line).
+supplied to skip the menu entirely and go directly to playback. See the [
+command line usage](usage.md#command-line).
 
 Below are some supported integrations and how to set them up.
 
 ## Kodi
 
 [Kodi](https://kodi.tv) is a media center application: it catalogs your films
-and TV files with artwork and plays them on a television. It can hand playback
-to TinePlayer rather than playing video itself, and TinePlayer will report
+and TV files with artwork and plays them on a television (or other device). It can hand playback
+to TinePlayer rather than playing a video itself, and TinePlayer will report
 watch percentage back to Kodi.
 
-There are two ways to set it up depending on your preference:
+There are two ways to set it up:
 
-* **As a choice per video:** By default Kodi will play videos itself, and
-  TinePlayer becomes an extra option under **Play using...** in a video's
-  context menu.
-* **As the default player:** Kodi opens every video in TinePlayer.
+* **Default Player** - Kodi hands every video straight to TinePlayer.
+* **Optional Player** - Kodi keeps playing videos itself, and TinePlayer
+  appears under **Play using...** in a video's context menu.
 
 > [!IMPORTANT]
-> Which Kodi version you run changes where the option appears:
+> Which Kodi version you run changes where **Play using...** appears:
 >
-> * On Kodi 21 and later, **Play using...** appears throughout.
-> * On Kodi 20 and earlier, it only appears under **Videos → Files**, not in
->   the libraries.
+> * On Kodi 21 and later, throughout.
+> * On Kodi 20 and earlier, only under **Videos → Files**, not in the
+>   libraries.
+>
+> This affects **Optional Player** only. **Default Player** works the same on
+> every version.
 
 ### From TinePlayer
 
-The easiest way. In TinePlayer, open
-**Settings** and choose **Kodi**. It finds Kodi's userdata directory itself
-and offers three things:
+The easiest way to configure Kodi is from TinePlayer itself. In
+TinePlayer, open **Settings** and choose **Kodi**. You will see a list of any install of Kodi that was found, and how each one is 
+configured. 
 
-* **Offer under "Play using..."** - Kodi keeps playing videos itself by default, and
-  TinePlayer appears in a video's context menu.
-* **Set as default player** - Kodi hands every video to TinePlayer.
-* **Remove from Kodi** - takes TinePlayer back out again.
+**Add Configuration** starts the configuration wizard with the 
+following steps:
 
-If you have an existing `playercorefactory.xml` it is edited non-destructively and a 
-copy of the file is backed up before TinePlayer edits it. 
+1. **Choose a Kodi Installation.** Choose one of the detected installs. 
+   Picking one that is already configured will update it's configuration.
+   If yours is somewhere unusual, **Custom install
+   location** opens a folder browser to point at Kodi's `userdata` folder.
+2. **How to Configure.** Default Player or Optional Player, as above.
+3. **Confirm Configuration.** Shows the file that will be changed, the backup that
+   will be kept, and what will be added. Choose **Configure** to write the configuration.
 
-Restart Kodi to see changes.
+To remove a configuration from Kodi, choose it in the list and confirm.
+
+An existing `playercorefactory.xml` is edited in place rather than replaced.
+Other players in it, and your own comments and formatting, are left exactly as
+they are. A backup is made before editing just in case.
+
+Restart Kodi for the changes to take effect.
+
+#### If Kodi is sandboxed
+
+Kodi installed on Linux as a Flatpak starts an external player *inside its own sandbox*,
+where TinePlayer is not installed and your files are not visible. TinePlayer
+writes a command that steps out to the machine first, but Kodi does not ship
+with permission to do that, so the setup shows you the one command to run:
+
+```sh
+flatpak override --user --talk-name=org.freedesktop.Flatpak tv.kodi.Kodi
+```
+
+> [!IMPORTANT]
+> That permission lets Kodi run **any** program on your machine, not only
+> TinePlayer. TinePlayer will never run it for you. To undo it:
+> `flatpak override --user --reset tv.kodi.Kodi`, which clears every override
+> you have set for Kodi.
+
+If Kodi is installed as a **Snap** it is not supported as Snap confinement offers 
+no way to start a program outside itself. TinePlayer lists such an install
+and marks it unsupported rather than letting it be configured. Use a Kodi from
+your distribution's packages, or from Flathub.
 
 ### Manual Installation
 
@@ -90,14 +124,23 @@ Kodi has no interface for this, so it means editing `playercorefactory.xml`
 yourself. It lives in Kodi's userdata directory, and you can create it if it
 isn't there already:
 
-* Linux: `~/.kodi/userdata/playercorefactory.xml`
 * Windows: `%APPDATA%\Kodi\userdata\playercorefactory.xml`
 * macOS: `~/Library/Application Support/Kodi/userdata/playercorefactory.xml`
+* Linux: `~/.kodi/userdata/playercorefactory.xml`
+* Linux, Kodi as a Flatpak:
+  `~/.var/app/tv.kodi.Kodi/data/userdata/playercorefactory.xml`
 
 **[examples/playercorefactory.xml](../examples/playercorefactory.xml)** is a
 complete, fully commented copy to start from. Two things required to change:
 
-* Set `<filename>` to the TinePlayer executable path.
+* Set `<filename>` to the command that starts TinePlayer, which depends on how
+  both programs were installed:
+
+  | Kodi | TinePlayer | What Kodi has to run |
+  |------|------------|----------------------|
+  | Normal install | Installed | the executable, by path |
+  | Normal install | Built from source, on Windows | `launch-tineplayer-windows.cmd` at the top of the source tree, if the executable alone fails to start. See [Built from source](usage.md#built-from-source) |
+  | Flatpak | either | `/usr/bin/flatpak-spawn`, with `--host` and then the path above |
 * Uncomment the `<rules>` block at the bottom to make TinePlayer the default
   player. Left commented, TinePlayer appears under **Play using...** instead.
 

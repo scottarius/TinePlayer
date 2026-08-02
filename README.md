@@ -91,6 +91,8 @@ from a single pipeline, staying in sync because it is all one clock.
   preferences, saved playback resume data
 - **[Integrations](docs/integrations.md)** - integrating with other media
   players and libraries
+- **[Troubleshooting](docs/troubleshooting.md)** - when something does not
+  start, play, or hand over
 
 ## Install
 
@@ -98,35 +100,31 @@ Downloads for each platform are on the
 [releases page](https://github.com/scottarius/TinePlayer/releases).
 
 **Windows** - run the installer, or unpack the portable ZIP anywhere you like
-and run `TinePlayer.exe` from it. Everything it needs is included; nothing has
-to be installed first.
+and run `TinePlayer.exe`.
 
-**macOS** - open the disk image and drag TinePlayer to Applications. Apple
-Silicon only.
+**macOS** - open the disk image and drag TinePlayer to Applications. 
 
 **Linux** - a `.deb` for Debian, Ubuntu and Raspberry Pi OS, in `amd64` and
 `arm64`:
 
 ```sh
-sudo apt install ./tineplayer_0.6.0_arm64.deb
+sudo apt install ./tineplayer_0.6.0_linux_arm64.deb
 ```
 
 The `./` is not a typo: it is what makes apt install the file *and* fetch the
-GTK and GStreamer packages it needs. The package bundles none of those, which
-is why it is under a megabyte, and it installs on Debian 12, Ubuntu 22.04 and
-anything newer. Then run `tineplayer`, or pick TinePlayer out of the
-applications menu.
+GTK and GStreamer packages it needs. On Fedora, Arch and others there is no
+package yet, so [build from source](docs/building.md). It installs on Debian 12, Ubuntu 22.04 and
+anything newer. 
 
 ## Build from source
 
 ```sh
-./setup-linux.sh            # Linux; .\setup-windows.ps1 on Windows, ./setup-mac.sh on macOS
+.\setup-windows.ps1         # Windows; ./setup-mac.sh on macOS, ./setup-linux.sh on Linux
 cargo build --release
 ./target/release/TinePlayer
 ```
 
-See [Building from source](docs/building.md) for what those scripts install,
-and for the Windows caveat about installing GTK separately.
+See [Building from source](docs/building.md) for more information.
 
 ## Accessibility
 
@@ -168,9 +166,9 @@ runs correctly on much newer releases.
 
 | System | GTK 4 | Status |
 | --- | --- | --- |
-| Raspberry Pi OS / Debian 12 (Bookworm) | 4.8 | Tested |
 | Windows 10 / 11 | 4.20 (bundled with GStreamer) | Tested |
 | macOS 26 (Apple Silicon) | 4.22 (Homebrew) | Tested |
+| Raspberry Pi OS / Debian 12 (Bookworm) | 4.8 | Tested |
 | Ubuntu 22.04 LTS | 4.6 | Meets baseline, untested |
 | Ubuntu 24.04 LTS | 4.14 | Meets baseline, untested |
 | Debian 13 (Trixie) | 4.18 | Meets baseline, untested |

@@ -1,0 +1,152 @@
+# Troubleshooting
+
+If none of this covers what you are seeing, please
+[open an issue](https://github.com/scottarius/TinePlayer/issues). Something
+going wrong and not being listed here is itself worth knowing about.
+
+## It will not start
+
+### Windows says it protected your PC
+
+SmartScreen does not recognize the download, because it is not signed with a
+certificate yet. Choose **More info**, then **Run anyway**.
+
+### macOS refuses to open it
+
+The app is not signed with an Apple developer certificate. Open **System
+Settings**, go to **Privacy & Security**, scroll to the bottom, and click
+**Open Anyway** next to the message about TinePlayer. You only have to do this
+once.
+
+If macOS instead says the app is **damaged**, it has been quarantined:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/TinePlayer.app
+```
+
+### apt cannot find the package
+
+```
+E: Unable to locate package tineplayer_0.6.0_linux_amd64.deb
+```
+
+The leading `./` is missing. Without it apt looks for a package by that name
+in its own sources rather than installing the file in front of it:
+
+```sh
+sudo apt install ./tineplayer_0.6.0_linux_amd64.deb
+```
+
+### A build from source will not start on Windows
+
+If something else launches TinePlayer from its own folder, Windows may find
+that program's copies of libraries GStreamer also uses before GStreamer's own.
+Start it through `launch-tineplayer-windows.cmd` instead. See [Built from
+source](usage.md#built-from-source). Installed builds are unaffected.
+
+## No sound, or only one output
+
+### No devices are offered
+
+TinePlayer needs a primary output device set before it can play anything.
+Choose one in **Settings → Audio**.
+
+On Linux, devices come from PulseAudio or PipeWire. If the list is empty,
+check that one of them is running and can see your hardware:
+
+```sh
+pactl list short sinks
+```
+
+A machine with only ALSA will play through the primary output but has no
+device list to choose from.
+
+### Nothing comes out of the second output
+
+Check that **Secondary Audio Device** is set to a different device from the
+primary, and that the video actually has a second audio track:
+
+```sh
+tineplayer --list-tracks film.mkv
+```
+
+A file with one audio track has nothing to send to a second output.
+
+### The sound is not in sync with the video
+
+If using a Bluetooth output it can add 100-200ms of delay which puts it behind
+both the picture and the other output. Latency compensation may or may not work 
+depending on your system and device. 
+
+It's recommended to use wired or built-in audio devices, or a lag-free wireless headset with a USB dongle.
+
+## Subtitles
+
+### A subtitle track in the file is not in the list
+
+Blu-ray discs use PGS subtitles, which are images rather than text, and
+GStreamer ships no decoder for them. TinePlayer leaves those tracks out
+rather than offering one that would draw nothing, so they appear neither in
+the menu nor in `--list-tracks`.
+
+### A subtitle file beside the video is not offered
+
+External subtitle files are only found for videos opened by path - a local
+file, a UNC path, or a mounted share. A video opened as `http://` or `smb://`
+offers only the subtitles embedded in it.
+
+Check the name, too. The file has to start with the video's name and end in
+`.srt`, `.ass`, `.ssa` or `.vtt`. See [Subtitles](usage.md#subtitles).
+
+## Kodi
+
+### Kodi still plays videos itself
+
+Restart Kodi first. It reads `playercorefactory.xml` once, at startup, so a
+change made while it is running has no effect until then.
+
+If it still does, check which way it was set up: **Settings → Kodi** in
+TinePlayer lists each Kodi it is configured in and what that one is set to do.
+
+* **Default Player** hands every video over automatically. If it is set to
+  this and Kodi is still playing videos itself, something is wrong - see
+  [Choosing TinePlayer does nothing](#choosing-tineplayer-does-nothing) below.
+* **Optional Player** leaves Kodi playing videos as usual, and TinePlayer has
+  to be picked per video. In Kodi, highlight a video and open its context menu
+  - <kbd>C</kbd> on a keyboard, <kbd>Menu</kbd> on a remote, or a long press
+  on a touchscreen - then choose **Play using...** and pick TinePlayer.
+
+If **Play using...** is not in that menu at all, see [There is no "Play
+using..." anywhere](#there-is-no-play-using-anywhere).
+
+Re-running the setup and choosing **Default Player** switches it over if you
+would rather not pick each time.
+
+### There is no "Play using..." anywhere
+
+On Kodi 20 and earlier it only appears under **Videos → Files**, not in the
+libraries. Kodi 21 and later show it throughout. Setting TinePlayer as
+**Default Player** instead avoids the menu entirely.
+
+### Choosing TinePlayer does nothing
+
+If Kodi is installed as a Flatpak, it needs permission to start programs
+outside its sandbox. See [If Kodi is
+sandboxed](integrations.md#if-kodi-is-sandboxed).
+
+
+## Settings
+
+### Settings went back to their defaults
+
+A `config.yaml` that cannot be parsed is not overwritten. TinePlayer starts on
+defaults, says so on screen, and copies the file to `config.yaml.invalid`
+beside it so you can see what went wrong. Fix the file, rename it back, and
+restart.
+
+### A video does not resume where it stopped
+
+Positions are keyed by the video's full path, so moving or renaming a file
+loses its entry. A position under ten seconds is also treated as no position
+at all. See [Saved Playback Resume
+Data](configuration.md#saved-playback-resume-data).
