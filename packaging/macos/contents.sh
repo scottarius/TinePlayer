@@ -309,12 +309,26 @@ cp "$prefix/share/glib-2.0/schemas/gschemas.compiled" \
 
 # GTK on macOS draws its icons from a theme on disk rather than from anything
 # built in, so without this the buttons are missing-image boxes.
+#
+# Copied with -L, which resolves symlinks into real files. Homebrew builds
+# these directories out of relative links into the Cellar - hicolor's
+# index.theme among them - and -R would preserve those, leaving the bundle
+# pointing at paths that exist only on this machine. Measured 2026-08-03: 38
+# dangling links, including the theme index GTK needs to resolve icons at all,
+# so the fallback theme was broken on every Mac without Homebrew.
+#
+# It also broke `codesign --verify`, which walks the sealed resources and
+# cannot stat a link to nowhere. Notarization passed regardless, since that
+# checks binaries - so this would have shipped.
 for theme in Adwaita hicolor; do
     if [[ -d "$prefix/share/icons/$theme" ]]; then
         mkdir -p "$resources/share/icons"
-        cp -R "$prefix/share/icons/$theme" "$resources/share/icons/"
+        cp -RL "$prefix/share/icons/$theme" "$resources/share/icons/"
     fi
 done
+# Anything still a link could not be resolved even here, so it is broken at
+# the source and only dead weight in the bundle.
+find "$resources/share/icons" -type l -delete 2>/dev/null || true
 
 # --- Fonts ---------------------------------------------------------------
 # Under Resources, which is where use_bundled_fonts looks from inside a

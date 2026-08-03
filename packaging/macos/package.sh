@@ -60,18 +60,93 @@ dmg="dist/macos/TinePlayer-$version-macos.dmg"
 if [[ -n "${TINE_SIGN_IDENTITY:-}" ]]; then
     echo
     echo "=== Signing with a Developer ID ==="
-    # Same order as the ad-hoc signing: libraries first, bundle last, or the
+
+    # Extended attributes, cleared before anything is signed. codesign refuses
+    # a file carrying Finder metadata outright - "resource fork, Finder
+    # information, or similar detritus not allowed" - and building the disk
+    # image above is what puts it there: dmgbuild arranges a Finder window and
+    # the attributes land on the bundle it was handed.
+    #
+    # Cleared rather than prevented, because anything that so much as looks at
+    # the bundle in Finder can put them back, and the failure arrives at the
+    # very end of a long build.
+    #
+    # Files and directories only, not `xattr -cr`. That follows symlinks, and
+    # GTK's hicolor theme ships links to icons for its own demo applications
+    # which are not copied here - so it fails on every dangling one and takes
+    # the script down with it. A symlink carries no attributes of its own that
+    # codesign objects to.
+    find "dist/macos/TinePlayer.app" \( -type f -o -type d \) -exec xattr -c {} +
+
+    # Every --timestamp is a call to Apple's timestamp authority, and this
+    # bundle has about a hundred and forty things to sign. Somewhere in the
+    # run the service starts answering "The timestamp service is not
+    # available" - it is up, and rate limiting: measured 2026-08-03, it
+    # refused after 142 files while a plain request to it answered in a third
+    # of a second.
+    #
+    # A timestamp is not optional. It is what keeps a signature valid after
+    # the certificate expires, and notarization requires one, so the answer is
+    # to wait and ask again rather than to sign without.
+    signed() {
+        local attempt output
+        for attempt in 1 2 3 4 5; do
+            if output="$(codesign "$@" 2>&1)"; then
+                [[ -n "$output" ]] && echo "$output"
+                return 0
+            fi
+            # Only the timestamp service is worth waiting out. Anything else
+            # is a real problem that another attempt will not fix.
+            if [[ "$output" != *"timestamp service is not available"* ]]; then
+                echo "$output" >&2
+                return 1
+            fi
+            echo "  timestamp service busy, waiting $((attempt * 10))s" >&2
+            sleep $((attempt * 10))
+        done
+        echo "The timestamp service kept refusing: ${*: -1}" >&2
+        return 1
+    }
+
+    # Everything that is a Mach-O binary, found by asking rather than by
+    # matching a name. This used to be `-name "*.dylib" -o -name "*.so"`,
+    # which missed `libexec/gst-plugin-scanner` - a helper executable with no
+    # extension. It kept its ad-hoc signature, and Apple rejected the whole
+    # submission for it: not signed with a Developer ID, no secure timestamp,
+    # no hardened runtime. One file out of a hundred and forty-four, and the
+    # only sign of it was a notarization that came back "Invalid".
+    #
+    # Read from a process substitution rather than piped into a loop, so that
+    # a failure stops the script instead of dying quietly in a subshell.
+    #
+    # Same order as the ad-hoc signing: nested code first, bundle last, or the
     # nested signatures are the ones from before install_name_tool ran.
-    find "dist/macos/TinePlayer.app" \( -name "*.dylib" -o -name "*.so" \) -print0 |
-        xargs -0 -n1 codesign --force --options runtime --timestamp \
-            --sign "$TINE_SIGN_IDENTITY"
-    codesign --force --options runtime --timestamp \
+    while IFS= read -r -d '' binary; do
+        case "$(file -b "$binary")" in
+        *Mach-O*) ;;
+        *) continue ;;
+        esac
+        signed --force --options runtime --timestamp \
+            --sign "$TINE_SIGN_IDENTITY" "$binary"
+    done < <(find "dist/macos/TinePlayer.app" -type f -print0)
+    signed --force --options runtime --timestamp \
         --sign "$TINE_SIGN_IDENTITY" "dist/macos/TinePlayer.app/Contents/MacOS/TinePlayer"
-    codesign --force --options runtime --timestamp \
+    signed --force --options runtime --timestamp \
         --sign "$TINE_SIGN_IDENTITY" "dist/macos/TinePlayer.app"
+
+    # Checked here, before anything else touches the bundle. Building the disk
+    # image below puts com.apple.FinderInfo back on it - dmgbuild arranges a
+    # Finder window - and this check then fails on metadata added after the
+    # signature, complaining about a bundle that is perfectly good. The copy
+    # inside the image is made before that happens and is the one that ships.
+    codesign --verify --deep --strict --verbose=2 "dist/macos/TinePlayer.app"
+
     # The disk image is what gets downloaded, so it is what gets notarized.
+    # Rebuilt now that the bundle inside it is signed.
     "$here/dmg.sh"
-    codesign --force --timestamp --sign "$TINE_SIGN_IDENTITY" "$dmg"
+    # For the same reason as above: the image has just come out of Finder.
+    xattr -c "$dmg" 2>/dev/null || true
+    signed --force --timestamp --sign "$TINE_SIGN_IDENTITY" "$dmg"
 
     if [[ -n "${TINE_NOTARY_PROFILE:-}" ]]; then
         echo
@@ -80,11 +155,51 @@ if [[ -n "${TINE_SIGN_IDENTITY:-}" ]]; then
         # build machine that keeps credentials somewhere other than the login
         # keychain. A runner does: its keychain is created for the job and
         # thrown away with it.
-        notary_keychain=()
-        [[ -n "${TINE_NOTARY_KEYCHAIN:-}" ]] &&
-            notary_keychain=(--keychain "$TINE_NOTARY_KEYCHAIN")
-        xcrun notarytool submit "$dmg" \
-            --keychain-profile "$TINE_NOTARY_PROFILE" "${notary_keychain[@]}" --wait
+        #
+        # Spelled out twice rather than built as an array of arguments.
+        # Expanding an empty array under `set -u` is an error in bash 3.2,
+        # which is what macOS still ships and what runs this script - and the
+        # empty case is precisely the local one, where the profile lives in
+        # the login keychain and no override is given. CI always sets the
+        # variable, so the array was never empty there and the fault could
+        # only ever appear on a developer's own machine.
+        # The submission is kept so that a rejection can be explained. Apple
+        # answers "Invalid" and nothing else; the log is what names the files
+        # it objected to, and going to fetch it by hand afterwards is a step
+        # nobody remembers under pressure.
+        submitted="$(mktemp)"
+        notary_status=0
+        if [[ -n "${TINE_NOTARY_KEYCHAIN:-}" ]]; then
+            xcrun notarytool submit "$dmg" \
+                --keychain-profile "$TINE_NOTARY_PROFILE" \
+                --keychain "$TINE_NOTARY_KEYCHAIN" --wait 2>&1 |
+                tee "$submitted" || notary_status=$?
+        else
+            xcrun notarytool submit "$dmg" \
+                --keychain-profile "$TINE_NOTARY_PROFILE" --wait 2>&1 |
+                tee "$submitted" || notary_status=$?
+        fi
+
+        if [[ "$notary_status" -ne 0 ]] || grep -q "status: Invalid" "$submitted"; then
+            id="$(awk '/  id: /{print $2; exit}' "$submitted")"
+            echo
+            echo "=== Why it was rejected ===" >&2
+            if [[ -n "$id" ]]; then
+                if [[ -n "${TINE_NOTARY_KEYCHAIN:-}" ]]; then
+                    xcrun notarytool log "$id" \
+                        --keychain-profile "$TINE_NOTARY_PROFILE" \
+                        --keychain "$TINE_NOTARY_KEYCHAIN" >&2 || true
+                else
+                    xcrun notarytool log "$id" \
+                        --keychain-profile "$TINE_NOTARY_PROFILE" >&2 || true
+                fi
+            else
+                echo "No submission id to ask about." >&2
+            fi
+            rm -f "$submitted"
+            exit 1
+        fi
+        rm -f "$submitted"
         # Stapling puts the ticket inside the image, so it opens even on a
         # machine that cannot reach Apple to ask.
         xcrun stapler staple "$dmg"
@@ -98,7 +213,6 @@ if [[ -n "${TINE_SIGN_IDENTITY:-}" ]]; then
         echo "=== What Gatekeeper makes of it ==="
         spctl --assess --type open --context context:primary-signature \
             --verbose=2 "$dmg"
-        codesign --verify --deep --strict --verbose=2 "dist/macos/TinePlayer.app"
     else
         echo "TINE_NOTARY_PROFILE not set, so the image is signed but not notarized." >&2
     fi
