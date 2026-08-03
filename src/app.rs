@@ -75,11 +75,12 @@ const PAGE_ROWS: i32 = 8;
 
 /// The rows the settings screen always has. The version row below the
 /// update switch is extra, and only there while the switch is on.
-const SETTINGS_ROWS: usize = 20;
+const SETTINGS_ROWS: usize = 21;
 
 /// Where the update switch sits, and the row naming a new version under it.
-const UPDATE_SWITCH_ROW: i32 = 19;
-const UPDATE_STATUS_ROW: i32 = 20;
+const UPDATE_SWITCH_ROW: i32 = 20;
+const UPDATE_STATUS_ROW: i32 = 21;
+
 /// Rows that begin a group: each output, then subtitles, then what is
 /// remembered between runs, then the housekeeping at the bottom.
 const SETTINGS_SECTIONS: [i32; 6] = [3, 7, 11, 14, 17, 18];
@@ -131,6 +132,7 @@ enum Screen {
     Chooser,
     Confirm,
     About,
+    Notices,
     Kodi,
     /// The screens of the Kodi wizard. None of them writes anything: only
     /// Configure on the summary does.
@@ -833,7 +835,9 @@ impl App {
         match screen {
             Screen::Playing => self.leave_playback(),
             Screen::Chooser => self.leave_chooser(),
-            Screen::Confirm | Screen::About | Screen::Kodi => self.show_settings(),
+            Screen::Confirm | Screen::About | Screen::Notices | Screen::Kodi => {
+                self.show_settings()
+            }
             // Every wizard screen leaves the wizard rather than stepping back
             // through it. Nothing has been written until Configure, so this
             // is the same as pressing Cancel, which is what Escape should
@@ -3495,6 +3499,7 @@ impl App {
                     String::new(),
                     true,
                 ),
+                ("Third Party Notices".to_string(), String::new(), true),
                 (
                     "Check for updates".to_string(),
                     if config.check_for_updates {
@@ -3652,6 +3657,7 @@ impl App {
                     16 => app.confirm_clear_data(),
                     17 => app.show_kodi(),
                     18 => app.show_about(),
+                    19 => app.show_notices(),
                     UPDATE_SWITCH_ROW => app.toggle_update_checks(),
                     UPDATE_STATUS_ROW => app.open_release_page(),
                     _ => {}
@@ -3893,6 +3899,60 @@ impl App {
         *self.about_scroll.borrow_mut() = Some(scroller.vadjustment());
         *self.copy_root.borrow_mut() = Some(body.upcast());
         *self.screen.borrow_mut() = Screen::About;
+        self.window.set_child(Some(&page));
+        back.grab_focus();
+    }
+
+    /// The notices for everything TinePlayer is built from, in the
+    /// application rather than only on a web page.
+    ///
+    /// Every package already carries THIRD-PARTY.md as a file, which is what
+    /// the licenses actually ask for. This is about being able to read it: the
+    /// machines this player is built for are televisions and HTPCs driven by a
+    /// gamepad, where there may be no browser at all and opening one is not
+    /// something a D-pad does well. The link on the About page stays for
+    /// anyone who would rather read it on the web.
+    ///
+    /// Built into the binary rather than read from beside it, so it is there
+    /// whichever way TinePlayer was installed, and cannot be separated from
+    /// the thing it describes.
+    fn show_notices(self: &Rc<Self>) {
+        let (page, scroller, body, back) = text_page("Third Party Notices");
+
+        let blocks = notices_blocks(include_str!("../THIRD-PARTY.md"));
+        let last = blocks.len().saturating_sub(1);
+        for (index, block) in blocks.into_iter().enumerate() {
+            let widget = match block {
+                Notice::Heading(text) => about_heading(&text),
+                Notice::Text(text) => about_text(&text),
+            };
+            // The closing line is a remark about the list rather than part of
+            // it, and sitting one row's gap under two hundred crates it read
+            // as another entry. A heading would be too much for one sentence;
+            // the space is enough to separate it.
+            if index == last {
+                widget.set_margin_top((24.0 * self.scale.get()).round() as i32);
+                // And room under it, so scrolling to the end stops with the
+                // last line clear of the edge rather than against it.
+                widget.set_margin_bottom((32.0 * self.scale.get()).round() as i32);
+            }
+            body.append(&widget);
+        }
+
+        {
+            let app = self.clone();
+            back.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_settings();
+            });
+        }
+
+        // The same arrangement the About page uses: nothing to select, so up
+        // and down scroll instead.
+        self.set_nav(None, std::slice::from_ref(&back), &[]);
+        *self.about_scroll.borrow_mut() = Some(scroller.vadjustment());
+        *self.copy_root.borrow_mut() = Some(body.upcast());
+        *self.screen.borrow_mut() = Screen::Notices;
         self.window.set_child(Some(&page));
         back.grab_focus();
     }
@@ -6054,6 +6114,76 @@ fn slider_row(
     (row, scale, value)
 }
 
+/// One piece of the notices page.
+enum Notice {
+    Heading(String),
+    Text(String),
+}
+
+/// Turns THIRD-PARTY.md into something worth reading on a screen.
+///
+/// Not a Markdown renderer, and it does not need to be: the file is headings,
+/// paragraphs and tables, and only the tables need doing anything to. A row of
+/// pipes reads as punctuation rather than as a list, so the cells are joined
+/// with a dash - `serde - 1.0.229 - MIT OR Apache-2.0` - and the rule under
+/// each header is dropped, having nothing to say without the pipes around it.
+///
+/// Paragraphs are gathered rather than emitted line by line, so that text
+/// wrapped at eighty columns in the file wraps to the window here instead.
+fn notices_blocks(source: &str) -> Vec<Notice> {
+    let mut blocks = Vec::new();
+    let mut paragraph: Vec<String> = Vec::new();
+
+    let flush = |paragraph: &mut Vec<String>, blocks: &mut Vec<Notice>| {
+        if !paragraph.is_empty() {
+            blocks.push(Notice::Text(paragraph.join(" ")));
+            paragraph.clear();
+        }
+    };
+
+    for line in source.lines() {
+        let line = line.trim();
+        // The rule under a table header, which is pipes and dashes and no
+        // words at all.
+        if line.starts_with('|') && line.trim_matches(['|', '-', ':', ' ']).is_empty() {
+            continue;
+        }
+        if let Some(heading) = line.strip_prefix("## ").or_else(|| line.strip_prefix("# ")) {
+            flush(&mut paragraph, &mut blocks);
+            blocks.push(Notice::Heading(heading.to_string()));
+        } else if let Some(row) = line.strip_prefix('|') {
+            // A table row stands alone rather than joining the paragraph
+            // around it: two hundred crates read as a list, not as prose.
+            flush(&mut paragraph, &mut blocks);
+            let cells: Vec<&str> = row
+                .trim_end_matches('|')
+                .split('|')
+                .map(str::trim)
+                .filter(|cell| !cell.is_empty())
+                .collect();
+            blocks.push(Notice::Text(cells.join("  -  ")));
+        } else if line.is_empty() {
+            flush(&mut paragraph, &mut blocks);
+        } else {
+            // Markdown decoration that would otherwise be read aloud as
+            // punctuation, and the note marker, which is a label for a
+            // renderer rather than words for a reader.
+            let text = line
+                .trim_start_matches("> ")
+                .trim_start_matches('>')
+                .trim_start_matches("- ")
+                .replace("**", "")
+                .replace('`', "");
+            if text.trim() == "[!NOTE]" {
+                continue;
+            }
+            paragraph.push(text.trim().to_string());
+        }
+    }
+    flush(&mut paragraph, &mut blocks);
+    blocks
+}
+
 /// A page of prose rather than of rows, for the one screen that is read
 /// instead of navigated.
 fn text_page(title: &str) -> (gtk::Box, gtk::ScrolledWindow, gtk::Box, gtk::Button) {
@@ -6752,4 +6882,76 @@ fn style_css(scale: f64, dark: bool) -> String {
         highlight = "#3584e4",
         video = crate::player::VIDEO_CSS_CLASS,
     )
+}
+
+#[cfg(test)]
+mod notices {
+    use super::*;
+
+    /// The real file, since that is what ships and what the transform has to
+    /// cope with. A table that still has its pipes in it is the failure this
+    /// is watching for: it reads as punctuation rather than as a list.
+    #[test]
+    fn the_shipped_notices_read_as_text() {
+        let blocks = notices_blocks(include_str!("../THIRD-PARTY.md"));
+        assert!(!blocks.is_empty(), "nothing was produced");
+
+        let mut headings = Vec::new();
+        for block in &blocks {
+            match block {
+                Notice::Heading(text) => headings.push(text.as_str()),
+                Notice::Text(text) => {
+                    assert!(!text.contains('|'), "table pipe left in: {text:?}");
+                    assert!(!text.contains("**"), "bold marker left in: {text:?}");
+                    assert!(!text.starts_with('>'), "quote marker left in: {text:?}");
+                    assert!(text.trim() != "[!NOTE]", "note marker left in");
+                }
+            }
+        }
+
+        for wanted in ["Fonts", "Native libraries", "Rust dependencies"] {
+            assert!(
+                headings.contains(&wanted),
+                "no {wanted:?} heading in {headings:?}"
+            );
+        }
+    }
+
+    /// A crate row keeps all three of its cells, joined rather than dropped.
+    #[test]
+    fn a_crate_row_keeps_its_columns() {
+        let blocks = notices_blocks(
+            "## Rust dependencies\n\n| Crate | Version | License |\n|---|---|---|\n| serde | 1.0.229 | MIT OR Apache-2.0 |\n",
+        );
+        let rows: Vec<&String> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                Notice::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            rows.iter().any(|row| row.contains("serde")
+                && row.contains("1.0.229")
+                && row.contains("MIT OR Apache-2.0")),
+            "the crate row lost a column: {rows:?}"
+        );
+        // The rule under the header carries no words and should be gone.
+        assert!(!rows.iter().any(|row| row.contains("---")), "{rows:?}");
+    }
+
+    /// Paragraphs wrapped in the file wrap to the window instead.
+    #[test]
+    fn wrapped_prose_is_rejoined() {
+        let blocks = notices_blocks("one line\nand its continuation\n\na second paragraph\n");
+        let texts: Vec<&String> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                Notice::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert_eq!(texts[0], "one line and its continuation");
+    }
 }
