@@ -2,9 +2,11 @@
 
 TinePlayer can be launched by another application to play a video, handing
 control back when playback ends. A media center app can do this to keep its
-own library browsing while TinePlayer handles playback, but a launcher does 
+own library browsing while TinePlayer handles playback, but a launcher does
 not have to be a library: a script, a file manager, or a keyboard shortcut works
 the same way.
+
+## Launching from another application
 
 Launch the executable by passing the video and the `--external` flag:
 
@@ -74,10 +76,10 @@ There are two ways to set it up:
 ### From TinePlayer
 
 The easiest way to configure Kodi is from TinePlayer itself. In
-TinePlayer, open **Settings** and choose **Kodi**. You will see a list of any install of Kodi that was found, and how each one is 
-configured. 
+TinePlayer, open **Settings** and choose **Kodi**. You will see a list of any install of Kodi that was found, and how each one is
+configured.
 
-**Add Configuration** starts the configuration wizard with the 
+**Add Configuration** starts the configuration wizard with the
 following steps:
 
 1. **Choose a Kodi Installation**
@@ -128,7 +130,7 @@ flatpak override --user --talk-name=org.freedesktop.Flatpak tv.kodi.Kodi
 > `flatpak override --user --reset tv.kodi.Kodi`, which clears every override
 > you have set for Kodi.
 
-If Kodi is installed as a **Snap** it is not supported as Snap confinement offers 
+If Kodi is installed as a **Snap** it is not supported as Snap confinement offers
 no way to start a program outside itself. TinePlayer lists such an install
 and marks it unsupported rather than letting it be configured. Use a Kodi from
 your distribution's packages, or from Flathub.

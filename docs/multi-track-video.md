@@ -71,7 +71,7 @@ If you do use it, two settings matter:
 
 HandBrake does not always carry track titles across. Check the result and
 retitle anything that lost its name, with `mkvpropedit` as shown below -
-particularly a described track, which is recognised by its title.
+particularly a described track, which is recognized by its title.
 
 ### Afterwards
 

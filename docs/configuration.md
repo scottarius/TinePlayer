@@ -1,13 +1,18 @@
 # Configuration
 
-All settings can be configured from the **Settings** menu inside TinePlayer, which will only offers values that make sense, and lists the
-audio devices this machine actually has.
+All settings can be configured from the **Settings** menu inside TinePlayer,
+which offers only values that make sense and lists the audio devices this
+machine actually has.
+
+![TinePlayer's settings screen, showing theme, interface size and navigation
+sounds, then the primary audio device with its preferred language, audio
+description preference and volume.](screenshots/settings-menu.png)
 
 The same settings are stored in `config.yaml`, which can be edited directly. TinePlayer reads it at startup, so
 restart it after editing.
 
 It lives in the per-user config directory:
-* Windows: `%LOCALAPPDATA%\tineplayer\config.yaml`
+* Windows: `%LOCALAPPDATA%\TinePlayer\config.yaml`
 * macOS: `~/.config/tineplayer/config.yaml`
 * Linux: `~/.config/tineplayer/config.yaml`
 
@@ -104,7 +109,7 @@ and a described track in another language is never chosen.
 
 Described tracks are recognized by their title, since no container flag for
 them exists. For where to find described audio, how to add it to a file you
-already have, and how to title the track so it is picked up, see 
+already have, and how to title the track so it is picked up, see
 [Where to Get Multi-track Videos](multi-track-video.md#audio-description).
 
 ## Choosing Subtitles Automatically
@@ -176,9 +181,9 @@ on most systems while something like `Arial` may not.
 These are the languages TinePlayer offers for **Primary/Secondary Language
 Preference** and for **Subtitle Preference**. Use the code in `config.yaml`.
 
-The list is deliberately not every language ISO defines, but what generally 
-turns up as an alternate audio track on commercial discs and the rips made 
-from them. A language that is missing can still be played by choosing its 
+The list is deliberately not every language ISO defines, but what generally
+turns up as an alternate audio track on commercial discs and the rips made
+from them. A language that is missing can still be played by choosing its
 track by hand.
 
 | Code | Language | Native name |
@@ -248,7 +253,7 @@ If a language you need is missing,
 Details about resuming playback of a video that didn't finish are kept in
 `positions.json`, also in the per-user config directory:
 
-* Windows: `%LOCALAPPDATA%\tineplayer\positions.json`
+* Windows: `%LOCALAPPDATA%\TinePlayer\positions.json`
 * macOS: `~/.local/share/tineplayer/positions.json`
 * Linux: `~/.local/share/tineplayer/positions.json`
 

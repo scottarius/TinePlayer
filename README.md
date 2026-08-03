@@ -28,6 +28,10 @@ person making a concession. This is an attempt to let everyone have the film
 the way it works for them, at the same time, on the same screen, while still
 sharing the experience together.
 
+<p align="center">
+  <img src="docs/screenshots/main-menu.png" width="820" alt="TinePlayer's playback options screen. One video is chosen, and beneath it a primary audio device playing the English track and a secondary device, a pair of headphones, playing the Spanish track. A subtitle track is chosen separately.">
+</p>
+
 ## Why another video player
 
 Plenty of people have tried to rig this up themselves: the film on the
@@ -54,6 +58,15 @@ file's audio tracks are already separate streams inside the container, so the
 file is demuxed once and each chosen track is piped to its own output device
 from a single pipeline, staying in sync because it is all one clock.
 
+<p align="center">
+  <img src="docs/screenshots/player-controls.png" width="820" alt="A film playing with subtitles shown, and the playback controls along the bottom: elapsed time, a position bar, skip and pause buttons, and buttons for subtitles, volume and fullscreen.">
+</p>
+
+<p align="center">
+  <sub><i>Sintel</i> © <a href="https://studio.blender.org/films/sintel/">Blender Foundation</a>,
+  <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a></sub>
+</p>
+
 ## Features
 
 - Plays a video and two simultaneous audio tracks to separate output devices in
@@ -61,11 +74,18 @@ from a single pipeline, staying in sync because it is all one clock.
 - Targets HTPC and TV use, with a large interface and full gamepad support
 - Works with standard video containers: MKV, MP4, MPEG-TS (anything GStreamer
   supports)
+- Plays from network sources as well as local files: `http://`, `smb://` and
+  network shares
 - Resumes videos with remembered playback time and language/track selections
-- Displays subtitles with support for both embedded and external files
+- Displays subtitles from embedded tracks and external files, and can choose
+  one automatically, including forced-only
 - Selects tracks automatically from your preferred languages
 - Splits any pair of tracks a file carries, including audio description
   alongside the ordinary soundtrack
+- Independent volume for each output, so a described or second-language track
+  can sit at a different level from the room's soundtrack
+- Screen reader support throughout, with every menu, list and playback control
+  named and announced
 - Integrates with Kodi and reports playback progress, including libraries from
   add-ons like Jellyfin and Plex
 - Launches straight into playback from command-line arguments, for custom
@@ -87,7 +107,7 @@ from a single pipeline, staying in sync because it is all one clock.
   for each platform
 - **[Using TinePlayer](docs/usage.md)** - controls, keyboard and gamepad,
   command-line options
-- **[Where to Get Multi-track Videos](docs/multi-track-video.md)** - finding 
+- **[Getting Multi-track Videos](docs/multi-track-video.md)** - finding
   or creating multi-track video files
 - **[Configuration](docs/configuration.md)** - `config.yaml`, language
   preferences, saved playback resume data
@@ -107,19 +127,19 @@ Upgrading the ZIP means deleting the old folder first rather than unpacking
 over it, which would leave the previous version's libraries mixed in with the
 new ones.
 
-**macOS** - open the disk image and drag TinePlayer to Applications. 
+**macOS** - open the disk image and drag TinePlayer to Applications.
 
 **Linux** - a `.deb` for Debian, Ubuntu and Raspberry Pi OS, in `amd64` and
 `arm64`:
 
 ```sh
-sudo apt install ./tineplayer_0.6.0_linux_arm64.deb
+sudo apt install ./tineplayer_1.0.0_linux_arm64.deb
 ```
 
 The `./` is not a typo: it is what makes apt install the file *and* fetch the
-GTK and GStreamer packages it needs. On Fedora, Arch and others there is no
-package yet, so [build from source](docs/building.md). It installs on Debian 12, Ubuntu 22.04 and
-anything newer. 
+GTK and GStreamer packages it needs. It installs on Debian 12, Ubuntu 22.04 and
+anything newer. On Fedora, Arch and others there is no package yet, so
+[build from source](docs/building.md).
 
 ## Build from source
 
@@ -172,13 +192,15 @@ runs correctly on much newer releases.
 | Windows 10 / 11 | 4.20 (bundled with GStreamer) | Tested |
 | macOS 26 (Apple Silicon) | 4.22 (Homebrew) | Tested |
 | Raspberry Pi OS / Debian 12 (Bookworm) | 4.8 | Tested |
-| Ubuntu 22.04 LTS | 4.6 | Meets baseline, untested |
-| Ubuntu 24.04 LTS | 4.14 | Meets baseline, untested |
-| Debian 13 (Trixie) | 4.18 | Meets baseline, untested |
+| Ubuntu 22.04 LTS | 4.6 | Installs and runs |
+| Ubuntu 24.04 LTS | 4.14 | Installs and runs |
+| Debian 13 (Trixie) | 4.18 | Installs and runs |
 
 Both Wayland and X11 sessions are supported; the backend is chosen at runtime.
-"Meets baseline" means the system satisfies the version requirements and is
-expected to work, but has not been run there. Reports welcome.
+**Tested** means a full run on real hardware: playback, two audio outputs and
+the whole interface. **Installs and runs** means the released package was
+installed on that release and the interface verified there, but playback and
+dual output have not been exercised. Reports welcome.
 
 One consequence of that baseline: the GTK 4.14+ `dmabuf` zero-copy rendering
 path is not used, so newer systems do not gain that particular optimization.
@@ -218,4 +240,5 @@ It builds on the following, none of which are vendored into this repository:
 Every Rust library compiled into TinePlayer, direct and transitive, is listed
 with its license in **[THIRD-PARTY.md](./THIRD-PARTY.md)**. Nearly all are MIT
 or Apache-2.0, and their notices travel with the application as those licenses
-ask.
+ask: the same list is readable in the application itself, under **Settings →
+About TinePlayer → Third Party Notices**.

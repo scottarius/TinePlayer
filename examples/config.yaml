@@ -4,7 +4,7 @@
 # settings menu, which writes the same file:
 #
 #   Linux:    ~/.config/tineplayer/config.yaml
-#   Windows:  %LOCALAPPDATA%\tineplayer\config.yaml
+#   Windows:  %LOCALAPPDATA%\TinePlayer\config.yaml
 #
 # Every setting is optional except primary_sink. Leave one out and its default
 # applies; there is no need to list settings you are not changing.

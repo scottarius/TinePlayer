@@ -4,6 +4,8 @@
 [releases page](https://github.com/scottarius/TinePlayer/releases). Start it
 from your applications menu, or from a terminal with or without arguments.
 
+## Starting TinePlayer
+
 ### Windows
 
 Start TinePlayer from the Start menu, or from a terminal with arguments. Installed, it is on
@@ -111,6 +113,16 @@ Everything is reachable with a keyboard or a gamepad. A mouse is not required, b
 The playback controls hide themselves after a few seconds of stillness, and
 come back on any interaction.
 
+![The playback control bar across the foot of the video: elapsed time, a
+position bar and the total length, then settings, stop, skip back, pause, skip
+forward, subtitles, volume and fullscreen. The volume button is active, and its
+panel is open above the bar with a separate slider for each of the two output
+devices.](screenshots/control-bar.png)
+
+Each output keeps its own volume, so the described or second-language track can
+sit at a different level from the one the room is hearing. <kbd>M</kbd> mutes
+and restores both at once.
+
 ## Subtitles
 
 Subtitles come from two places: tracks embedded in the video, and subtitle
@@ -129,7 +141,7 @@ between the two becomes its label:
 | `Film (2019).srt`             | `External` |
 
 The [Subtitle Preference](configuration.md#choosing-subtitles-automatically)
-will attempt to automatically choose subtitles and defaults to Forced subtitles 
+will attempt to automatically choose subtitles and defaults to Forced subtitles
 matching the primary output language, but any manual choices are saved.
 To override either for a single playback, see [Choosing subtitles on the
 command line](#choosing-subtitles-on-the-command-line).
@@ -174,14 +186,14 @@ TinePlayer video.mkv --primary 5 --secondary 1 --fullscreen
 
 ### Playing a Video Directly
 
-Normally TinePlayer opens to the playback options menu, with track 
+Normally TinePlayer opens to the playback options menu, with track
 and subtitle choices. Passing `--play` skips the menu and starts playback immediately.
 
 ```sh
 tineplayer film.mkv --play
 ```
 
-By default it uses whatever settings was saved for that video, or your 
+By default it uses whatever settings was saved for that video, or your
 language preferences if it has not been played before.
 
 Additionally, you can pass any combination of arguments to override the various settings.
@@ -194,7 +206,7 @@ tineplayer film.mkv --play --primary 5 --secondary 1
 tineplayer film.mkv --primary 5 --secondary 1
 ```
 
-The only argument required with `--play` is a valid video path, and the primary output device setup. 
+The only argument required with `--play` is a valid video path, and the primary output device setup.
 
 ### Fixed Fullscreen
 

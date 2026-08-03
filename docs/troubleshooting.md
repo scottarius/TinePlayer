@@ -14,21 +14,21 @@ certificate yet. Choose **More info**, then **Run anyway**.
 ### apt cannot find the package
 
 ```
-E: Unable to locate package tineplayer_0.6.0_linux_amd64.deb
+E: Unable to locate package tineplayer_1.0.0_linux_amd64.deb
 ```
 
 The leading `./` is missing. Without it apt looks for a package by that name
 in its own sources rather than installing the file in front of it:
 
 ```sh
-sudo apt install ./tineplayer_0.6.0_linux_amd64.deb
+sudo apt install ./tineplayer_1.0.0_linux_amd64.deb
 ```
 
 ### apt says the download is performed unsandboxed
 
 ```
 N: Download is performed unsandboxed as root as file
-'/home/you/Downloads/tineplayer_0.6.0_linux_arm64.deb' couldn't be accessed
+'/home/you/Downloads/tineplayer_1.0.0_linux_arm64.deb' couldn't be accessed
 by user '_apt'. - pkgAcquire::Run (13: Permission denied)
 ```
 
@@ -49,8 +49,8 @@ dpkg -l tineplayer
 To avoid the message, install from somewhere apt can reach:
 
 ```sh
-mv tineplayer_0.6.0_linux_arm64.deb /tmp
-sudo apt install /tmp/tineplayer_0.6.0_linux_arm64.deb
+mv tineplayer_1.0.0_linux_arm64.deb /tmp
+sudo apt install /tmp/tineplayer_1.0.0_linux_arm64.deb
 ```
 
 ### A build from source will not start on Windows
@@ -97,8 +97,8 @@ A file with one audio track has nothing to send to a second output.
 ### The sound is not in sync with the video
 
 If using a Bluetooth output it can add 100-200ms of delay which puts it behind
-both the picture and the other output. Latency compensation may or may not work 
-depending on your system and device. 
+both the picture and the other output. Latency compensation may or may not work
+depending on your system and device.
 
 It's recommended to use wired or built-in audio devices, or a lag-free wireless headset with a USB dongle.
 
