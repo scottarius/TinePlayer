@@ -87,6 +87,12 @@ Type: filesandordirs; Name: "{app}\lib"
 Type: filesandordirs; Name: "{app}\libexec"
 Type: filesandordirs; Name: "{app}\share"
 Type: filesandordirs; Name: "{app}\licenses"
+; The fonts, for the same reason as the plugins: fontconfig is pointed at this
+; directory and registers whatever is in it, so a face left behind by an older
+; version stays available to be picked. Missed when the fonts were first
+; packaged, and found by installing over a planted file rather than by reading
+; this list.
+Type: filesandordirs; Name: "{app}\fonts"
 Type: files; Name: "{app}\*.dll"
 
 [Files]
