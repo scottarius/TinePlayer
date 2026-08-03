@@ -2,6 +2,10 @@
 config.local.yaml
 positions.local.json
 .idea/
+# JetBrains writes these beside the project as well as inside .idea, and the
+# .user suffix means they belong to one developer's IDE rather than the
+# project.
+*.DotSettings.user
 
 # Packaged builds: staging folder, ZIP and installer.
 dist/

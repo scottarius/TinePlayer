@@ -102,17 +102,10 @@ Set **Prefer Audio Description** to Yes under either output to have described
 tracks chosen automatically. It can be combined with a language preference,
 and a described track in another language is never chosen.
 
-### Where to Find Described Audio
-
-If you have a video file without a described audio track, you can check
-[Audiovault](https://audiovault.net/) to find one, and use [this fork of
-describealaign](https://github.com/matalvernaz/describealaign) to combine
-the audio track with your video file, which specifically preserves the
-original audio along with the described audio track instead of replacing it,
-which makes the resulting file usable with TinePlayer.
-
-Both are third-party projects with no connection to TinePlayer, mentioned
-because they answer a real question rather than as a recommendation.
+Described tracks are recognized by their title, since no container flag for
+them exists. For where to find described audio, how to add it to a file you
+already have, and how to title the track so it is picked up, see 
+[Where to Get Multi-track Videos](multi-track-video.md#audio-description).
 
 ## Choosing Subtitles Automatically
 

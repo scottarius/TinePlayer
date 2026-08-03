@@ -87,6 +87,8 @@ from a single pipeline, staying in sync because it is all one clock.
   for each platform
 - **[Using TinePlayer](docs/usage.md)** - controls, keyboard and gamepad,
   command-line options
+- **[Where to Get Multi-track Videos](docs/multi-track-video.md)** - finding 
+  or creating multi-track video files
 - **[Configuration](docs/configuration.md)** - `config.yaml`, language
   preferences, saved playback resume data
 - **[Integrations](docs/integrations.md)** - integrating with other media

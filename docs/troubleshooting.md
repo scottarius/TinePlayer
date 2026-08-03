@@ -86,6 +86,55 @@ depending on your system and device.
 
 It's recommended to use wired or built-in audio devices, or a lag-free wireless headset with a USB dongle.
 
+## Audio tracks
+
+### Track names do not show in TinePlayer but show elsewhere (VLC)
+
+The file is probably an MP4. Track names there are kept in a QuickTime `udta`/`name`
+box, which players like VLC read and GStreamer does not, so the tracks often
+display in TinePlayer with no name or language.
+
+That also means a described track cannot be chosen automatically, since
+[Prefer Audio Description](configuration.md#audio-description) recognizes one
+by its title.
+
+Remuxing to MKV carries the names across and can be done with
+[ffmpeg](https://ffmpeg.org/), a command-line tool for working with media
+files. Nothing is re-encoded, so it takes seconds rather than hours:
+
+```sh
+ffmpeg -i film.mp4 -map 0 -c copy \
+    -metadata:s:a:0 language=eng -metadata:s:a:0 title="Original" \
+    -metadata:s:a:1 language=eng -metadata:s:a:1 title="Audio Description" \
+    film.mkv
+```
+
+Adjust the numbers to match the tracks, then check:
+
+```sh
+tineplayer --list-tracks film.mkv
+```
+
+### A described track is not chosen automatically
+
+Check that **Prefer Audio Description** is on for that output, and that the
+track's title says what it is:
+
+```sh
+tineplayer --list-tracks film.mkv
+```
+
+A title counts if it contains `descri`, `narration`, `visually impaired`, or
+`ad` as a word of its own. "Commentary" alone does not - a director's
+commentary is a different thing, and files often carry both.
+
+A title can be changed without remuxing, with `mkvpropedit` from
+[MKVToolNix](https://mkvtoolnix.download/):
+
+```sh
+mkvpropedit film.mkv --edit track:a2 --set name="English Audio Description"
+```
+
 ## Subtitles
 
 ### A subtitle track in the file is not in the list
