@@ -88,6 +88,11 @@ TINE_APP="$app" "$venv/bin/dmgbuild"     -s packaging/macos/dmg-settings.py     
 size="$(du -h "$dmg" | cut -f1)"
 echo
 echo "Built $dmg ($size)"
-echo
-echo "Unsigned, so a copy downloaded from the internet is quarantined until"
-echo "it is notarized. On the machine that built it, it opens as it is."
+# Only when nothing is going to sign it. package.sh runs this a second time
+# inside the signing block, where the image is about to be signed and
+# notarized, and saying it is unsigned there is simply wrong.
+if [[ -z "${TINE_SIGN_IDENTITY:-}" ]]; then
+    echo
+    echo "Unsigned, so a copy downloaded from the internet is quarantined until"
+    echo "it is notarized. On the machine that built it, it opens as it is."
+fi

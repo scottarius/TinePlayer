@@ -341,9 +341,9 @@ jobs:
           draft: true
           # The notes start filled in, so that writing them is editing rather
           # than starting from an empty box on the day. Everything that does
-          # not change between releases - which file to download, what the
-          # unsigned-binary warnings look like, how to install - is already
-          # here and correct. What is left is saying what changed.
+          # not change between releases - which file to download, how to
+          # install, what Windows will say about it - is already here and
+          # correct. What is left is saying what changed.
           #
           # Not generate_release_notes: a list of commit subjects is a poor
           # substitute for a sentence about what the release was for, and it
@@ -379,14 +379,6 @@ jobs:
             ### Mac
 
             Download and open the .dmg file and drag TinePlayer.app into your Applications folder.
-
-            macOS may refuse to open it the first time, because the app is not signed with an Apple developer certificate. Open **System Settings**, go to **Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to the message about TinePlayer. You only have to do this once.
-
-            If instead it tells you the app is damaged, macOS has quarantined it. Clear that with:
-
-            ```sh
-            xattr -dr com.apple.quarantine /Applications/TinePlayer.app
-            ```
 
             ### Linux
 

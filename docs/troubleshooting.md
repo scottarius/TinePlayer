@@ -11,19 +11,6 @@ going wrong and not being listed here is itself worth knowing about.
 SmartScreen does not recognize the download, because it is not signed with a
 certificate yet. Choose **More info**, then **Run anyway**.
 
-### macOS refuses to open it
-
-The app is not signed with an Apple developer certificate. Open **System
-Settings**, go to **Privacy & Security**, scroll to the bottom, and click
-**Open Anyway** next to the message about TinePlayer. You only have to do this
-once.
-
-If macOS instead says the app is **damaged**, it has been quarantined:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/TinePlayer.app
-```
-
 ### apt cannot find the package
 
 ```
@@ -35,6 +22,35 @@ in its own sources rather than installing the file in front of it:
 
 ```sh
 sudo apt install ./tineplayer_0.6.0_linux_amd64.deb
+```
+
+### apt says the download is performed unsandboxed
+
+```
+N: Download is performed unsandboxed as root as file
+'/home/you/Downloads/tineplayer_0.6.0_linux_arm64.deb' couldn't be accessed
+by user '_apt'. - pkgAcquire::Run (13: Permission denied)
+```
+
+Nothing went wrong, and the package installs normally. The `N:` marks it as a
+note rather than an error.
+
+apt normally copies a file as the unprivileged `_apt` user, and cannot here
+because your home directory is not readable by anyone else - Raspberry Pi OS
+and some other distributions create them that way. It falls back to copying as
+root and says so.
+
+Check that it installed:
+
+```sh
+dpkg -l tineplayer
+```
+
+To avoid the message, install from somewhere apt can reach:
+
+```sh
+mv tineplayer_0.6.0_linux_arm64.deb /tmp
+sudo apt install /tmp/tineplayer_0.6.0_linux_arm64.deb
 ```
 
 ### A build from source will not start on Windows
