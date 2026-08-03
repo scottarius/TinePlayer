@@ -17,6 +17,7 @@ It lives in the per-user config directory:
 | Theme                                                    | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                                                                      |
 | Interface Size                                           | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution                                                    |
 | Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
+| Check for updates                                        | `check_for_updates`  | `true`      | Asks GitHub once a day whether a newer TinePlayer has been released, `true` or `false` <br/>Nothing is ever downloaded or installed             |
 | [Primary Audio Device](#output-devices)                  | `primary_sink`       | Unset       | Primary output device name. Required                                                                                                           |
 | Primary Language Preference                              | `primary_language`   | Unset       | Preferred primary [language code](#languages) <br/>If unset defaults to the first track                                                        |
 | [Secondary Audio Device](#output-devices)                | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
@@ -56,6 +57,7 @@ from that than build one up.
 theme: dark
 ui_scale: 1.5
 sounds: true
+check_for_updates: true
 
 primary_sink: Built-in Audio Analogue Stereo
 primary_language: en

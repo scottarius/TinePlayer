@@ -43,6 +43,10 @@ fn default_sounds() -> bool {
     true
 }
 
+fn default_check_for_updates() -> bool {
+    true
+}
+
 /// Which way round to draw the interface. `Auto` follows the desktop, and
 /// falls back to dark when it cannot be asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -137,6 +141,15 @@ pub struct Config {
     /// Plays a short click when moving through the menus.
     #[serde(default = "default_sounds")]
     pub sounds: bool,
+    /// Asks GitHub once a day whether a newer TinePlayer has been released.
+    ///
+    /// On by default, which is the useful answer for most people and the only
+    /// way anyone finds out a release exists. It is the one thing TinePlayer
+    /// does over the network without being asked, which is why it is a
+    /// setting at all rather than simply how the application behaves. Nothing
+    /// is ever downloaded or installed - see [`crate::updates`].
+    #[serde(default = "default_check_for_updates")]
+    pub check_for_updates: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xdg_runtime_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,6 +183,7 @@ impl Default for Config {
             last_video: None,
             fullscreen: false,
             sounds: default_sounds(),
+            check_for_updates: default_check_for_updates(),
             xdg_runtime_dir: None,
             wayland_display: None,
             display: None,
@@ -322,6 +336,12 @@ impl Config {
 /// must not be relative to the working directory.
 pub fn positions_path() -> PathBuf {
     app_dir(glib::user_data_dir()).join("positions.json")
+}
+
+/// What the version check remembers between runs. State rather than settings,
+/// for the same reason the resume positions are, so it sits beside them.
+pub fn updates_path() -> PathBuf {
+    app_dir(glib::user_data_dir()).join("updates.json")
 }
 
 /// How far in a video has to be before stopping counts as a place you left

@@ -58,6 +58,13 @@ gstreamer = "0.23"
 gstreamer-pbutils = "0.23"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# One HTTPS GET, for the version check. Deliberately the smallest thing that
+# does that: a full HTTP client would be more code than the feature. rustls
+# rather than the system TLS because it needs no OpenSSL headers to build,
+# which keeps setup-linux.sh and the .deb dependencies exactly as they are.
+# "-probe" reads the machine's own certificate store instead of baking a copy
+# in, so an expired bundle is the operating system's problem rather than ours.
+minreq = { version = "2.14", features = ["https-rustls-probe", "json-using-serde"] }
 serde_yaml = "0.9.34"
 gtk = { package = "gtk4", version = "0.9" }
 

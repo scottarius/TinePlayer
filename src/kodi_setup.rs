@@ -134,22 +134,27 @@ pub struct Setup {
 fn version_of(confinement: Confinement, userdata: &Path) -> Option<String> {
     let _ = userdata;
 
+    // Each branch below is the whole of the function on the platform it is
+    // compiled for, the others being cfg'd away - so each ends in a value
+    // rather than returning one.
     #[cfg(target_os = "linux")]
-    match confinement {
-        // "Kodi Media Center 20.5 (20.5.0) Git:20240501-8c8d7afa26"
-        Confinement::None => {
-            let out = ask("kodi", &["--version"])?;
-            return out.split_whitespace().nth(3).map(str::to_string);
-        }
-        Confinement::Flatpak => {
-            let out = ask("flatpak", &["info", "tv.kodi.Kodi"])?;
-            return field(&out, "Version:");
-        }
-        Confinement::Snap => {
-            // A header line, then the row for kodi: name, version, rev...
-            let out = ask("snap", &["list", "kodi"])?;
-            let row = out.lines().nth(1)?;
-            return row.split_whitespace().nth(1).map(str::to_string);
+    {
+        match confinement {
+            // "Kodi Media Center 20.5 (20.5.0) Git:20240501-8c8d7afa26"
+            Confinement::None => {
+                let out = ask("kodi", &["--version"])?;
+                out.split_whitespace().nth(3).map(str::to_string)
+            }
+            Confinement::Flatpak => {
+                let out = ask("flatpak", &["info", "tv.kodi.Kodi"])?;
+                field(&out, "Version:")
+            }
+            Confinement::Snap => {
+                // A header line, then the row for kodi: name, version, rev...
+                let out = ask("snap", &["list", "kodi"])?;
+                let row = out.lines().nth(1)?;
+                row.split_whitespace().nth(1).map(str::to_string)
+            }
         }
     }
 
@@ -163,7 +168,7 @@ fn version_of(confinement: Confinement, userdata: &Path) -> Option<String> {
         let rest = &plist[at..];
         let open = rest.find("<string>")? + "<string>".len();
         let close = rest[open..].find("</string>")?;
-        return Some(rest[open..open + close].trim().to_string());
+        Some(rest[open..open + close].trim().to_string())
     }
 
     // Windows has no equally cheap answer - the version lives in an uninstall
@@ -178,7 +183,11 @@ fn version_of(confinement: Confinement, userdata: &Path) -> Option<String> {
 
 /// Runs something that answers quickly, and treats every failure as "no
 /// answer": a missing command, a non-zero exit, output that is not text.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+///
+/// Linux only: macOS reads the version out of a bundle's metadata and Windows
+/// does not look for one at all, so building this anywhere else leaves dead
+/// code that fails the clippy gate.
+#[cfg(target_os = "linux")]
 fn ask(command: &str, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new(command)
         .args(args)
@@ -379,26 +388,6 @@ pub fn find_all(extra: &[PathBuf]) -> Vec<Setup> {
     // be a fresh install nothing has run yet, but never the first suggestion.
     found.sort_by_key(|setup| !setup.looks_used());
     found
-}
-
-/// One line for the settings row, across however many Kodis are here.
-///
-/// Says how many are set up rather than naming one of them, because with two
-/// installed the honest answer to "what is Kodi doing" is a count.
-pub fn summary(found: &[Setup]) -> String {
-    let mut configured = found
-        .iter()
-        .filter(|setup| setup.state != Registration::Absent);
-    let first = configured.next();
-    // The same words the Kodi screen itself uses, so the row and the screen
-    // behind it do not describe the same state two different ways.
-    match first {
-        None => "Not configured".to_string(),
-        Some(only) => match configured.count() {
-            0 => only.state.describe().to_string(),
-            rest => format!("{} configured", rest + 1),
-        },
-    }
 }
 
 /// Reads what one Kodi location currently says, whether or not anything is

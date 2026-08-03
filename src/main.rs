@@ -23,6 +23,7 @@ mod probe;
 mod sound;
 mod source;
 mod subtitles;
+mod updates;
 
 use clap::Parser;
 use gtk::prelude::*;

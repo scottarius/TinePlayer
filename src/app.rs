@@ -73,10 +73,16 @@ impl Slider {
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
 
-const SETTINGS_ROWS: usize = 19;
+/// The rows the settings screen always has. The version row below the
+/// update switch is extra, and only there while the switch is on.
+const SETTINGS_ROWS: usize = 20;
+
+/// Where the update switch sits, and the row naming a new version under it.
+const UPDATE_SWITCH_ROW: i32 = 19;
+const UPDATE_STATUS_ROW: i32 = 20;
 /// Rows that begin a group: each output, then subtitles, then what is
 /// remembered between runs, then the housekeeping at the bottom.
-const SETTINGS_SECTIONS: [i32; 5] = [3, 7, 11, 14, 17];
+const SETTINGS_SECTIONS: [i32; 6] = [3, 7, 11, 14, 17, 18];
 /// Rows that belong to the row named above them, drawn indented so the group
 /// reads as settings of that one thing rather than as more of their own.
 /// Indentation is what lets them be called just "Preferred Language" instead
@@ -190,6 +196,13 @@ pub struct App {
     /// Holds the display awake while a film is playing. See [`crate::awake`].
     awake: crate::awake::KeepAwake,
     config: RefCell<Config>,
+    /// What the version check has found, and what has been seen of it.
+    /// Held here so the settings screen and the badge on the button that
+    /// opens it read the same answer.
+    updates: RefCell<crate::updates::State>,
+    /// The buttons currently on screen that should carry the mark when
+    /// a new version is waiting to be seen.
+    update_badges: RefCell<Vec<gtk::Button>>,
     file: RefCell<Option<Source>>,
     tracks: RefCell<Vec<AudioTrack>>,
     primary_track: RefCell<Option<u32>>,
@@ -370,6 +383,8 @@ impl App {
             window: window.clone(),
             awake: crate::awake::KeepAwake::new(gtk_app),
             config: RefCell::new(config),
+            updates: RefCell::new(crate::updates::load()),
+            update_badges: RefCell::new(Vec::new()),
             file: RefCell::new(None),
             tracks: RefCell::new(Vec::new()),
             primary_track: RefCell::new(None),
@@ -576,6 +591,13 @@ impl App {
                 }
             }
             (None, None) => app.show_menu(),
+        }
+
+        // Never when something else is driving. A film handed over by Kodi is
+        // not a session anyone chose to start, and a launcher waiting on
+        // playback has no use for news about a release.
+        if !external {
+            app.check_for_updates(false);
         }
 
         window.present();
@@ -1795,6 +1817,11 @@ impl App {
         gear.set_tooltip_text(Some("Settings"));
         name_it(&gear, "Settings");
         buttons.append(&gear);
+        // Rebuilt with the screen, so the list is replaced rather than added
+        // to - the old buttons are gone and holding them would keep them
+        // alive for nothing.
+        *self.update_badges.borrow_mut() = vec![gear.clone()];
+        self.draw_update_badge();
         page.append(&buttons);
 
         {
@@ -3453,15 +3480,50 @@ impl App {
                 ("Clear Saved Playback Data".to_string(), String::new(), true),
                 (
                     "Kodi".to_string(),
-                    crate::kodi_setup::summary(&crate::kodi_setup::find_all(&config.kodi_paths)),
+                    // Deliberately blank. Saying what Kodi is set to means
+                    // finding every Kodi on the machine and reading its
+                    // configuration file, and this row is passed by everyone
+                    // who came to Settings for something else. The answer is
+                    // on the screen it opens, which is where it is wanted.
+                    String::new(),
                     // Always reachable: with nothing configured, this is where
                     // configuring starts.
                     true,
                 ),
-                ("About".to_string(), String::new(), true),
+                (
+                    format!("About TinePlayer v{}", env!("CARGO_PKG_VERSION")),
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Check for updates".to_string(),
+                    if config.check_for_updates {
+                        "On"
+                    } else {
+                        "Off"
+                    }
+                    .to_string(),
+                    true,
+                ),
             ]
+            .to_vec()
         };
         debug_assert_eq!(rows.len(), SETTINGS_ROWS);
+
+        // Only while the check is on: a row saying nothing is new, under a
+        // switch that is off, would be reporting on something not happening.
+        let mut rows = rows;
+        if self.config.borrow().check_for_updates {
+            let state = self.updates.borrow();
+            rows.push(match crate::updates::newer(&state) {
+                Some((version, _)) => (
+                    format!("New version: v{}", version.trim_start_matches(['v', 'V'])),
+                    String::new(),
+                    true,
+                ),
+                None => (crate::updates::NOTHING_NEW.to_string(), String::new(), true),
+            });
+        }
 
         for (label, value, enabled) in &rows {
             append_named(
@@ -3494,6 +3556,11 @@ impl App {
                 9,
                 "Prefer Audio Description",
                 self.config.borrow().secondary_audio_description,
+            ),
+            (
+                UPDATE_SWITCH_ROW,
+                "Check for updates",
+                self.config.borrow().check_for_updates,
             ),
         ] {
             let (widget, switch) = switch_row(label, on);
@@ -3540,6 +3607,26 @@ impl App {
             }
         }
 
+        // The row naming a new version carries its own mark, for as long as
+        // the version is there. Reaching it is what takes the mark off the
+        // settings button: arriving on the row is the moment somebody has
+        // been told, and pressing it should not be required to stop being
+        // nagged about something already seen.
+        if crate::updates::newer(&self.updates.borrow()).is_some()
+            && let Some(row) = list.row_at_index(UPDATE_STATUS_ROW)
+        {
+            row.add_css_class("tp-badge-row");
+            let app = self.clone();
+            let controller = gtk::EventControllerFocus::new();
+            controller.connect_enter(move |_| {
+                let mut state = app.updates.borrow_mut();
+                crate::updates::acknowledge(&mut state);
+                drop(state);
+                app.draw_update_badge();
+            });
+            row.add_controller(controller);
+        }
+
         {
             let app = self.clone();
             list.connect_row_activated(move |_, row| {
@@ -3565,6 +3652,8 @@ impl App {
                     16 => app.confirm_clear_data(),
                     17 => app.show_kodi(),
                     18 => app.show_about(),
+                    UPDATE_SWITCH_ROW => app.toggle_update_checks(),
+                    UPDATE_STATUS_ROW => app.open_release_page(),
                     _ => {}
                 }
             });
@@ -3628,6 +3717,94 @@ impl App {
         }
     }
 
+    /// Turns the version check on or off.
+    ///
+    /// Rebuilds the screen rather than only moving the switch, because the row
+    /// underneath comes and goes with it. Turning it on asks straight away:
+    /// somebody who has just switched it on is asking the question now, and
+    /// waiting until tomorrow to answer would look like it does not work.
+    fn toggle_update_checks(self: &Rc<Self>) {
+        let on = {
+            let mut config = self.config.borrow_mut();
+            config.check_for_updates = !config.check_for_updates;
+            let _ = config.save();
+            config.check_for_updates
+        };
+        if on {
+            self.check_for_updates(true);
+        }
+        self.show_settings();
+    }
+
+    /// Opens the release page in whatever the machine uses for links.
+    fn open_release_page(self: &Rc<Self>) {
+        let url = {
+            let state = self.updates.borrow();
+            crate::updates::newer(&state).map(|(_, url)| url.to_string())
+        };
+        if let Some(url) = url {
+            gtk::gio::AppInfo::launch_default_for_uri(&url, None::<&gtk::gio::AppLaunchContext>)
+                .unwrap_or_else(|e| eprintln!("Could not open {url}: {e}"));
+        }
+    }
+
+    /// Looks for a newer release, unless it is too soon to ask again.
+    ///
+    /// Off the main thread and reported back through a polled channel, the
+    /// same way reading a video is: everything it touches afterwards is `Rc`
+    /// and belongs to this thread.
+    fn check_for_updates(self: &Rc<Self>, now: bool) {
+        if !self.config.borrow().check_for_updates {
+            return;
+        }
+        let previous = self.updates.borrow().clone();
+        if !now && !crate::updates::due(&previous) {
+            return;
+        }
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::updates::check(&previous));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+            let state = match receiver.try_recv() {
+                Ok(state) => state,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            crate::updates::save(&state);
+            *app.updates.borrow_mut() = state;
+            app.draw_update_badge();
+            // Only if Settings is open behind it, so the answer appears
+            // rather than waiting to be opened again.
+            if *app.screen.borrow() == Screen::Settings {
+                app.show_settings();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Marks or unmarks the button that opens Settings.
+    ///
+    /// The mark says there is something in there worth seeing, which is true
+    /// exactly until somebody has seen it - so reaching the row that names the
+    /// version clears this, while the row keeps its own mark for as long as
+    /// the version is there to be had.
+    fn draw_update_badge(&self) {
+        let wanted = crate::updates::unseen(&self.updates.borrow());
+        for button in self.update_badges.borrow().iter() {
+            if wanted {
+                button.add_css_class("tp-badge");
+            } else {
+                button.remove_css_class("tp-badge");
+            }
+        }
+    }
+
     fn toggle_sounds(self: &Rc<Self>) {
         let (enabled, device) = {
             let mut config = self.config.borrow_mut();
@@ -3661,10 +3838,21 @@ impl App {
         body.append(&about_text(
             "Free software under the MIT License, Copyright (c) 2026 Scott Bounds. You may use, change and pass it on, provided the copyright notice travels with it. It comes with no warranty of any kind.",
         ));
+        // The domain rather than the repository, and followed rather than
+        // only shown. A released binary cannot be edited: if the repository
+        // is ever renamed or moved, a link baked into it breaks for good,
+        // where a domain we own can simply be pointed somewhere else. It is
+        // also shorter to read from across a room and possible to type from
+        // memory, which a full GitHub path is not.
+        //
+        // The deeper links below stay on github.com. Domain forwarding
+        // carries the root and not the path, so sending those through it
+        // would land people on the front page instead of the file named.
         body.append(&about_link(
             "Report issues or check for updates at",
-            "https://github.com/scottarius/TinePlayer",
-            "https://github.com/scottarius/TinePlayer",
+            "https://tineplayer.app",
+            "tineplayer.app",
+            Address::Inline,
         ));
 
         body.append(&about_heading("Built with"));
@@ -3679,6 +3867,7 @@ impl App {
             "Also the work of a good many people writing Rust libraries, all attributed here:",
             "https://github.com/scottarius/TinePlayer/blob/main/THIRD-PARTY.md",
             "https://github.com/scottarius/TinePlayer/THIRD-PARTY.md",
+            Address::OwnLine,
         ));
 
         body.append(&about_heading("Where things are kept"));
@@ -5902,13 +6091,24 @@ fn about_heading(text: &str) -> gtk::Label {
 /// A line ending in a link that opens in the machine's browser. The address
 /// is shown as written rather than hidden behind words, since on a screen
 /// nobody can click there is still a use in being able to read it out.
-fn about_link(lead: &str, href: &str, shown: &str) -> gtk::Label {
+/// Where the address sits in relation to the sentence introducing it.
+enum Address {
+    /// Finishing the sentence, for one short enough to take in at a glance.
+    Inline,
+    /// On a line of its own. A long address is read character by character,
+    /// and one wrapped mid-way through a paragraph is hard to pick back out
+    /// of it.
+    OwnLine,
+}
+
+fn about_link(lead: &str, href: &str, shown: &str, place: Address) -> gtk::Label {
     let label = about_text("");
-    // The address on its own line rather than run on from the sentence: an
-    // address is a thing to be read character by character, and one wrapped
-    // mid-way through a paragraph is hard to pick back out of it.
+    let separator = match place {
+        Address::Inline => " ",
+        Address::OwnLine => "\n",
+    };
     label.set_markup(&format!(
-        "{}\n<a href=\"{}\">{}</a>",
+        "{}{separator}<a href=\"{}\">{}</a>",
         glib::markup_escape_text(lead),
         glib::markup_escape_text(href),
         glib::markup_escape_text(shown),
@@ -6466,6 +6666,40 @@ fn style_css(scale: f64, dark: bool) -> String {
         }}
         .tp-browse:hover {{ opacity: 1; }}
         .tp-browse image {{ -gtk-icon-size: {back_icon}px; }}
+        /* A new version is waiting. A dot rather than a count or a word: it
+           says only that something is here, which is all it knows, and it
+           reads at the distance this interface is built for.
+
+           Drawn in the accent colour on the button that opens Settings, and
+           on the row that names the version. The button's mark goes as soon
+           as the row has been reached; the row keeps its own. */
+        .tp-badge, .tp-badge-row {{
+            background-image: radial-gradient(circle closest-side,
+                {highlight} 0%, {highlight} 92%, transparent 96%);
+            background-size: {dot}px {dot}px;
+            background-repeat: no-repeat;
+        }}
+        /* Two values, not four. GTK does not take the `right 8px top 8px`
+           form and quietly put the dot in the opposite corner - percentages
+           keep it inset from the top right whatever size the button is. */
+        .tp-badge {{ background-position: 88% 12%; }}
+        /* Given room of its own rather than squeezed into the margin: the
+           row is indented past the dot so there is space either side of it,
+           instead of a mark hard against the edge with the text behind it.
+           The padding moves the text and not the dot, since the background is
+           positioned from inside the border rather than inside the padding. */
+        .tp-badge-row {{
+            padding-left: {badge_indent}px;
+            background-position: {badge_left}px 50%;
+        }}
+        /* The selection highlight is this same blue, so a blue dot on the
+           selected row is a blue dot on blue. It has to change colour for the
+           one moment it matters most - the row is selected the instant it is
+           reached. */
+        .tp-menu > row.tp-badge-row:selected {{
+            background-image: radial-gradient(circle closest-side,
+                {on_highlight} 0%, {on_highlight} 92%, transparent 96%);
+        }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
         .tp-gear image {{ -gtk-icon-size: {icon}px; }}
         .tp-row-icon {{ -gtk-icon-size: {row_icon}px; opacity: 0.65; }}
@@ -6474,6 +6708,16 @@ fn style_css(scale: f64, dark: bool) -> String {
         ",
         title = px(20.0),
         tracking = px(2.0).max(1),
+        // Scaled like everything else: a dot sized for a monitor is invisible
+        // on a television across a room.
+        // Big enough to read from a sofa, which is the distance this whole
+        // interface is sized for. The first attempt was five pixels and
+        // looked like a rendering artefact.
+        dot = px(14.0).max(9),
+        badge_left = px(14.0),
+        badge_indent = px(24.0),
+        // What reads against the selection highlight rather than into it.
+        on_highlight = "#ffffff",
         row = px(26.0),
         hint = px(20.0),
         small = px(17.0),
