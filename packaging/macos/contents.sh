@@ -316,9 +316,22 @@ for theme in Adwaita hicolor; do
     fi
 done
 
+# --- Fonts ---------------------------------------------------------------
+# Under Resources, which is where use_bundled_fonts looks from inside a
+# bundle. Without them the language menu falls back to the machine's own
+# fonts, and macOS has none for most of the scripts in it.
+echo "Fonts..."
+mkdir -p "$resources/fonts"
+if ! cp data/fonts/*.ttf "$resources/fonts/" 2>/dev/null; then
+    echo "No fonts to bundle. Run packaging/fonts/build-fonts.py first." >&2
+    exit 1
+fi
+echo "  $(ls "$resources/fonts"/*.ttf | wc -l | tr -d ' ') fonts"
+
 # --- The paperwork ------------------------------------------------------
 echo "Collecting licenses..."
 cp LICENSE "$resources/licenses/TinePlayer-MIT.txt"
+cp data/fonts/OFL.txt "$resources/licenses/NotoFonts-OFL.txt"
 [[ -f THIRD-PARTY.md ]] && cp THIRD-PARTY.md "$resources/"
 ./packaging/macos/licenses.sh "$app" "$prefix"
 

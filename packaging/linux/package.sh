@@ -98,6 +98,26 @@ strip --strip-unneeded "$stage/usr/bin/$package"
 install -Dm644 "data/branding/$app_id.svg" \
     "$stage/usr/share/icons/hicolor/scalable/apps/$app_id.svg"
 
+# The fonts go where fontconfig already looks, rather than beside the
+# executable: on Linux there is a system font path and using it means the
+# application needs no configuration of its own to find them. This is the one
+# platform where use_bundled_fonts finds nothing and does nothing, which is
+# the intended outcome.
+#
+# They are here at all because no distribution reliably has all of these
+# scripts - Raspberry Pi OS has no Korean, Chinese or Telugu font at all - and
+# a hundred megabytes of Noto as a dependency is out of proportion to drawing
+# a menu of language names.
+fonts=$(ls data/fonts/*.ttf 2>/dev/null | wc -l)
+[[ "$fonts" -gt 0 ]] || {
+    echo "No fonts in data/fonts. Run packaging/fonts/build-fonts.py first." >&2
+    exit 1
+}
+echo "Fonts: $fonts"
+for font in data/fonts/*.ttf; do
+    install -Dm644 "$font" "$stage/usr/share/fonts/truetype/$package/$(basename "$font")"
+done
+
 # A command on PATH is expected to answer `man`, and this one has enough
 # options to be worth the page.
 install -Dm644 packaging/linux/tineplayer.1 "$stage/usr/share/man/man1/$package.1"
@@ -117,6 +137,9 @@ chmod 644 "$stage/usr/share/applications/$app_id.desktop"
 docs="$stage/usr/share/doc/$package"
 mkdir -p "$docs"
 install -Dm644 THIRD-PARTY.md "$docs/THIRD-PARTY.md"
+# The fonts are under the SIL Open Font License, which requires its text
+# to travel with them.
+install -Dm644 data/fonts/OFL.txt "$docs/NotoFonts-OFL.txt"
 
 # Machine-readable copyright, which is the format Debian tooling and license
 # scanners read. TinePlayer's own terms; the libraries it depends on carry
@@ -142,8 +165,19 @@ Comment:
  are not part of this package at all: they are declared as dependencies and
  installed by apt from your distribution, under its terms.
 
+Files: usr/share/fonts/*
+Copyright: The Noto Project Authors
+License: OFL-1.1
+Comment:
+ Cut down from Noto Sans to the characters TinePlayer draws, and renamed,
+ which the licence requires of a modified copy. The full text is in
+ NotoFonts-OFL.txt beside this file.
+
 License: MIT
 $(sed 's/^$/./; s/^/ /' LICENSE)
+
+License: OFL-1.1
+$(sed 's/^$/./; s/^/ /' data/fonts/OFL.txt)
 COPYRIGHT
 chmod 644 "$docs/copyright"
 
@@ -269,6 +303,11 @@ set -e
 if command -v update-icon-caches >/dev/null 2>&1; then
     update-icon-caches /usr/share/icons/hicolor
 fi
+# Debian's fontconfig ships a trigger on /usr/share/fonts and will usually do
+# this itself; this is for the systems where it does not, and costs a second.
+if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f >/dev/null 2>&1 || true
+fi
 HOOK
     chmod 755 "$stage/DEBIAN/$script"
 done
@@ -276,6 +315,22 @@ done
 # --- Build it -----------------------------------------------------------
 echo "Packaging..."
 rm -f "$deb"
+# Directory permissions, flattened before dpkg-deb sees them, which refuses
+# anything outside 0755-0775. --root-owner-group settles ownership but not the
+# mode bits, and a staging tree inherits whatever the filesystem under it does.
+find "$stage" -type d -exec chmod 755 {} +
+
+# Some filesystems ignore that. An SMB mount with setgid directories keeps
+# 2755 however often it is asked not to, and dpkg-deb then fails with a
+# message that says nothing about where the problem is.
+mode="$(stat -c %a "$stage/DEBIAN")"
+if [[ "$mode" != "755" && "$mode" != "775" ]]; then
+    echo "The staging tree is on a filesystem that will not take ordinary" >&2
+    echo "directory permissions: $stage/DEBIAN is $mode and cannot be changed." >&2
+    echo "dpkg-deb accepts only 0755 to 0775, so build somewhere local - a" >&2
+    echo "network share is no good for this step." >&2
+    exit 1
+fi
 # --root-owner-group so the package does not carry whatever user id happened
 # to run the build, which is what makes a package built in a container install
 # with sane ownership.

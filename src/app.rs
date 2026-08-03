@@ -6673,32 +6673,30 @@ fn style_css(scale: f64, dark: bool) -> String {
            Drawn in the accent colour on the button that opens Settings, and
            on the row that names the version. The button's mark goes as soon
            as the row has been reached; the row keeps its own. */
-        .tp-badge, .tp-badge-row {{
-            background-image: radial-gradient(circle closest-side,
-                {highlight} 0%, {highlight} 92%, transparent 96%);
-            background-size: {dot}px {dot}px;
-            background-repeat: no-repeat;
+        /* The dot is placed inside the gradient rather than with
+           background-position, which GTK will not take two values for: it
+           rejects the whole declaration as junk at the end of a value, and
+           falls back to the top left corner. Windows tolerated it and
+           macOS did
+           not, so it looked correct on the machine it was written on and
+           wrong everywhere else. The size comes from the colour stops for the
+           same reason - fewer properties, fewer things to be refused. */
+        .tp-badge {{
+            background-image: radial-gradient(circle at 88% 14%,
+                {highlight} 0, {highlight} {badge_r}px, transparent {badge_r}px);
         }}
-        /* Two values, not four. GTK does not take the `right 8px top 8px`
-           form and quietly put the dot in the opposite corner - percentages
-           keep it inset from the top right whatever size the button is. */
-        .tp-badge {{ background-position: 88% 12%; }}
-        /* Given room of its own rather than squeezed into the margin: the
-           row is indented past the dot so there is space either side of it,
-           instead of a mark hard against the edge with the text behind it.
-           The padding moves the text and not the dot, since the background is
-           positioned from inside the border rather than inside the padding. */
         .tp-badge-row {{
+            background-image: radial-gradient(circle at {badge_left}px 50%,
+                {highlight} 0, {highlight} {badge_r}px, transparent {badge_r}px);
             padding-left: {badge_indent}px;
-            background-position: {badge_left}px 50%;
         }}
         /* The selection highlight is this same blue, so a blue dot on the
            selected row is a blue dot on blue. It has to change colour for the
            one moment it matters most - the row is selected the instant it is
            reached. */
         .tp-menu > row.tp-badge-row:selected {{
-            background-image: radial-gradient(circle closest-side,
-                {on_highlight} 0%, {on_highlight} 92%, transparent 96%);
+            background-image: radial-gradient(circle at {badge_left}px 50%,
+                {on_highlight} 0, {on_highlight} {badge_r}px, transparent {badge_r}px);
         }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
         .tp-gear image {{ -gtk-icon-size: {icon}px; }}
@@ -6713,7 +6711,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         // Big enough to read from a sofa, which is the distance this whole
         // interface is sized for. The first attempt was five pixels and
         // looked like a rendering artefact.
-        dot = px(14.0).max(9),
+        badge_r = px(7.0).max(5),
         badge_left = px(14.0),
         badge_indent = px(24.0),
         // What reads against the selection highlight rather than into it.

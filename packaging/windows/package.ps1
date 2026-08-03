@@ -281,6 +281,19 @@ foreach ($extra in @("$stage\libexec\gst-plugin-scanner.exe", "$stage\lib\gio\mo
 # --- The paperwork ------------------------------------------------------
 Write-Host 'Licenses...' -ForegroundColor Cyan
 Copy-Item (Join-Path $root 'LICENSE') "$stage\licenses\TinePlayer-MIT.txt"
+
+# The fonts, beside the executable where use_bundled_fonts looks for them.
+# Without these the language menu falls back to whatever the machine has,
+# which on Windows draws nothing at all for six of the scripts - the bug they
+# exist to fix, and one only visible on a screen most people never open.
+Write-Host 'Fonts...' -ForegroundColor Cyan
+$fonts = Join-Path $stage 'fonts'
+New-Item -ItemType Directory -Path $fonts -Force | Out-Null
+Copy-Item (Join-Path $root 'data\fonts\*.ttf') $fonts
+Copy-Item (Join-Path $root 'data\fonts\OFL.txt') "$stage\licenses\NotoFonts-OFL.txt"
+$count = (Get-ChildItem "$fonts\*.ttf").Count
+if ($count -lt 1) { throw 'No fonts were staged. Run packaging/fonts/build-fonts.py first.' }
+Write-Host "  $count fonts" -ForegroundColor Green
 Copy-Item (Join-Path $root 'THIRD-PARTY.md') $stage
 & (Join-Path $PSScriptRoot 'licenses.ps1') -Destination "$stage\licenses" -GStreamer $GStreamer
 

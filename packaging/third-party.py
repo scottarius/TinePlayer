@@ -17,35 +17,50 @@ import sys
 
 PREAMBLE = """# Third-party notices
 
-TinePlayer is built on open source work by other people. This file lists what
-it depends on and under what terms, as the licenses of those works require.
+TinePlayer includes and depends on open source work by other people. This file
+lists it and the terms it is provided under.
 
-It is generated from the dependency tree. To regenerate it after changing
-dependencies:
+## Fonts
 
-    cargo metadata --format-version 1 | python packaging/third-party.py
+Included in every package:
+
+| Font | License | Source |
+|------|---------|--------|
+| Noto Sans | OFL-1.1 | https://github.com/notofonts |
+| Noto Sans Arabic, Armenian, Bengali, Devanagari, Georgian, Gurmukhi, Hebrew, Malayalam, Tamil, Telugu, Thai | OFL-1.1 | https://github.com/notofonts |
+| Noto Sans TC, Noto Sans KR | OFL-1.1 | https://github.com/google/fonts |
+
+They are subset to the characters TinePlayer draws and renamed to "TinePlayer
+Sans", which the license requires of a modified copy. Its text is included
+beside them.
 
 ## Native libraries
 
-These are separate libraries TinePlayer loads at runtime rather than compiles
-into itself. Packaged builds ship them alongside the executable; a build from
-source uses the copies already installed on the machine.
+Loaded at runtime rather than compiled in.
 
 | Library | License | Source |
 |---------|---------|--------|
 | GStreamer | LGPL-2.1-or-later | https://gitlab.freedesktop.org/gstreamer/gstreamer |
 | GTK 4 | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/gtk |
 | GLib | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/glib |
+| FFmpeg | LGPL-2.1-or-later | https://ffmpeg.org |
 
-They are used unmodified. Because they are loaded as separate shared
-libraries, they can be replaced with your own build of the same version, which
-is what the LGPL asks for. Their full license text ships with them.
+- The Windows and macOS packages include them, with their license texts.
+- The Linux package includes none of them. It declares them as dependencies,
+  and apt installs your distribution's own copies under its terms.
+- A build from source uses the copies already installed on the machine.
+
+Where included they are unmodified, and being separate shared libraries they
+can be replaced with your own build of the same version.
 
 > [!NOTE]
-> Some GStreamer plugins carry different terms from GStreamer itself. The
-> decoders for AC-3 and DTS in particular are GPL-licensed, and patent-
-> encumbered in some countries. TinePlayer ships neither; it plays whatever
-> the GStreamer installation on the machine provides.
+> The GPL-licensed `a52dec` and `dtsdec` plugins are included in no package.
+> AC-3 and DTS soundtracks still play: through FFmpeg on Windows and macOS,
+> built without its GPL components, and through whichever decoder your
+> distribution installed on Linux.
+>
+> This concerns licensing only. Patent status is a separate matter and varies
+> by country.
 
 ## Rust dependencies
 

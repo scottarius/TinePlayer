@@ -1,17 +1,25 @@
 # Third-party notices
 
-TinePlayer is built on open source work by other people. This file lists what
-it depends on and under what terms, as the licenses of those works require.
+TinePlayer includes and depends on open source work by other people. This file
+lists it and the terms it is provided under.
 
-It is generated from the dependency tree. To regenerate it after changing
-dependencies:
+## Fonts
 
-    cargo metadata --format-version 1 | python packaging/third-party.py
+Included in every package:
+
+| Font | License | Source |
+|------|---------|--------|
+| Noto Sans | OFL-1.1 | https://github.com/notofonts |
+| Noto Sans Arabic, Armenian, Bengali, Devanagari, Georgian, Gurmukhi, Hebrew, Malayalam, Tamil, Telugu, Thai | OFL-1.1 | https://github.com/notofonts |
+| Noto Sans TC, Noto Sans KR | OFL-1.1 | https://github.com/google/fonts |
+
+They are subset to the characters TinePlayer draws and renamed to "TinePlayer
+Sans", which the license requires of a modified copy. Its text is included
+beside them.
 
 ## Native libraries
 
-These are separate libraries TinePlayer loads at runtime rather than compiles
-into itself.
+Loaded at runtime rather than compiled in.
 
 | Library | License | Source |
 |---------|---------|--------|
@@ -20,37 +28,22 @@ into itself.
 | GLib | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/glib |
 | FFmpeg | LGPL-2.1-or-later | https://ffmpeg.org |
 
-Where they come from depends on how you got TinePlayer, and the difference
-matters for what these terms oblige:
+- The Windows and macOS packages include them, with their license texts.
+- The Linux package includes none of them. It declares them as dependencies,
+  and apt installs your distribution's own copies under its terms.
+- A build from source uses the copies already installed on the machine.
 
-- **The Windows and macOS packages ship them**, alongside the executable or
-  inside the application bundle, with their license texts. Distributing them
-  is what brings the obligations below.
-- **The Linux package ships none of them.** It is a `.deb` that declares them
-  as dependencies, and apt installs your distribution's own copies under your
-  distribution's terms. Depending on software is not distributing it, so
-  nothing here is being redistributed on Linux.
-- **A build from source** uses whatever is already installed on the machine.
-
-Where they are shipped, they are used unmodified. Because they are loaded as
-separate shared libraries, they can be replaced with your own build of the
-same version, which is what the LGPL asks for.
+Where included they are unmodified, and being separate shared libraries they
+can be replaced with your own build of the same version.
 
 > [!NOTE]
-> Some GStreamer plugins carry different terms from GStreamer itself. The
-> `a52dec` and `dtsdec` plugins, which decode AC-3 and DTS, are GPL-licensed,
-> and TinePlayer ships neither: including them in a package would place the
-> whole of it under the GPL.
+> The GPL-licensed `a52dec` and `dtsdec` plugins are included in no package.
+> AC-3 and DTS soundtracks still play: through FFmpeg on Windows and macOS,
+> built without its GPL components, and through whichever decoder your
+> distribution installed on Linux.
 >
-> AC-3 and DTS soundtracks still play. On Windows and macOS they are decoded
-> by FFmpeg, which is LGPL as long as it is built without its GPL components,
-> and the FFmpeg in those packages is checked for exactly that. On Linux the
-> decoder is whichever one your distribution installed, under whatever terms
-> your distribution chose - which is its business rather than TinePlayer's,
-> precisely because nothing is being redistributed.
->
-> Patents are a separate question from copyright and vary by country. This is
-> a statement about licenses, not about patents.
+> This concerns licensing only. Patent status is a separate matter and varies
+> by country.
 
 ## Rust dependencies
 
@@ -68,6 +61,7 @@ crate is offered under either license, at your choice.
 | async-channel | 2.5.0 | Apache-2.0 OR MIT |
 | atomic_refcell | 0.1.14 | Apache-2.0 OR MIT |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
+| base64 | 0.21.7 | MIT OR Apache-2.0 |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 |
 | cairo-rs | 0.20.12 | MIT |
@@ -83,6 +77,7 @@ crate is offered under either license, at your choice.
 | clap_lex | 1.1.0 | MIT OR Apache-2.0 |
 | colorchoice | 1.0.5 | MIT OR Apache-2.0 |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
+| core-foundation | 0.9.4 | MIT OR Apache-2.0 |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
 | crossbeam-utils | 0.8.22 | MIT OR Apache-2.0 |
 | either | 1.17.0 | MIT OR Apache-2.0 |
@@ -110,6 +105,7 @@ crate is offered under either license, at your choice.
 | gdk4-win32-sys | 0.9.5 | MIT |
 | gdk4-x11 | 0.9.6 | MIT |
 | gdk4-x11-sys | 0.9.6 | MIT |
+| getrandom | 0.2.17 | MIT OR Apache-2.0 |
 | gilrs | 0.11.2 | Apache-2.0/MIT |
 | gilrs-core | 0.6.8 | Apache-2.0/MIT |
 | gio | 0.20.12 | MIT |
@@ -162,6 +158,7 @@ crate is offered under either license, at your choice.
 | log | 0.4.33 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memoffset | 0.9.1 | MIT |
+| minreq | 2.14.1 | ISC |
 | muldiv | 1.0.1 | MIT |
 | nix | 0.31.3 | MIT |
 | num-integer | 0.1.46 | MIT OR Apache-2.0 |
@@ -171,6 +168,7 @@ crate is offered under either license, at your choice.
 | objc2-io-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | once_cell_polyfill | 1.70.2 | MIT OR Apache-2.0 |
+| openssl-probe | 0.1.6 | MIT/Apache-2.0 |
 | option-operations | 0.5.0 | MIT/Apache-2.0 |
 | pango | 0.20.12 | MIT |
 | pango-sys | 0.20.10 | MIT |
@@ -181,10 +179,19 @@ crate is offered under either license, at your choice.
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
+| ring | 0.17.14 | Apache-2.0 AND ISC |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| rustls | 0.21.12 | Apache-2.0 OR ISC OR MIT |
+| rustls-native-certs | 0.6.3 | Apache-2.0 OR ISC OR MIT |
+| rustls-pemfile | 1.0.4 | Apache-2.0 OR ISC OR MIT |
+| rustls-webpki | 0.101.7 | ISC |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 |
+| schannel | 0.1.29 | MIT |
+| sct | 0.7.1 | Apache-2.0 OR ISC OR MIT |
+| security-framework | 2.11.1 | MIT OR Apache-2.0 |
+| security-framework-sys | 2.17.0 | MIT OR Apache-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
@@ -210,11 +217,13 @@ crate is offered under either license, at your choice.
 | toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unsafe-libyaml | 0.2.11 | MIT |
+| untrusted | 0.9.0 | ISC |
 | utf8parse | 0.2.2 | Apache-2.0 OR MIT |
 | uuid | 1.24.0 | Apache-2.0 OR MIT |
 | vec_map | 0.8.2 | MIT/Apache-2.0 |
 | version-compare | 0.2.1 | MIT |
 | version_check | 0.9.5 | MIT/Apache-2.0 |
+| wasi | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | wasm-bindgen | 0.2.126 | MIT OR Apache-2.0 |
 | wasm-bindgen-macro | 0.2.126 | MIT OR Apache-2.0 |
 | wasm-bindgen-macro-support | 0.2.126 | MIT OR Apache-2.0 |
@@ -230,6 +239,7 @@ crate is offered under either license, at your choice.
 | windows-numerics | 0.3.1 | MIT OR Apache-2.0 |
 | windows-result | 0.4.1 | MIT OR Apache-2.0 |
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 |
+| windows-sys | 0.52.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.59.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.60.2 | MIT OR Apache-2.0 |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 |
