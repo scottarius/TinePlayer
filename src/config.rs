@@ -14,6 +14,15 @@ pub const DIR_NAME: &str = "TinePlayer";
 #[cfg(not(windows))]
 pub const DIR_NAME: &str = "tineplayer";
 
+/// Somewhere writable to keep the fontconfig configuration and cache that
+/// point at the fonts TinePlayer ships. Beside the settings, because the
+/// installation itself may not be writable.
+pub fn app_dir_for_fontconfig() -> Option<PathBuf> {
+    let dir = app_dir(glib::user_config_dir()).join("fontconfig");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 /// Per-user application directory under `base`, created if missing.
 fn app_dir(base: PathBuf) -> PathBuf {
     let dir = base.join(DIR_NAME);

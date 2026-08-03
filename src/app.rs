@@ -172,6 +172,15 @@ pub struct Launch {
     pub kodi: bool,
     /// Start playing rather than opening the menu.
     pub play: bool,
+    /// The video was remembered from last time rather than asked for.
+    ///
+    /// It decides what happens when the file will not open. A video named on
+    /// the command line that cannot be read is worth stopping for, because
+    /// somebody asked for that video and nothing else will do. One picked up
+    /// from `last_video` is a convenience, and a convenience that fails should
+    /// get out of the way: it is forgotten and the menu opens as if the file
+    /// had never been remembered.
+    pub remembered: bool,
 }
 
 /// Everything the menu can act on. Devices persist to the config file;
@@ -320,6 +329,7 @@ impl App {
             external,
             kodi,
             play,
+            remembered,
         } = launch;
         let dark = appearance::apply_theme(config.theme);
         suppress_error_bell();
@@ -458,10 +468,30 @@ impl App {
             *app.kodi_item.borrow_mut() = crate::kodi::current_item();
         }
 
-        let unopenable = match &file {
+        let mut unopenable = match &file {
             Some(source) => app.set_file(source).err().map(|e| (source.clone(), e)),
             None => None,
         };
+
+        // A remembered video that will not open is forgotten rather than
+        // reported. Nobody asked for it this time, so an error about it is an
+        // error about a decision the application made on its own - and it
+        // arrived in front of a menu that then could not be reached.
+        //
+        // Seen on a MacBook whose last video was on a network share that was
+        // not mounted: the path still existed as a stale mount point, so the
+        // check in main.rs let it through, and opening it failed. Clearing it
+        // here rather than only ignoring it means the next launch does not
+        // meet the same wall.
+        if remembered && unopenable.is_some() {
+            if let Some((source, error)) = unopenable.take() {
+                eprintln!("Forgetting {}: {error}", source.label());
+            }
+            app.config.borrow_mut().last_video = None;
+            if let Err(e) = app.config.borrow().save() {
+                eprintln!("Could not forget the last video: {e}");
+            }
+        }
 
         // Track choices from the command line are applied whether or not
         // playback is starting. Without --play they simply arrive already
@@ -6130,6 +6160,40 @@ fn style_css(scale: f64, dark: bool) -> String {
 
     format!(
         "
+        /* The font TinePlayer ships, so its own text is the same on every
+           platform rather than three different system faces.
+
+           Naming it matters for more than looks. Without this the interface
+           asks for the platform's default font and ours is only ever reached
+           as a fallback, one character at a time - which is what left Cyrillic
+           on macOS with gaps between the letters, each one resolved separately
+           from whatever happened to cover it. Named, the whole line comes from
+           one face with its own metrics.
+
+           Every script face is named too, and that is not belt and braces.
+           Listed only as \"TinePlayer Sans\", the others are reachable solely
+           as fallback, and fallback prefers whatever the machine already has:
+           Arabic and Armenian came out as three different system faces on
+           three platforms, while Telugu and Bengali were consistent purely
+           because nobody else had them. Naming them puts ours first.
+
+           The generic sans-serif at the end is what draws anything ours does
+           not carry: file names, device names and track titles, in scripts
+           nobody can predict. The list is written out rather than generated,
+           so it has to be updated when a script is added - which
+           packaging/fonts/build-fonts.py will refuse to build without. */
+        window, .tp-menu, .tp-controls {{
+            font-family:
+                \"TinePlayer Sans\",
+                \"TinePlayer Sans Arabic\", \"TinePlayer Sans Armenian\",
+                \"TinePlayer Sans Bengali\", \"TinePlayer Sans Cjk\",
+                \"TinePlayer Sans Devanagari\", \"TinePlayer Sans Georgian\",
+                \"TinePlayer Sans Gurmukhi\", \"TinePlayer Sans Hangul\",
+                \"TinePlayer Sans Hebrew\", \"TinePlayer Sans Malayalam\",
+                \"TinePlayer Sans Tamil\", \"TinePlayer Sans Telugu\",
+                \"TinePlayer Sans Thai\",
+                sans-serif;
+        }}
         .tp-title {{
             font-size: {title}px;
             font-weight: bold;

@@ -5,3 +5,7 @@ positions.local.json
 
 # Packaged builds: staging folder, ZIP and installer.
 dist/
+
+# Upstream Noto faces that build-fonts.py downloads and cuts down. Tens of
+# megabytes, fetched again on demand, and not what we ship - data/fonts is.
+packaging/fonts/.sources/

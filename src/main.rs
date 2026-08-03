@@ -417,11 +417,181 @@ fn enable_accessibility() {
 #[cfg(not(target_os = "windows"))]
 fn enable_accessibility() {}
 
+/// Draws text through fontconfig rather than DirectWrite.
+///
+/// GTK picks DirectWrite on Windows and Core Text on macOS, and neither one
+/// can see the fonts this application ships, because both ask the operating
+/// system for fonts rather than reading a fontconfig directory. Linux already
+/// draws through fontconfig, which is why the Pi was the one platform where
+/// the bundled fonts worked before this existed.
+///
+/// It is also what the Windows bug was on its own: DirectWrite's fallback
+/// never reached the Indic fonts Windows itself ships, so Bengali, Hindi,
+/// Malayalam, Punjabi, Tamil and Telugu drew as boxes on a machine with
+/// Nirmala UI in `C:\Windows\Fonts` the whole time, while Cyrillic, Greek,
+/// Hebrew, Georgian, Chinese, Japanese and Korean were fine beside them.
+///
+/// Left alone when it is already set, so anyone who needs DirectWrite - for a
+/// rendering difference, or to rule this out while chasing something else -
+/// can still ask for it.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn use_fontconfig() {
+    if std::env::var_os("PANGOCAIRO_BACKEND").is_none() {
+        set_env("PANGOCAIRO_BACKEND", std::ffi::OsStr::new("fc"));
+    }
+}
+
+/// Linux already draws through fontconfig, so there is nothing to choose.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn use_fontconfig() {}
+
+/// Sets an environment variable somewhere the C libraries will actually see
+/// it.
+///
+/// On Windows there are two environments. `std::env::set_var` writes the Win32
+/// block through `SetEnvironmentVariableW`, while the C runtime keeps its own
+/// copy taken at startup and only updated through `_putenv`. `getenv` reads
+/// the second one.
+///
+/// GStreamer never noticed, because GLib's `g_getenv` asks Win32. fontconfig
+/// uses plain `getenv`, so everything set for it was silently ignored:
+/// measured 2026-08-03, the same configuration produced no cache files when
+/// the application set the variables and three when the shell did.
+fn set_env(name: &str, value: &std::ffi::OsStr) {
+    // SAFETY: called before GTK starts and before any thread exists, which is
+    // the condition that makes setting an environment variable sound.
+    unsafe { std::env::set_var(name, value) };
+
+    #[cfg(target_os = "windows")]
+    {
+        unsafe extern "C" {
+            fn _putenv_s(name: *const std::ffi::c_char, value: *const std::ffi::c_char) -> i32;
+        }
+        let Some(text) = value.to_str() else { return };
+        let (Ok(name), Ok(value)) = (std::ffi::CString::new(name), std::ffi::CString::new(text))
+        else {
+            return;
+        };
+        // SAFETY: two C strings that outlive the call, into a C runtime
+        // function that copies them.
+        unsafe { _putenv_s(name.as_ptr(), value.as_ptr()) };
+    }
+}
+
+/// Where the fonts TinePlayer ships live, relative to the running executable.
+///
+/// Beside it in a package, and up in the source tree when built from one, so
+/// a developer's build draws the same text as a released one rather than
+/// falling back to whatever the machine has.
+fn bundled_fonts() -> Option<std::path::PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let root = executable.parent()?;
+    let candidates = [
+        // Packaged: beside the executable, or under Resources in a bundle.
+        root.join("fonts"),
+        root.join("../Resources/fonts"),
+        // Built from source: target/release/TinePlayer, so the tree is two up.
+        root.join("../../data/fonts"),
+    ];
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
+/// Points fontconfig at the fonts TinePlayer ships, alongside the machine's
+/// own.
+///
+/// The language menu names every language in its own script, and no desktop
+/// has all of them. Measured 2026-08-03: Windows draws nothing for Bengali,
+/// Hindi, Malayalam, Punjabi, Tamil or Telugu; Raspberry Pi OS has no Korean,
+/// Chinese or Telugu font at all; macOS is missing most of the same set. The
+/// fonts are a few hundred kilobytes because they carry only the characters
+/// this application draws - see packaging/fonts/build-fonts.py.
+///
+/// The system directories are kept, and kept second. Everything that is not
+/// ours - file names, device names, track titles - is drawn from whatever the
+/// machine has, and this only adds to that rather than replacing it.
+///
+/// A Linux package installs its fonts where fontconfig already looks, so this
+/// finds nothing there and does nothing, which is the intended outcome.
+fn use_bundled_fonts() {
+    // Somebody who has pointed fontconfig somewhere themselves meant it, and
+    // is better placed to add these fonts to their own configuration than to
+    // discover this overwrote it.
+    if std::env::var_os("FONTCONFIG_PATH").is_some() {
+        return;
+    }
+    let Some(fonts) = bundled_fonts() else {
+        return;
+    };
+    let Ok(fonts) = fonts.canonicalize() else {
+        return;
+    };
+    // Written beside the settings rather than into the installation, which may
+    // be read-only, and rewritten every run so a moved installation cannot
+    // leave a config naming somewhere it no longer is.
+    let Some(dir) = config::app_dir_for_fontconfig() else {
+        return;
+    };
+    let cache = dir.join("cache");
+    let conf = dir.join("fonts.conf");
+    // Verbatim, minus the extended-length prefix Windows canonicalization
+    // adds, which fontconfig does not understand.
+    let clean = |path: &std::path::Path| {
+        path.display()
+            .to_string()
+            .trim_start_matches(r"\\?\")
+            .replace('\\', "/")
+    };
+    let system = if cfg!(target_os = "windows") {
+        "<dir>WINDOWSFONTDIR</dir>\n  <dir>WINDOWSUSERFONTDIR</dir>"
+    } else if cfg!(target_os = "macos") {
+        "<dir>/System/Library/Fonts</dir>\n  <dir>/Library/Fonts</dir>\n  <dir>~/Library/Fonts</dir>"
+    } else {
+        "<dir>/usr/share/fonts</dir>\n  <dir>/usr/local/share/fonts</dir>\n  <dir>~/.local/share/fonts</dir>"
+    };
+    // The machine's own configuration first, so this adds to it rather than
+    // standing in for it.
+    //
+    // Replacing it looked fine and was not: the rules that say what
+    // `sans-serif` and `serif` actually mean live in fontconfig's conf.d, and
+    // without them a generic family resolves to whatever sorts first. On the
+    // Pi that was FreeMono, so anything falling back to a generic name came
+    // out in a light serif face - which is what "they do not look identical
+    // on each platform" turned out to be.
+    //
+    // Every path is optional. Whichever exists is used, and on a system with
+    // none of them the directories below still stand on their own.
+    let includes = [
+        "/etc/fonts/fonts.conf",
+        "/opt/homebrew/etc/fonts/fonts.conf",
+        "/usr/local/etc/fonts/fonts.conf",
+    ]
+    .iter()
+    .map(|path| format!("  <include ignore_missing=\"yes\">{path}</include>\n"))
+    .collect::<String>();
+    let document = format!(
+        "<?xml version=\"1.0\"?>\n\
+         <!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n\
+         <fontconfig>\n\
+         {includes}  \
+         <dir>{}</dir>\n  {system}\n  \
+         <cachedir>{}</cachedir>\n\
+         </fontconfig>\n",
+        clean(&fonts),
+        clean(&cache)
+    );
+    if std::fs::create_dir_all(&cache).is_err() || std::fs::write(&conf, document).is_err() {
+        return;
+    }
+    set_env("FONTCONFIG_PATH", dir.as_os_str());
+}
+
 fn main() -> std::process::ExitCode {
     attach_parent_console();
     // Before anything reads the environment, and before GStreamer starts.
     use_bundled_resources();
     enable_accessibility();
+    use_fontconfig();
+    use_bundled_fonts();
 
     let args = Args::parse();
 
@@ -567,6 +737,9 @@ fn main() -> std::process::ExitCode {
         // deleted, which would otherwise open onto an error.
         // Kodi always passes the file it wants played, so falling back to the
         // last one would be wrong there as well as pointless.
+        // Whether the video was asked for, which decides how hard a failure to
+        // open it should land. See `Launch::remembered`.
+        let asked_for = source.is_some();
         let file = source.or_else(|| {
             (!args.kodi)
                 .then(|| {
@@ -578,6 +751,7 @@ fn main() -> std::process::ExitCode {
                 })
                 .flatten()
         });
+        let remembered = !asked_for && file.is_some();
         // Kodi is one launcher among others, so it turns the general mode on
         // and adds only the parts that are about Kodi itself.
         let external = args.external || args.kodi;
@@ -610,6 +784,7 @@ fn main() -> std::process::ExitCode {
                     external,
                     kodi,
                     play,
+                    remembered,
                 },
                 config_problem.clone(),
             );
