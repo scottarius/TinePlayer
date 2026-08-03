@@ -3,7 +3,7 @@
 #
 # Produces dist/linux/tineplayer_<version>_linux_<arch>.deb, installed with
 #
-#     sudo apt install ./tineplayer_0.6.0_linux_arm64.deb
+#     sudo apt install ./tineplayer_1.0.0_linux_arm64.deb
 #
 # The ./ matters. It is what makes apt treat the file as a package to install
 # *and* resolve dependencies for; plain `dpkg -i` installs it and then leaves
