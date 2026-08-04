@@ -279,9 +279,10 @@ Description: Watch one film together, each with your own soundtrack
  headphones, and both stay in sync because it is all one pipeline decoding one
  file.
  .
- The same split carries audio description, so someone who needs the narrated
- version hears it on headphones while everyone else hears the ordinary
- soundtrack.
+ Those same two outputs are what make audio description work. A described
+ track narrates what is happening on screen for a viewer who is blind or has
+ low vision, so one person can hear it on headphones while the room hears the
+ ordinary soundtrack.
  .
  The interface is sized to be read from across a room and can be driven by
  keyboard or gamepad alone. It remembers where you stopped, handles subtitles

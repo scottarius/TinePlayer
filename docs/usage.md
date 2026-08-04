@@ -113,11 +113,8 @@ Everything is reachable with a keyboard or a gamepad. A mouse is not required, b
 The playback controls hide themselves after a few seconds of stillness, and
 come back on any interaction.
 
-![The playback control bar across the foot of the video: elapsed time, a
-position bar and the total length, then settings, stop, skip back, pause, skip
-forward, subtitles, volume and fullscreen. The volume button is active, and its
-panel is open above the bar with a separate slider for each of the two output
-devices.](screenshots/control-bar.png)
+![The playback control bar, with the volume panel open above it
+showing a slider for each output.](screenshots/control-bar.png)
 
 Each output keeps its own volume, so the described or second-language track can
 sit at a different level from the one the room is hearing. <kbd>M</kbd> mutes

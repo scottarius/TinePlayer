@@ -4,9 +4,8 @@ All settings can be configured from the **Settings** menu inside TinePlayer,
 which offers only values that make sense and lists the audio devices this
 machine actually has.
 
-![TinePlayer's settings screen, showing theme, interface size and navigation
-sounds, then the primary audio device with its preferred language, audio
-description preference and volume.](screenshots/settings-menu.png)
+![TinePlayer's settings screen, showing theme, interface size, and the
+primary audio device with its language and volume.](screenshots/settings-menu.png)
 
 The same settings are stored in `config.yaml`, which can be edited directly. TinePlayer reads it at startup, so
 restart it after editing.

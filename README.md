@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/scottarius/TinePlayer/releases/latest"><img src="https://img.shields.io/github/v/release/scottarius/TinePlayer?label=release&color=brightgreen" alt="Latest release"></a>
   <a href="https://github.com/scottarius/TinePlayer/actions/workflows/ci.yml"><img src="https://github.com/scottarius/TinePlayer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational" alt="Windows, Linux and macOS">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20GStreamer-orange" alt="Rust and GStreamer">
@@ -29,7 +30,7 @@ the way it works for them, at the same time, on the same screen, while still
 sharing the experience together.
 
 <p align="center">
-  <img src="docs/screenshots/main-menu.png" width="820" alt="TinePlayer's playback options screen. One video is chosen, and beneath it a primary audio device playing the English track and a secondary device, a pair of headphones, playing the Spanish track. A subtitle track is chosen separately.">
+  <img src="docs/screenshots/main-menu.png" width="820" alt="TinePlayer's playback options: English to the speakers, Russian to the headphones, and Spanish subtitles.">
 </p>
 
 ## Why another video player
@@ -41,10 +42,12 @@ Then one drifts, someone nudges it back, it drifts again, and every pause for
 the door or the kettle means lining both up by hand all over again. You end up
 watching the sync instead of the film.
 
-The other way around is worse. One person just goes without: reads subtitles
-they would rather not need, or misses the description, or listens in a
-language they have to work at. That is usually the option people settle on,
-because it is the one that does not need managing.
+More often nobody rigs anything up at all, and it comes down to one question:
+who goes without? Someone reads subtitles they would rather not need, misses
+the description, or listens in a language they have to work at. It is the
+option that needs no managing, so it is the one people settle on. TinePlayer
+removes the question. Everyone has the film the way it works for them, at the
+same time, on the same screen.
 
 Ordinary players cannot fix this, because choosing a track and choosing a
 speaker are two separate settings rather than a pair, and one copy of a player
@@ -59,7 +62,7 @@ file is demuxed once and each chosen track is piped to its own output device
 from a single pipeline, staying in sync because it is all one clock.
 
 <p align="center">
-  <img src="docs/screenshots/player-controls.png" width="820" alt="A film playing with subtitles shown, and the playback controls along the bottom: elapsed time, a position bar, skip and pause buttons, and buttons for subtitles, volume and fullscreen.">
+  <img src="docs/screenshots/player-controls.png" width="820" alt="A film playing with subtitles, and the playback controls along the bottom.">
 </p>
 
 <p align="center">
@@ -77,9 +80,8 @@ from a single pipeline, staying in sync because it is all one clock.
 - Plays from network sources as well as local files: `http://`, `smb://` and
   network shares
 - Resumes videos with remembered playback time and language/track selections
-- Displays subtitles from embedded tracks and external files, and can choose
-  one automatically, including forced-only
-- Selects tracks automatically from your preferred languages
+- Displays subtitles from embedded tracks and external files, including forced-only support
+- Selects tracks and subtitles automatically from your preferred languages
 - Splits any pair of tracks a file carries, including audio description
   alongside the ordinary soundtrack
 - Independent volume for each output, so a described or second-language track
@@ -99,7 +101,9 @@ from a single pipeline, staying in sync because it is all one clock.
 
 > [!NOTE]
 > Bluetooth audio devices may add 100-200ms of latency and result in the audio
-> being slightly out of sync.
+> being slightly out of sync. See [The sound is not in sync with the
+> video](docs/troubleshooting.md#the-sound-is-not-in-sync-with-the-video) in
+> troubleshooting.
 
 ## Documentation
 
