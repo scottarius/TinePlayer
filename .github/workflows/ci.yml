@@ -23,10 +23,29 @@ env:
 
 jobs:
   linux:
+    # Both architectures, because arm64 is a shipped target: the Pi runs the
+    # arm64 .deb. Without this it is only ever compiled when a tag is pushed,
+    # so a dependency that fails on aarch64 surfaces in the middle of a
+    # release rather than on the commit that caused it. Native runners, which
+    # cost nothing on a public repository.
+    #
+    # This proves it builds and lints. It cannot prove it runs: there is no
+    # display and no audio device here, and the Pi-specific faults worth
+    # fearing are all runtime ones.
+    strategy:
+      # One architecture failing should not cancel the other. Knowing whether
+      # a break is arch-specific is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
     # Pinned rather than ubuntu-latest, which silently moves to the next LTS
     # and changes every apt package version underneath setup-linux.sh.
-    runs-on: ubuntu-24.04
-    name: Linux
+    runs-on: ${{ matrix.runner }}
+    name: Linux ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v7
 
@@ -56,8 +75,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-
+          key: linux-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-${{ matrix.arch }}-cargo-
 
       - name: Build
         run: cargo build --release --locked
