@@ -1,5 +1,18 @@
 # Building from source
 
+## Which version you get
+
+`main` is the development branch and will usually report a version ending in
+`-dev` - `1.1.0-dev` means somewhere between 1.0.0 and 1.1.0 releases.
+
+Releases are tags. To build a particular one:
+
+```sh
+git clone --branch v1.0.0 https://github.com/scottarius/TinePlayer
+```
+
+## Setting up
+
 Setup scripts are provided for each platform. Each installs only what is needed
 to build, and each is idempotent, skipping anything already present, so they
 are safe to re-run.

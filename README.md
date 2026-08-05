@@ -125,24 +125,23 @@ from a single pipeline, staying in sync because it is all one clock.
 Downloads for each platform are on the
 [releases page](https://github.com/scottarius/TinePlayer/releases).
 
-**Windows** - run the installer, or unpack the portable ZIP anywhere you like
+**Windows** - Run the installer, or unpack the portable ZIP anywhere you like
 and run `TinePlayer.exe`. The installer upgrades an existing copy in place.
-Upgrading the ZIP means deleting the old folder first rather than unpacking
-over it, which would leave the previous version's libraries mixed in with the
-new ones.
+If upgrading the portable ZIP, be sure to delete the previous version rather
+than just copy over it.
 
-**macOS** - open the disk image and drag TinePlayer to Applications.
+**macOS** - Open the disk image and drag TinePlayer to Applications.
 
-**Linux** - a `.deb` for Debian, Ubuntu and Raspberry Pi OS, in `amd64` and
-`arm64`:
+**Linux** - Use apt to install the `.deb` package for Debian, Ubuntu and
+Raspberry Pi OS, in `amd64` and `arm64`:
 
 ```sh
 sudo apt install ./tineplayer_1.0.0_linux_arm64.deb
 ```
 
-The `./` is not a typo: it is what makes apt install the file *and* fetch the
-GTK and GStreamer packages it needs. It installs on Debian 12, Ubuntu 22.04 and
-anything newer. On Fedora, Arch and others there is no package yet, so
+The filename may be different depending on version and architecture.
+Ensure to include the leading `./`. It installs on Debian 12, Ubuntu 22.04 and
+anything newer. On Fedora, Arch and others you'll need to
 [build from source](docs/building.md).
 
 ## Build from source
@@ -153,15 +152,22 @@ cargo build --release
 ./target/release/TinePlayer
 ```
 
+`main` is the development branch, and a build from it will usually report a
+version ending in `-dev`. To build a release instead, check out its tag:
+
+```sh
+git clone --branch v1.0.0 https://github.com/scottarius/TinePlayer
+```
+
 See [Building from source](docs/building.md) for more information.
 
 ## Accessibility
 
 The interface is built to be driven without a mouse or a screen: everything is
-reachable by keyboard or gamepad, the type is large and scalable, and the selection mark is
-meant to be read from across a room. Audio description track support is a first-class
-feature rather than an afterthought, and can be sent to one output while the
-room hears the ordinary soundtrack.
+reachable by keyboard or gamepad, the type is large and scalable, and the
+selection mark is meant to be read from across a room. Audio description track
+support is a first-class feature rather than an afterthought, and can be sent
+o one output while the room hears the ordinary soundtrack.
 
 Subtitles are treated as an access feature rather than a translation one.
 Embedded tracks and files sitting beside the video appear in a single list, so
