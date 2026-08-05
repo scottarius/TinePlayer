@@ -142,8 +142,16 @@ pub fn install(pipeline: &gst::Pipeline) {
     // writing far ahead of now, so the device plays silence while it waits.
     // Negative means the buffers are late, which is the other way a sink ends
     // up rendering nothing anyone hears.
-    for role in ["primary", "secondary"] {
-        let Some(sink) = pipeline.by_name(&format!("{role}_out")) else {
+    // The video sink is watched alongside the audio ones purely for its
+    // segment. Video keeps playing through all of this, so it is the reference
+    // an audio branch can be wrong against - a displacement both branches
+    // share is a different fault from one only the audio sees.
+    for (role, element_name) in [
+        ("primary", "primary_out"),
+        ("secondary", "secondary_out"),
+        ("video", "vsink"),
+    ] {
+        let Some(sink) = pipeline.by_name(element_name) else {
             continue;
         };
         let Some(pad) = sink.static_pad("sink") else {
@@ -168,6 +176,29 @@ pub fn install(pipeline: &gst::Pipeline) {
                                 .segment()
                                 .downcast_ref::<gst::ClockTime>()
                         {
+                            // Printed as it arrives. `base` is what running
+                            // time is measured from, so if the audio branches
+                            // come back from a flush with a different base
+                            // than the video, that is the displacement -
+                            // stated in the pipeline's own terms rather than
+                            // inferred from how late the buffers look.
+                            // The element's own base_time alongside the
+                            // segment's. A flushing seek restarts running time
+                            // at zero by design; it is only correct if the
+                            // pipeline then gives the sink a new base_time to
+                            // match. If segment base is 0 and base_time has
+                            // not moved, every buffer arrives looking as late
+                            // as the seek was far in.
+                            eprintln!(
+                                "PROBE segment {role} seg_base={:?} start={:?} \
+                                 position={:?} rate={} | base_time={:?} clock={:?}",
+                                segment.base(),
+                                segment.start(),
+                                segment.position(),
+                                segment.rate(),
+                                element.base_time(),
+                                element.clock().and_then(|clock| clock.time()),
+                            );
                             state.segment = Some(segment.clone());
                         }
                     }
