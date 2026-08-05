@@ -27,7 +27,11 @@ export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 
 # A stray instance holding the same devices produces audio symptoms of its own,
 # so nothing else may be running.
-pkill -x TinePlayer 2>/dev/null
+# Case-insensitively: a packaged install is `tineplayer` and a source build is
+# `TinePlayer`, and `pkill -x TinePlayer` silently spares the other one. A
+# stray instance found holding a corked stream for 38 hours is what prompted
+# this - it had survived every run of this script.
+pkill -i -x tineplayer 2>/dev/null
 sleep 1
 
 # The diagnostic run gets its own config, so the real one is never touched and
@@ -65,7 +69,7 @@ rm -f /tmp/sinkinputs.log
             tr '\n' '|' |
             sed 's/Sink Input #/\nSink Input #/g' |
             grep -oE 'Sink Input #[0-9]+.*' |
-            sed -E 's/.*Sink Input #([0-9]+).*Sink: ([0-9]+).*Corked: (\w+).*Mute: (\w+).*/in=\1 sink=\2 corked=\3 mute=\4/' |
+            sed -E 's/.*Sink Input #([0-9]+).*Sink: ([0-9]+).*Corked: (\w+).*Buffer Latency: ([0-9]+) usec.*Sink Latency: ([0-9]+) usec.*/in=\1 sink=\2 corked=\3 buf=\4us snk=\5us/' |
             tr '\n' ' '
         echo
         sleep 1
@@ -92,7 +96,10 @@ echo
 echo "=== what PulseAudio saw of our streams, once per second ==="
 echo "    t is seconds from the start of the recording, so these line up with"
 echo "    the timeline below - without a shared clock there is no telling"
-echo "    whether a cork preceded the silence or followed it"
+echo "    whether a cork preceded the silence or followed it."
+echo "    buf is how much audio is queued in the stream and not yet played:"
+echo "    a large and growing figure means the sink is writing far ahead of"
+echo "    now, which is silence for a different reason than a cork."
 awk -v base="$REC_START" '{t=substr($1,2)-base; $1=""; if (t >= -1) printf "  t=%-4d%s\n", t, $0}' /tmp/sinkinputs.log
 
 echo

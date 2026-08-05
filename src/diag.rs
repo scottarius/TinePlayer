@@ -10,11 +10,30 @@
 //! `diag/seektest.sh` decides whether sound reached a device. Read these
 //! counters alongside it, never instead of it.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
 use gstreamer as gst;
+
+/// How far each buffer reaching a sink is from the clock, in milliseconds.
+struct Timing {
+    segment: Option<gst::FormattedSegment<gst::ClockTime>>,
+    min: i64,
+    max: i64,
+    seen: u64,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            segment: None,
+            min: i64::MAX,
+            max: i64::MIN,
+            seen: 0,
+        }
+    }
+}
 
 /// Where each branch is watched: entering its own chain, immediately before
 /// the sink, and at the sink's own pad. A stall between two of these points
@@ -33,6 +52,7 @@ pub fn install(pipeline: &gst::Pipeline) {
     // Name, buffers seen, non-zero bytes, total bytes.
     type Counter = (String, Arc<AtomicU64>, Arc<AtomicU64>, Arc<AtomicU64>);
     let mut counters: Vec<Counter> = Vec::new();
+    let mut timings: Vec<(String, Arc<Mutex<Timing>>)> = Vec::new();
 
     for role in ["primary", "secondary"] {
         for (label, element, pad_name) in POINTS {
@@ -111,6 +131,74 @@ pub fn install(pipeline: &gst::Pipeline) {
         return;
     }
 
+    // How far ahead of, or behind, the clock each buffer is when it reaches
+    // the sink. This is the question PulseAudio could not answer: its Buffer
+    // Latency and Sink Latency read 0 under PipeWire's compatibility layer at
+    // all times, including while audio was plainly playing, so they measure
+    // nothing here.
+    //
+    // A buffer's running time against the pipeline's own running time says it
+    // directly. Near zero is normal. Large and growing means the sink is
+    // writing far ahead of now, so the device plays silence while it waits.
+    // Negative means the buffers are late, which is the other way a sink ends
+    // up rendering nothing anyone hears.
+    for role in ["primary", "secondary"] {
+        let Some(sink) = pipeline.by_name(&format!("{role}_out")) else {
+            continue;
+        };
+        let Some(pad) = sink.static_pad("sink") else {
+            continue;
+        };
+        let state: Arc<Mutex<Timing>> = Arc::default();
+        timings.push((role.to_string(), state.clone()));
+        let element = sink.clone();
+        pad.add_probe(
+            gst::PadProbeType::BUFFER | gst::PadProbeType::EVENT_DOWNSTREAM,
+            move |_, info| {
+                let Ok(mut state) = state.lock() else {
+                    return gst::PadProbeReturn::Ok;
+                };
+                match &info.data {
+                    // The segment is what turns a timestamp into a running
+                    // time, and a flushing seek replaces it - so it has to be
+                    // taken from the stream rather than assumed.
+                    Some(gst::PadProbeData::Event(event)) => {
+                        if let gst::EventView::Segment(segment) = event.view()
+                            && let Some(segment) = segment
+                                .segment()
+                                .downcast_ref::<gst::ClockTime>()
+                        {
+                            state.segment = Some(segment.clone());
+                        }
+                    }
+                    Some(gst::PadProbeData::Buffer(buffer)) => {
+                        let Some(segment) = state.segment.as_ref() else {
+                            return gst::PadProbeReturn::Ok;
+                        };
+                        let (Some(pts), Some(clock), Some(base)) =
+                            (buffer.pts(), element.clock(), element.base_time())
+                        else {
+                            return gst::PadProbeReturn::Ok;
+                        };
+                        let (Some(buffer_running), Some(now)) =
+                            (segment.to_running_time(pts), clock.time())
+                        else {
+                            return gst::PadProbeReturn::Ok;
+                        };
+                        let ahead = buffer_running.nseconds() as i64
+                            - (now.nseconds() as i64 - base.nseconds() as i64);
+                        let ms = ahead / 1_000_000;
+                        state.min = state.min.min(ms);
+                        state.max = state.max.max(ms);
+                        state.seen += 1;
+                    }
+                    _ => {}
+                }
+                gst::PadProbeReturn::Ok
+            },
+        );
+    }
+
     // The sinks' own account of what they did with those buffers. A sink that
     // accepts data at full rate and renders none of it is dropping it, which
     // looks identical from upstream and identical to the recording. This is
@@ -157,6 +245,20 @@ pub fn install(pipeline: &gst::Pipeline) {
             };
             line.push_str(&format!(" {name}={buffers:3}/{share}"));
             last[i] = now;
+        }
+        for (role, state) in &timings {
+            let Ok(mut state) = state.lock() else { continue };
+            if state.seen == 0 {
+                line.push_str(&format!(" {role}[ahead=--]"));
+            } else {
+                line.push_str(&format!(
+                    " {role}[ahead={}..{}ms]",
+                    state.min, state.max
+                ));
+            }
+            state.min = i64::MAX;
+            state.max = i64::MIN;
+            state.seen = 0;
         }
         for (role, sink) in &sinks {
             let stats = sink.property::<gst::Structure>("stats");
