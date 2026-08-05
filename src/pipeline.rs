@@ -188,7 +188,13 @@ pub fn build_pipeline(
     // drop buffers instead of writing them (audio sinks use the pipeline
     // clock to decide *when* to submit each buffer), which matched an
     // observed symptom on Windows of video playing while audio was silent.
-    if cfg!(target_os = "linux") {
+    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio):
+    // `TINEPLAYER_ELECT_CLOCK=1` leaves the clock to the usual election. The
+    // forced system clock is a deliberate fix from earlier, so it has to be
+    // separable from anything being tested now - a sink that provides its own
+    // clock may not tolerate being denied it.
+    let elect_clock = std::env::var("TINEPLAYER_ELECT_CLOCK").as_deref() == Ok("1");
+    if cfg!(target_os = "linux") && !elect_clock {
         pipeline.use_clock(Some(&gst::SystemClock::obtain()));
     }
 
@@ -346,9 +352,30 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     };
     let name = configured.ok_or_else(|| format!("{role}_sink not set in config"))?;
 
-    let sink = find_audio_output_device(name)?
-        .create_element(Some(&format!("{role}_out")))
-        .map_err(|e| format!("Failed to create element for {role} device: {e}"))?;
+    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio):
+    // `TINEPLAYER_PRIMARY_NODE` / `TINEPLAYER_SECONDARY_NODE` build a
+    // `pipewiresink` aimed at that node instead of asking the device monitor,
+    // which on Linux hands back a `pulsesink`. The point is to find out
+    // whether the seek fault belongs to `pulsesink` specifically. It takes a
+    // node name rather than a display name because it bypasses the device
+    // lookup entirely - this is a probe, not a design.
+    let override_node = std::env::var(match role {
+        "primary" => "TINEPLAYER_PRIMARY_NODE",
+        _ => "TINEPLAYER_SECONDARY_NODE",
+    });
+    let sink = if let Ok(node) = override_node {
+        let sink = gst::ElementFactory::make("pipewiresink")
+            .name(format!("{role}_out"))
+            .build()
+            .map_err(|_| "Missing GStreamer element \"pipewiresink\".".to_string())?;
+        sink.set_property("target-object", &node);
+        eprintln!("DIAG: {role} using pipewiresink on {node}");
+        sink
+    } else {
+        find_audio_output_device(name)?
+            .create_element(Some(&format!("{role}_out")))
+            .map_err(|e| format!("Failed to create element for {role} device: {e}"))?
+    };
 
     // Every sink gates the pipeline's state changes by default, waiting to
     // preroll before the change completes. With two audio sinks on separate
