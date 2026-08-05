@@ -81,11 +81,6 @@ pub fn read(directory: &Path) -> Vec<Entry> {
     folders
 }
 
-/// What sits above the top of the tree.
-///
-/// On Windows that is the drives, since there is nothing above `C:\`. On
-/// Unix everything hangs off one root, so going up eventually stops there
-/// and this is never needed.
 /// The user's own folder, which is where anything they are looking for almost
 /// certainly lives.
 pub fn home() -> PathBuf {

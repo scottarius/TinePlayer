@@ -44,9 +44,10 @@ impl KeepAwake {
             // the point is that the picture stays visible, not that the
             // computer never rests.
             //
-            // The window is passed so a desktop that shows what is holding it
-            // awake can name TinePlayer rather than an anonymous process, and
-            // the reason is what such a desktop displays.
+            // The reason is what a desktop shows when it lists what is holding
+            // the session awake. No window is passed with it, so a desktop
+            // that would otherwise name the application may name the bare
+            // process instead.
             let cookie = self.app.inhibit(
                 None::<&gtk::Window>,
                 gtk::ApplicationInhibitFlags::IDLE,

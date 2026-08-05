@@ -29,8 +29,9 @@ enum Target {
     /// A subtitle stream inside the file. Only one is ever selected, so
     /// unlike audio there is no index to route by.
     Subtitle,
-    /// Index among the file's audio streams, matching what `--list-tracks`
-    /// prints.
+    /// Position among the file's audio streams, 0-based, the same counting
+    /// [`crate::probe::AudioTrack::index`] uses. `--list-tracks` prints these
+    /// one higher, since it offers 0 for "None".
     Audio(u32),
 }
 

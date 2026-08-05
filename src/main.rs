@@ -406,6 +406,10 @@ fn use_bundled_resources() {}
 ///
 /// Left alone if the environment already names a backend, so anyone
 /// debugging accessibility can still choose one.
+///
+/// Must run before `display::apply_display_env`, which sets `GTK_A11Y=none`
+/// when nothing has claimed it, to quiet a warning on machines with no session
+/// bus. Whichever runs first wins.
 #[cfg(target_os = "windows")]
 fn enable_accessibility() {
     if std::env::var_os("GTK_A11Y").is_none() {

@@ -2729,12 +2729,6 @@ impl App {
 
     // --- Browsing ------------------------------------------------------
 
-    /// The built-in browser: another list screen, so it navigates exactly
-    /// like the menus and needs no pointer.
-    ///
-    /// `select` names the folder just stepped out of, which is then the row
-    /// focus lands on. Going up otherwise dumps you at the top of a long
-    /// list with no sense of where you were.
     /// Notes the screen a modal is about to cover.
     ///
     /// Only the screens that are not themselves modals, so that one modal
@@ -3039,6 +3033,12 @@ impl App {
         });
     }
 
+    /// The built-in browser: another list screen, so it navigates exactly
+    /// like the menus and needs no pointer.
+    ///
+    /// `select` names the folder just stepped out of, which is then the row
+    /// focus lands on. Going up otherwise dumps you at the top of a long
+    /// list with no sense of where you were.
     fn show_browser(
         self: &Rc<Self>,
         directory: &std::path::Path,
@@ -3292,11 +3292,6 @@ impl App {
         (row, buttons)
     }
 
-    /// Always the built-in browser.
-    ///
-    /// Guessing from the last input was unpredictable: the same button opened
-    /// different things depending on what you had touched. The system dialog
-    /// is still reachable, from a pointer-only button in the footer.
     /// Where a video comes from: a folder on this machine, or an address.
     ///
     /// A step of its own rather than opening the browser straight away,
@@ -3349,6 +3344,11 @@ impl App {
     }
 
     /// Opens the file browser where browsing last stopped.
+    ///
+    /// Always the built-in browser. Guessing from the last input was
+    /// unpredictable: the same button opened different things depending on
+    /// what you had touched. The system dialog is still reachable, from a
+    /// pointer-only button in the footer.
     fn browse_for_file(self: &Rc<Self>) {
         let (remembered, last_video) = {
             let config = self.config.borrow();
@@ -5821,13 +5821,6 @@ fn heading_label(text: &str) -> gtk::Label {
 
 /// The four-corner mark for entering or leaving fullscreen.
 ///
-/// Drawn for this application rather than taken from the icon theme: the
-/// bundled theme has 157 icons and none of them mean fullscreen. The nearest,
-/// `window-maximize-symbolic`, is a small square that reads as "maximize".
-///
-/// Drawn twice in each direction, once in each theme's foreground color,
-/// because an embedded image cannot be recoloured the way a symbolic icon is.
-/// A single compromise gray read poorly against both.
 /// The subtitle mark for the control bar.
 ///
 /// One white version rather than a light and a dark one: unlike the menus,
@@ -5844,6 +5837,15 @@ pub fn subtitles_image(scale: f64) -> gtk::Image {
     image
 }
 
+/// The fullscreen mark, in the direction it will take you.
+///
+/// Drawn for this application rather than taken from the icon theme: the
+/// bundled theme has 157 icons and none of them mean fullscreen. The nearest,
+/// `window-maximize-symbolic`, is a small square that reads as "maximize".
+///
+/// Drawn twice in each direction, once in each theme's foreground color,
+/// because an embedded image cannot be recoloured the way a symbolic icon is.
+/// A single compromise gray read poorly against both.
 pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
     const ENTER_LIGHT: &[u8] = include_bytes!("../data/ui/fullscreen-light.png");
     const ENTER_DARK: &[u8] = include_bytes!("../data/ui/fullscreen-dark.png");
@@ -5864,23 +5866,18 @@ pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image 
     image
 }
 
-/// Appends a row to a list and gives it a name.
+/// Publishes the current row as the list's `active-descendant`.
 ///
-/// Focus lands on the row GTK wraps around the widget, not on the labels
-/// inside it, and GTK derives a name from a child label but not from a
-/// grandchild. A row built as a box of two labels therefore had no name, and
-/// a screen reader announced it as "3 of 6" and nothing more.
-/// Makes a list say which row it is on, for anyone who cannot see the
-/// highlight.
+/// **This is not what makes a list audible.** Rows take focus and the focus
+/// moves with the selection, and a screen reader speaks on focus changes and
+/// on nothing else. Verified 2026-08-05 against Windows UI Automation:
+/// stepping down the settings list moves the focused element from one
+/// `ListItem` to the next, each named with its full row text.
 ///
-/// The list holds the focus and the rows do not, which is the right shape for
-/// Tab but leaves a screen reader with nothing to follow: focus never moves
-/// again once it has arrived, so the list and its first row are announced and
-/// then nothing, however far down somebody travels.
-///
-/// `active-descendant` is what that pattern is for. It names the current row
-/// without moving focus, so both readings stay true - one focus stop for Tab,
-/// and a cursor within it that is announced as it moves.
+/// Kept because the relation is correct by the specification and costs
+/// nothing, but nothing should be built on it announcing anything. Publishing
+/// the current item as state alone was tried twice - selection on the rows,
+/// then this relation - and both were silent in practice.
 ///
 /// Hung off `row-selected` rather than off the places that select, because
 /// there are many of those - arrow keys, the gamepad, page keys, a pointer,
@@ -5897,6 +5894,12 @@ fn announce_selection(list: &gtk::ListBox) {
     });
 }
 
+/// Appends a row to a list and gives it a name.
+///
+/// The name goes on the row GTK wraps around the widget, not on the labels
+/// inside it, because GTK derives a name from a child label but not from a
+/// grandchild. A row built as a box of two labels therefore had no name, and
+/// a screen reader announced it as "3 of 6" and nothing more.
 fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) {
     list.append(child);
     if let Some(row) = child.as_ref().parent().and_downcast::<gtk::ListBoxRow>() {
@@ -5960,17 +5963,6 @@ fn volume_label(level: f64, muted: bool) -> String {
     }
 }
 
-/// A settings row carrying a switch rather than the word "On" or "Yes".
-///
-/// The switch is a readout, not a control: it cannot be clicked or focused,
-/// and the row it sits in is what gets activated. That keeps one way of
-/// working the menu - move to a row, press it - rather than a second target
-/// inside the row that only a pointer could reach.
-/// What the Kodi wizard has been told so far.
-///
-/// Every field is optional because the wizard fills them in one screen at a
-/// time, and none of it has been written to Kodi: dropping this is what
-/// Cancel does, and it costs nothing.
 /// The go-ahead button on a dialog: what it says, and whether pressing it
 /// destroys something.
 ///
@@ -5982,6 +5974,11 @@ struct Confirm<'a> {
     destructive: bool,
 }
 
+/// What the Kodi wizard has been told so far.
+///
+/// Every field is optional because the wizard fills them in one screen at a
+/// time, and none of it has been written to Kodi: dropping this is what
+/// Cancel does, and it costs nothing.
 #[derive(Default)]
 struct KodiDraft {
     userdata: Option<std::path::PathBuf>,
@@ -6037,6 +6034,12 @@ fn wizard_text(text: &str, command: bool) -> gtk::Label {
     label
 }
 
+/// A settings row carrying a switch rather than the word "On" or "Yes".
+///
+/// The switch is a readout, not a control: it cannot be clicked or focused,
+/// and the row it sits in is what gets activated. That keeps one way of
+/// working the menu - move to a row, press it - rather than a second target
+/// inside the row that only a pointer could reach.
 fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -6218,9 +6221,6 @@ fn about_heading(text: &str) -> gtk::Label {
     label
 }
 
-/// A line ending in a link that opens in the machine's browser. The address
-/// is shown as written rather than hidden behind words, since on a screen
-/// nobody can click there is still a use in being able to read it out.
 /// Where the address sits in relation to the sentence introducing it.
 enum Address {
     /// Finishing the sentence, for one short enough to take in at a glance.
@@ -6231,6 +6231,9 @@ enum Address {
     OwnLine,
 }
 
+/// A line ending in a link that opens in the machine's browser. The address
+/// is shown as written rather than hidden behind words, since on a screen
+/// nobody can click there is still a use in being able to read it out.
 fn about_link(lead: &str, href: &str, shown: &str, place: Address) -> gtk::Label {
     let label = about_text("");
     let separator = match place {

@@ -102,9 +102,8 @@ fn external(video: &Path) -> Vec<Subtitle> {
             // Compared without the extension, so that an upper-case one
             // doesn't defeat the trimming.
             let without_extension = path.file_stem()?.to_string_lossy().to_string();
-            // Whatever sits between the video's name and the extension is
-            // the label, since that is where the language ends up. A file
-            // named exactly after the video leaves nothing.
+            // A file named exactly after the video leaves nothing between the
+            // two, and falls through to the generic label below.
             let label = without_extension
                 .strip_prefix(&stem)?
                 .trim_matches('.')
@@ -125,15 +124,16 @@ fn external(video: &Path) -> Vec<Subtitle> {
     found
 }
 
-/// Whether this is a forced track: one carrying only the lines a viewer who
-/// understands the dialogue still needs, such as alien speech or signs.
-///
-/// Read from the name rather than a flag. Matroska has a forced flag, but
-/// GStreamer does not surface it, and rips routinely leave it unset while
-/// saying "Forced" in the title - the flag is false on every track of a
-/// well-tagged file we tested. The convention in the title and in subtitle
-/// file names is what actually carries the intent.
 impl Subtitle {
+    /// Whether this is a forced track: one carrying only the lines a viewer
+    /// who understands the dialogue still needs, such as alien speech or
+    /// signs.
+    ///
+    /// Read from the name rather than a flag. Matroska has a forced flag, but
+    /// GStreamer does not surface it, and rips routinely leave it unset while
+    /// saying "Forced" in the title - the flag is false on every track of a
+    /// well-tagged file we tested. The convention in the title and in subtitle
+    /// file names is what actually carries the intent.
     pub fn is_forced(&self) -> bool {
         self.label().to_lowercase().contains("forced")
     }

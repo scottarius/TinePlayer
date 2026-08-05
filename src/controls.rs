@@ -1328,9 +1328,6 @@ impl Controls {
         }));
     }
 
-    /// Shows the strip and restarts the countdown to hiding it. Paused
-    /// playback keeps it up indefinitely, because a paused picture with no
-    /// indication of why is just a frozen film.
     /// Shows only where playback has reached, without the buttons.
     ///
     /// What a seek asks for: the timeline answers the question, and a row of
@@ -1395,6 +1392,9 @@ impl Controls {
 
     /// Puts the strip on screen and starts the countdown to taking it off
     /// again. What is in it has already been decided by the caller.
+    ///
+    /// Paused playback keeps it up indefinitely, because a paused picture with
+    /// no indication of why is just a frozen film.
     fn show(self: &Rc<Self>, paused: bool) {
         self.strip.set_reveal_child(true);
 

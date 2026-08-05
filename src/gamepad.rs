@@ -130,12 +130,11 @@ fn button_action(button: Button) -> Option<Action> {
         Button::East => Some(Action::Back),
         Button::North => Some(Action::Fullscreen),
         Button::West => Some(Action::Subtitles),
-        // Shoulder buttons jump a screenful, which is what makes a folder of
-        // a hundred films navigable one press at a time.
-        // The bumpers move between elements and the triggers move by the
-        // page, which puts the coarser jump on the harder pull. gilrs names
-        // the bumpers LeftTrigger and the triggers LeftTrigger2, which reads
-        // backwards but is what the crate calls them.
+        // The bumpers move between elements and the triggers move by the page,
+        // which puts the coarser jump on the harder pull - and is what makes a
+        // folder of a hundred films navigable. gilrs names the bumpers
+        // LeftTrigger and the triggers LeftTrigger2, which reads backwards but
+        // is what the crate calls them.
         Button::LeftTrigger => Some(Action::FocusPrevious),
         Button::RightTrigger => Some(Action::FocusNext),
         Button::LeftTrigger2 => Some(Action::PageUp),
