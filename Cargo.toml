@@ -14,7 +14,13 @@ edition = "2024"
 # The crate keeps its lowercase name for crates.io conventions, while the
 # executable is capitalized to match how the application presents itself.
 [[bin]]
-name = "TinePlayer"
+# Lowercase, because Linux is the only one of the three platforms with a
+# case-sensitive filesystem and so the only one where two spellings of the
+# name can disagree. The Debian package has always installed `tineplayer`, and
+# a source build now matches it. Windows packaging renames the executable to
+# `TinePlayer.exe`, which is the name people see there; macOS keeps this name
+# inside `TinePlayer.app`, where nothing looks at it.
+name = "tineplayer"
 path = "src/main.rs"
 
 # These versions look old on purpose: they set a deliberate portability

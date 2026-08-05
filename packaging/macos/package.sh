@@ -130,7 +130,7 @@ if [[ -n "${TINE_SIGN_IDENTITY:-}" ]]; then
             --sign "$TINE_SIGN_IDENTITY" "$binary"
     done < <(find "dist/macos/TinePlayer.app" -type f -print0)
     signed --force --options runtime --timestamp \
-        --sign "$TINE_SIGN_IDENTITY" "dist/macos/TinePlayer.app/Contents/MacOS/TinePlayer"
+        --sign "$TINE_SIGN_IDENTITY" "dist/macos/TinePlayer.app/Contents/MacOS/tineplayer"
     signed --force --options runtime --timestamp \
         --sign "$TINE_SIGN_IDENTITY" "dist/macos/TinePlayer.app"
 

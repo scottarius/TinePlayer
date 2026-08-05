@@ -161,4 +161,4 @@ if ($userPath -notlike "*$GstRoot\bin*") {
 Write-Host ''
 Write-Host 'Done. Open a new terminal (so the environment changes apply), then:' -ForegroundColor Green
 Write-Host '    cargo build --release'
-Write-Host '    .\target\release\TinePlayer.exe'
+Write-Host '    .\target\release\tineplayer.exe'

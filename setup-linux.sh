@@ -32,4 +32,4 @@ sudo apt install -y \
     gstreamer1.0-libav \
     alsa-utils
 
-echo "Done. Next: cargo build --release && ./target/release/TinePlayer"
+echo "Done. Next: cargo build --release && ./target/release/tineplayer"

@@ -185,7 +185,7 @@ if (-not $SkipBuild) {
     }
 }
 
-$exe = Join-Path $root 'target\release\TinePlayer.exe'
+$exe = Join-Path $root 'target\release\tineplayer.exe'
 if (-not (Test-Path $exe)) { throw "No executable at $exe." }
 
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version = "(.+)"' |
@@ -200,7 +200,12 @@ New-Item -ItemType Directory -Path "$stage\libexec" -Force | Out-Null
 New-Item -ItemType Directory -Path "$stage\share\glib-2.0\schemas" -Force | Out-Null
 New-Item -ItemType Directory -Path "$stage\licenses" -Force | Out-Null
 
-Copy-Item $exe $stage
+# Renamed on the way in. The crate builds `tineplayer` so that Linux, the one
+# case-sensitive platform, has a single spelling everywhere - but the name is
+# visible on Windows, in a shortcut target and in Task Manager, and PascalCase
+# is what belongs there. Everything downstream, the installer included, expects
+# TinePlayer.exe from here on.
+Copy-Item $exe (Join-Path $stage 'TinePlayer.exe')
 
 # --- Plugins ------------------------------------------------------------
 Write-Host "Plugins: $($Plugins.Count) chosen" -ForegroundColor Cyan

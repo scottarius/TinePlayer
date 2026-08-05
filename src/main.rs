@@ -347,7 +347,7 @@ fn use_bundled_resources() {
     let Ok(executable) = std::env::current_exe() else {
         return;
     };
-    // .../TinePlayer.app/Contents/MacOS/TinePlayer
+    // .../TinePlayer.app/Contents/MacOS/tineplayer
     let Some(contents) = executable.parent().and_then(|macos| macos.parent()) else {
         return;
     };
@@ -495,7 +495,7 @@ fn bundled_fonts() -> Option<std::path::PathBuf> {
         // Packaged: beside the executable, or under Resources in a bundle.
         root.join("fonts"),
         root.join("../Resources/fonts"),
-        // Built from source: target/release/TinePlayer, so the tree is two up.
+        // Built from source: target/release/tineplayer, so the tree is two up.
         root.join("../../data/fonts"),
     ];
     candidates.into_iter().find(|path| path.is_dir())

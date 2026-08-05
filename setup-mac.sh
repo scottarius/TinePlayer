@@ -76,4 +76,4 @@ fi
 echo
 echo "Done. Open a new terminal, then:"
 echo "    cargo build --release"
-echo "    ./target/release/TinePlayer"
+echo "    ./target/release/tineplayer"

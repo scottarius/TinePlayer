@@ -21,7 +21,7 @@ set -euo pipefail
 # packaging/macos/bundle.sh, so the top of the tree is two levels up.
 cd "$(dirname "$0")/../.."
 
-binary="target/release/TinePlayer"
+binary="target/release/tineplayer"
 if [[ ! -x "$binary" ]]; then
     echo "No release build found. Run: cargo build --release" >&2
     exit 1
@@ -34,7 +34,7 @@ app="dist/macos/TinePlayer.app"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$binary" "$app/Contents/MacOS/TinePlayer"
+cp "$binary" "$app/Contents/MacOS/tineplayer"
 
 # iconutil wants a folder of PNGs at the sizes macOS draws, named the way it
 # expects. Sizes larger than the source are left out rather than upscaled
@@ -87,7 +87,7 @@ cat >"$app/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key>
     <string>app.tineplayer.TinePlayer</string>
     <key>CFBundleExecutable</key>
-    <string>TinePlayer</string>
+    <string>tineplayer</string>
     <key>CFBundleIconFile</key>
     <string>TinePlayer</string>
     <key>CFBundlePackageType</key>

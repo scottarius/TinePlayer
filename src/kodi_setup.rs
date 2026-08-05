@@ -491,7 +491,7 @@ fn launch(confinement: Confinement, play: bool) -> Result<Launch, String> {
                 .is_some_and(|beside| beside.join("gstreamer-1.0-0.dll").exists());
             let shim = (!packaged)
                 .then(|| {
-                    // target/release/TinePlayer.exe, so the tree is three up.
+                    // target/release/tineplayer.exe, so the tree is three up.
                     exe.parent()
                         .and_then(Path::parent)
                         .and_then(Path::parent)
