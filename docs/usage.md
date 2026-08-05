@@ -21,7 +21,7 @@ TinePlayer.exe "C:\Videos\film.mkv" --fullscreen
 Start TinePlayer from Applications, or from the terminal with arguments:
 
 ```sh
-/Applications/TinePlayer.app/Contents/MacOS/TinePlayer ~/Movies/film.mkv --fullscreen
+/Applications/TinePlayer.app/Contents/MacOS/tineplayer ~/Movies/film.mkv --fullscreen
 ```
 
 ### Linux
@@ -36,7 +36,7 @@ tineplayer ~/Videos/film.mkv --fullscreen
 
 ### Built from source
 
-The binary is at `./target/release/TinePlayer` on every platform, and takes the
+The binary is at `./target/release/tineplayer` on every platform, and takes the
 same arguments as above. See [Building from source](building.md).
 
 On Windows, a build from source may need starting through

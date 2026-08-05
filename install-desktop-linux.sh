@@ -13,7 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-binary="$PWD/target/release/TinePlayer"
+binary="$PWD/target/release/tineplayer"
 if [[ ! -x "$binary" ]]; then
     echo "No release build found. Run: cargo build --release" >&2
     exit 1

@@ -60,7 +60,7 @@ fi
 # one just built. On a foreign architecture that failed loudly at `strip`; on
 # a matching one it would have shipped silently.
 target_dir="${CARGO_TARGET_DIR:-target}"
-built="$target_dir/release/TinePlayer"
+built="$target_dir/release/tineplayer"
 [[ -x "$built" ]] || {
     echo "No release build found at $built." >&2
     exit 1

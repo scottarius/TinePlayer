@@ -149,7 +149,7 @@ anything newer. On Fedora, Arch and others you'll need to
 ```sh
 .\setup-windows.ps1         # Windows; ./setup-mac.sh on macOS, ./setup-linux.sh on Linux
 cargo build --release
-./target/release/TinePlayer
+./target/release/tineplayer
 ```
 
 `main` is the development branch, and a build from it will usually report a

@@ -25,7 +25,7 @@ launch-tineplayer-windows.cmd "C:\Videos\film.mkv" --external --fullscreen
 ### macOS
 
 ```sh
-/Applications/TinePlayer.app/Contents/MacOS/TinePlayer "/Users/you/Movies/film.mkv" --external --fullscreen
+/Applications/TinePlayer.app/Contents/MacOS/tineplayer "/Users/you/Movies/film.mkv" --external --fullscreen
 ```
 
 ### Linux

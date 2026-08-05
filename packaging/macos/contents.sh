@@ -195,7 +195,7 @@ fi
 
 # --- Every library any of that links ------------------------------------
 echo "Copying libraries..."
-python3 - "$prefix" "$frameworks" "$app/Contents/MacOS/TinePlayer" "$plugins" <<'PYTHON'
+python3 - "$prefix" "$frameworks" "$app/Contents/MacOS/tineplayer" "$plugins" <<'PYTHON'
 import os, subprocess, shutil, sys
 
 prefix, frameworks, binary, plugins = sys.argv[1:5]
@@ -280,11 +280,11 @@ for plugin in "$plugins"/*.dylib; do retarget "$plugin"; done
 for module in "$resources/gio-modules/"*; do
     [[ -f "$module" ]] && retarget "$module"
 done
-retarget "$app/Contents/MacOS/TinePlayer"
+retarget "$app/Contents/MacOS/tineplayer"
 
 # Where @rpath resolves to, from each of the places things load from.
 install_name_tool -add_rpath "@executable_path/../Frameworks" \
-    "$app/Contents/MacOS/TinePlayer" 2>/dev/null || true
+    "$app/Contents/MacOS/tineplayer" 2>/dev/null || true
 for lib in "$frameworks"/*.dylib; do
     install_name_tool -add_rpath "@loader_path" "$lib" 2>/dev/null || true
 done
@@ -365,7 +365,7 @@ find "$app" \( -name "*.dylib" -o -name "*.so" \) -print0 |
     xargs -0 -n1 codesign --force --timestamp=none --sign - 2>/dev/null || true
 [[ -f "$resources/libexec/gst-plugin-scanner" ]] &&
     codesign --force --sign - "$resources/libexec/gst-plugin-scanner" 2>/dev/null || true
-codesign --force --sign - "$app/Contents/MacOS/TinePlayer" 2>/dev/null || true
+codesign --force --sign - "$app/Contents/MacOS/tineplayer" 2>/dev/null || true
 codesign --force --sign - "$app" 2>/dev/null ||
     echo "  codesign failed, which only matters once this is distributed"
 
