@@ -19,11 +19,16 @@ set -u
 DUR=${DURATION:-60}
 EVERY=${EVERY:-8}
 VIDEO=${VIDEO:-/mnt/hoth/Videos/Movies/Avengers - Endgame (2019)/Avengers - Endgame (2019) Bluray-1080p.mkv}
+BIN=${BIN:-/mnt/hoth/TinePlayer/target/release/TinePlayer}
 PRIMARY=${PRIMARY:-1}
 SECONDARY=${SECONDARY:-2}
 
-export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0
-export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+# Overridable, because this now runs on the Pi and in VMs that have no user
+# session at all. On the Pi the defaults are the session that is already there.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+[ -S "$XDG_RUNTIME_DIR/bus" ] &&
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 
 # A stray instance holding the same devices produces audio symptoms of its own,
 # so nothing else may be running.
@@ -85,7 +90,7 @@ REC_START=$(date +%s.%N)
 TINEPLAYER_SEEK_TEST=$EVERY \
 TINEPLAYER_APP_ID=app.tineplayer.Diag \
 TINEPLAYER_SEEK_PROBE=${PROBE:-0} \
-    timeout "$DUR" /mnt/hoth/TinePlayer/target/release/TinePlayer "$VIDEO" \
+    timeout "$DUR" "$BIN" "$VIDEO" \
     --primary "$PRIMARY" --secondary "$SECONDARY" --restart --play \
     > /tmp/tp.log 2>&1
 
