@@ -188,18 +188,9 @@ pub fn build_pipeline(
     // drop buffers instead of writing them (audio sinks use the pipeline
     // clock to decide *when* to submit each buffer), which matched an
     // observed symptom on Windows of video playing while audio was silent.
-    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio):
-    // `TINEPLAYER_ELECT_CLOCK=1` leaves the clock to the usual election. The
-    // forced system clock is a deliberate fix from earlier, so it has to be
-    // separable from anything being tested now - a sink that provides its own
-    // clock may not tolerate being denied it.
-    let elect_clock = std::env::var("TINEPLAYER_ELECT_CLOCK").as_deref() == Ok("1");
-    if cfg!(target_os = "linux") && !elect_clock {
+    if cfg!(target_os = "linux") {
         pipeline.use_clock(Some(&gst::SystemClock::obtain()));
     }
-
-    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio).
-    crate::diag::install(&pipeline);
 
     Ok(pipeline)
 }
@@ -306,12 +297,7 @@ fn build_audio_branch(
     pipeline.add(&head).map_err(|e| e.to_string())?;
 
     for role in roles {
-        // DIAGNOSTIC (temporary, branch fix/linux-seek-audio): named so a pad
-        // probe can find the head of each role's own chain.
-        let queue = gst::ElementFactory::make("queue")
-            .name(format!("{role}_queue"))
-            .build()
-            .map_err(|_| "Missing GStreamer element \"queue\". Check the install.".to_string())?;
+        let queue = make("queue")?;
         let convert = make("audioconvert")?;
         let resample = make("audioresample")?;
         // Level and mute for this output alone, which is the point: two people
@@ -352,30 +338,9 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     };
     let name = configured.ok_or_else(|| format!("{role}_sink not set in config"))?;
 
-    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio):
-    // `TINEPLAYER_PRIMARY_NODE` / `TINEPLAYER_SECONDARY_NODE` build a
-    // `pipewiresink` aimed at that node instead of asking the device monitor,
-    // which on Linux hands back a `pulsesink`. The point is to find out
-    // whether the seek fault belongs to `pulsesink` specifically. It takes a
-    // node name rather than a display name because it bypasses the device
-    // lookup entirely - this is a probe, not a design.
-    let override_node = std::env::var(match role {
-        "primary" => "TINEPLAYER_PRIMARY_NODE",
-        _ => "TINEPLAYER_SECONDARY_NODE",
-    });
-    let sink = if let Ok(node) = override_node {
-        let sink = gst::ElementFactory::make("pipewiresink")
-            .name(format!("{role}_out"))
-            .build()
-            .map_err(|_| "Missing GStreamer element \"pipewiresink\".".to_string())?;
-        sink.set_property("target-object", &node);
-        eprintln!("DIAG: {role} using pipewiresink on {node}");
-        sink
-    } else {
-        find_audio_output_device(name)?
-            .create_element(Some(&format!("{role}_out")))
-            .map_err(|e| format!("Failed to create element for {role} device: {e}"))?
-    };
+    let sink = find_audio_output_device(name)?
+        .create_element(Some(&format!("{role}_out")))
+        .map_err(|e| format!("Failed to create element for {role} device: {e}"))?;
 
     // Every sink gates the pipeline's state changes by default, waiting to
     // preroll before the change completes. With two audio sinks on separate
@@ -391,12 +356,7 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     // Linux-only, matching the forced clock below. Windows is verified
     // working as it is, and this pipeline has a history of platform-specific
     // sink behavior that punishes changing both at once.
-    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio):
-    // `TINEPLAYER_SINK_ASYNC=1` leaves `async` at its default. With it false
-    // the sink never re-prerolls after a flush, which is a candidate for the
-    // seek fault - so the two Linux workarounds need to be separable.
-    let keep_async = std::env::var("TINEPLAYER_SINK_ASYNC").as_deref() == Ok("1");
-    if cfg!(target_os = "linux") && !keep_async && sink.find_property("async").is_some() {
+    if cfg!(target_os = "linux") && sink.find_property("async").is_some() {
         sink.set_property("async", false);
     }
 

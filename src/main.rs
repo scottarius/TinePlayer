@@ -12,8 +12,6 @@ mod browser;
 mod config;
 mod controls;
 mod devices;
-// DIAGNOSTIC (temporary, branch fix/linux-seek-audio).
-mod diag;
 mod display;
 mod gamepad;
 mod kodi;
@@ -729,14 +727,8 @@ fn main() -> std::process::ExitCode {
     } else {
         gtk::gio::ApplicationFlags::empty()
     };
-    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio): a diagnostic run
-    // needs an id of its own. GTK is single-instance, so launching a second
-    // copy hands off to the one already running and exits silently, which
-    // looks exactly like a crash.
-    let app_id = std::env::var("TINEPLAYER_APP_ID")
-        .unwrap_or_else(|_| "app.tineplayer.TinePlayer".to_string());
     let gtk_app = gtk::Application::builder()
-        .application_id(app_id)
+        .application_id("app.tineplayer.TinePlayer")
         .flags(flags)
         .build();
 

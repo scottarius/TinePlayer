@@ -1,4 +1,6 @@
-# The harness is scp'd from this working copy straight to the Pi, so it has to
-# keep LF endings. Checked out with CRLF it fails as `bad interpreter`, which
-# reads like a missing shell rather than a line ending.
-diag/*.sh text eol=lf
+# Shell scripts must keep LF endings. Checked out with CRLF - which happens on
+# Windows with core.autocrlf on - a script fails as `bad interpreter`, which
+# reads like a missing shell rather than a line ending. setup-linux.sh and
+# setup-mac.sh are files people download and run, so this is worth pinning
+# rather than relying on every contributor's git configuration.
+*.sh text eol=lf
