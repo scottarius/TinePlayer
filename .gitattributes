@@ -1,0 +1,4 @@
+# The harness is scp'd from this working copy straight to the Pi, so it has to
+# keep LF endings. Checked out with CRLF it fails as `bad interpreter`, which
+# reads like a missing shell rather than a line ending.
+diag/*.sh text eol=lf
