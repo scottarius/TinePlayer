@@ -135,8 +135,20 @@ grep -iE 'error|warn|fail|silent' /tmp/tp.log | head -20 || true
 echo
 
 REC_START=$REC_START python3 - <<'PY'
-import os, wave, audioop, warnings
-warnings.filterwarnings('ignore')
+import array, sys, wave
+
+# Root-mean-square by hand rather than through `audioop`, which was removed in
+# Python 3.13 - so the module works on the Pi's 3.11 and raises ModuleNotFound
+# on trixie, where it silently cost a whole test run. The recording is 16-bit
+# mono by construction, which is the only case this needs to handle.
+def rms(frames):
+    samples = array.array('h')
+    samples.frombytes(frames)
+    if sys.byteorder == 'big':
+        samples.byteswap()
+    if not samples:
+        return 0
+    return (sum(s * s for s in samples) / len(samples)) ** 0.5
 
 # One character per second: '#' audible, '.' faint, ' ' silent. Printed against
 # a second scale so a gap can be read straight off against the seek log above.
@@ -151,9 +163,9 @@ for name, path in (('tp_a (primary)  ', '/tmp/tp_a.wav'),
     row, silent = [], 0
     for s in range(int(n / rate)):
         w.setpos(s * rate)
-        rms = audioop.rms(w.readframes(rate), w.getsampwidth())
-        row.append('#' if rms > 300 else ('.' if rms > 30 else ' '))
-        if rms <= 30:
+        level = rms(w.readframes(rate))
+        row.append('#' if level > 300 else ('.' if level > 30 else ' '))
+        if level <= 30:
             silent += 1
     total = len(row)
     print(f'{name} |{"".join(row)}|  {silent}s silent of {total}s')
