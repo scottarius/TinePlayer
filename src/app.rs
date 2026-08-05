@@ -514,11 +514,15 @@ impl App {
         // playback is starting. Without --play they simply arrive already
         // made, so the menu opens on them and they can be checked before
         // pressing Play.
+        //
+        // Each output is only touched when its own flag was given. Assigning
+        // both meant `--primary` alone silenced the secondary, because an
+        // absent flag resolved to no track - so naming one output threw away
+        // what the language preference had already chosen for the other.
         if let Some(preset) = preset.as_ref()
             && app.file.borrow().is_some()
         {
-            let resolve = |spec: Option<&str>| -> Option<u32> {
-                let spec = spec?;
+            let resolve = |spec: &str| -> Option<u32> {
                 match crate::probe::resolve_audio(spec, &app.tracks.borrow()) {
                     Ok(choice) => choice,
                     // Reported rather than obeyed silently, the same way a
@@ -530,8 +534,12 @@ impl App {
                     }
                 }
             };
-            *app.primary_track.borrow_mut() = resolve(preset.primary.as_deref());
-            *app.secondary_track.borrow_mut() = resolve(preset.secondary.as_deref());
+            if let Some(spec) = preset.primary.as_deref() {
+                *app.primary_track.borrow_mut() = resolve(spec);
+            }
+            if let Some(spec) = preset.secondary.as_deref() {
+                *app.secondary_track.borrow_mut() = resolve(spec);
+            }
 
             // Only touched when asked for, so a video's remembered
             // subtitle survives being launched with audio flags alone.

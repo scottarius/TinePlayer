@@ -67,11 +67,19 @@ pub fn is_audio_description(title: &str) -> bool {
 /// preference does: description is only ever chosen by asking for it.
 pub fn resolve_audio(spec: &str, tracks: &[AudioTrack]) -> Result<Option<u32>, String> {
     let spec = spec.trim();
-    if spec == "0" || spec.eq_ignore_ascii_case("none") {
+    if spec.eq_ignore_ascii_case("none") {
         return Ok(None);
     }
 
     if let Ok(number) = spec.parse::<usize>() {
+        // Zero means no audio on this output, however it is spelled - "0" and
+        // "00" are the same request. Checked after parsing rather than against
+        // the text, because `number - 1` below underflows otherwise: harmless
+        // in a release build, where it wraps and finds no track, and a panic
+        // in a debug one.
+        if number == 0 {
+            return Ok(None);
+        }
         return tracks
             .get(number - 1)
             .map(|track| Some(track.index))
@@ -294,6 +302,16 @@ mod resolve_audio_tests {
         assert_eq!(resolve_audio("0", &tracks), Ok(None));
         assert_eq!(resolve_audio("none", &tracks), Ok(None));
         assert_eq!(resolve_audio("de", &tracks), Ok(Some(1)));
+    }
+
+    /// Any spelling of zero, and any surrounding space, means the same thing.
+    /// "00" used to reach `number - 1` and underflow.
+    #[test]
+    fn every_spelling_of_zero_means_none() {
+        let tracks = tracks();
+        for spec in ["0", "00", "000", " 0 ", "none", "NONE", "None"] {
+            assert_eq!(resolve_audio(spec, &tracks), Ok(None), "for {spec:?}");
+        }
     }
 
     #[test]
