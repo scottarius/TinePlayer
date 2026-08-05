@@ -5203,10 +5203,19 @@ impl App {
                     return glib::ControlFlow::Break;
                 };
                 count.set(count.get() + 1);
+                // Wall clock as well as elapsed: the recording and the
+                // PulseAudio sampler are separate processes, and without a
+                // shared clock there is no telling whether a seek preceded a
+                // silence or followed it.
+                let wall = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
                 eprintln!(
-                    "DIAG: seek #{} at {:.1}s",
+                    "DIAG: seek #{} at {:.1}s (wall {:.1})",
                     count.get(),
-                    started.elapsed().as_secs_f64()
+                    started.elapsed().as_secs_f64(),
+                    wall
                 );
                 app.scrub(crate::player::STEP_SECONDS);
                 app.end_scrub();

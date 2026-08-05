@@ -192,6 +192,9 @@ pub fn build_pipeline(
         pipeline.use_clock(Some(&gst::SystemClock::obtain()));
     }
 
+    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio).
+    crate::diag::install(&pipeline);
+
     Ok(pipeline)
 }
 
@@ -297,7 +300,12 @@ fn build_audio_branch(
     pipeline.add(&head).map_err(|e| e.to_string())?;
 
     for role in roles {
-        let queue = make("queue")?;
+        // DIAGNOSTIC (temporary, branch fix/linux-seek-audio): named so a pad
+        // probe can find the head of each role's own chain.
+        let queue = gst::ElementFactory::make("queue")
+            .name(format!("{role}_queue"))
+            .build()
+            .map_err(|_| "Missing GStreamer element \"queue\". Check the install.".to_string())?;
         let convert = make("audioconvert")?;
         let resample = make("audioresample")?;
         // Level and mute for this output alone, which is the point: two people

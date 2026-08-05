@@ -12,6 +12,8 @@ mod browser;
 mod config;
 mod controls;
 mod devices;
+// DIAGNOSTIC (temporary, branch fix/linux-seek-audio).
+mod diag;
 mod display;
 mod gamepad;
 mod kodi;

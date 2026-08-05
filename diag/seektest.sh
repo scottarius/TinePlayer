@@ -54,6 +54,25 @@ for s in tp_a tp_b; do
     }
 done
 
+# What PulseAudio thinks of our two streams, sampled from outside the process.
+# In-process metrics are what misled this investigation twice, so the state of
+# the stream is asked of the sound server rather than of the sink element.
+rm -f /tmp/sinkinputs.log
+(
+    while true; do
+        printf '@%s ' "$(date +%s)"
+        pactl list sink-inputs |
+            tr '\n' '|' |
+            sed 's/Sink Input #/\nSink Input #/g' |
+            grep -oE 'Sink Input #[0-9]+.*' |
+            sed -E 's/.*Sink Input #([0-9]+).*Sink: ([0-9]+).*Corked: (\w+).*Mute: (\w+).*/in=\1 sink=\2 corked=\3 mute=\4/' |
+            tr '\n' ' '
+        echo
+        sleep 1
+    done
+) > /tmp/sinkinputs.log 2>&1 &
+PS_PID=$!
+
 rm -f /tmp/tp_a.wav /tmp/tp_b.wav
 parec -d tp_a.monitor --file-format=wav --rate=16000 --channels=1 /tmp/tp_a.wav & PA=$!
 parec -d tp_b.monitor --file-format=wav --rate=16000 --channels=1 /tmp/tp_b.wav & PB=$!
@@ -61,16 +80,37 @@ REC_START=$(date +%s.%N)
 
 TINEPLAYER_SEEK_TEST=$EVERY \
 TINEPLAYER_APP_ID=app.tineplayer.Diag \
+TINEPLAYER_SEEK_PROBE=${PROBE:-0} \
     timeout "$DUR" /mnt/hoth/TinePlayer/target/release/TinePlayer "$VIDEO" \
     --primary "$PRIMARY" --secondary "$SECONDARY" --restart --play \
     > /tmp/tp.log 2>&1
 
-kill $PA $PB 2>/dev/null
+kill $PA $PB $PS_PID 2>/dev/null
 sleep 1
 
 echo
-echo "=== seeks issued ==="
-grep '^DIAG:' /tmp/tp.log || echo "(none - did the build carry the diagnostic hook?)"
+echo "=== what PulseAudio saw of our streams, once per second ==="
+echo "    t is seconds from the start of the recording, so these line up with"
+echo "    the timeline below - without a shared clock there is no telling"
+echo "    whether a cork preceded the silence or followed it"
+awk -v base="$REC_START" '{t=substr($1,2)-base; $1=""; if (t >= -1) printf "  t=%-4d%s\n", t, $0}' /tmp/sinkinputs.log
+
+echo
+echo "=== seeks issued, on the recording's clock ==="
+# Three-argument match() is a gawk extension and the Pi has mawk, where it
+# fails quietly and the whole alignment is lost. Plain field access instead.
+awk -v base="$REC_START" '/^DIAG: seek/ {
+    wall = $NF; gsub(/[()]/, "", wall)
+    printf "  seek %s at t=%.1f\n", $3, wall - base
+}' /tmp/tp.log
+if [[ ${PROBE:-0} == 1 ]]; then
+    echo
+    echo "=== buffers per second, and flush events (PROBE=1) ==="
+    echo "    where the counts stop is where data stopped; whether sound"
+    echo "    reached a device is decided by the recording below, not here"
+    grep -E '^(PROBE|DIAG)' /tmp/tp.log
+fi
+
 echo
 echo "=== errors ==="
 grep -iE 'error|warn|fail|silent' /tmp/tp.log | head -20 || true
