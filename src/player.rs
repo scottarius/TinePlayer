@@ -434,7 +434,68 @@ impl Playback {
             self.run_seek();
         }
     }
+}
 
+/// The GStreamer release that no longer needs the seek workaround below.
+const SEEK_WORKAROUND_FIXED_IN: (u32, u32) = (1, 24);
+
+/// Whether each audio sink has to be taken down around a flushing seek.
+///
+/// With two audio outputs on Linux, a flushing seek silences them for the rest
+/// of playback. Taking each sink to NULL before the seek and re-syncing it
+/// afterwards avoids it, because the sinks never see the flush - keeping them
+/// up through it and restarting after was measured and is markedly worse.
+///
+/// **This is a GStreamer bug, not ours, and it is fixed upstream in 1.24.**
+/// Measured 2026-08-05 by running one binary and one clip across seven
+/// environments, recording each output device and reading the audio back
+/// rather than asking the pipeline how it thought it was doing:
+///
+/// | GStreamer | x86_64      | aarch64      |
+/// |-----------|-------------|--------------|
+/// | 1.20.3    | fails 5/8   | fails 3/3    |
+/// | 1.22.0    | fails 2/8   | fails 3/3    |
+/// | 1.24.2    | passes 8/8  | -            |
+/// | 1.26.2    | -           | passes 11/11 |
+///
+/// So it is not a 1.22 regression and not specific to the Raspberry Pi: a VM
+/// on entirely different hardware reproduces it, and PipeWire's version does
+/// not predict it (0.3.65 and 1.2.7 fail; 0.3.48, 1.0.5 and 1.4.2 pass). It is
+/// a race - lost far more readily on ARM than x86, and the rate moves with the
+/// compositor - which is why the passing cells carry 8 and 11 runs. A clean
+/// run of three proves nothing here, and believing one cost three wrong
+/// conclusions along the way.
+///
+/// The mechanism is still unknown, and the version check stands on the
+/// measurements rather than on understanding the fault. What was ruled out:
+/// buffers keep arriving at the sink pad at full rate carrying real audio,
+/// the sink reports rendering them with none dropped, flush events arrive
+/// matched at every point down both branches, and the segment and base time
+/// match the video branch's - which keeps playing throughout.
+///
+/// Gated below 1.24 rather than at the versions measured, so anything older
+/// and untested - including the 1.18 baseline `Cargo.toml` supports - is
+/// covered. Over-applying costs only the seek reporting noted at the call
+/// site; under-applying costs the audio.
+fn needs_seek_workaround() -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    // The runtime version, not the one built against: the .deb is compiled
+    // once and runs on whatever GStreamer the machine provides.
+    let (major, minor, _, _) = gst::version();
+    seek_workaround_applies(major, minor)
+}
+
+/// Split out from [`needs_seek_workaround`] so the boundary itself can be
+/// tested. Getting this comparison backwards would be silent on a developer
+/// machine with a new GStreamer and would cost every Debian 12 user their
+/// audio.
+fn seek_workaround_applies(major: u32, minor: u32) -> bool {
+    (major, minor) < SEEK_WORKAROUND_FIXED_IN
+}
+
+impl Playback {
     fn run_seek(&self) {
         let Some(target) = self.seek_target.get() else {
             return;
@@ -451,21 +512,9 @@ impl Playback {
         // was avoided originally. It is paid once per gesture rather than per
         // press: holding a direction moves the target alone, and a single seek
         // is issued when it settles.
-        // Restarting each audio sink around the seek, which is a workaround
-        // rather than a cure.
-        //
-        // With two audio outputs, seeking leaves one permanently silent on
-        // Linux within a couple of attempts. It is not the clock or the sinks'
-        // async handling: six combinations of those were measured and all
-        // failed, a single output never fails, and pointing the second branch
-        // at a fakesink fails identically, so it is neither the devices nor
-        // their settings. The fault sits above the sinks and is provoked by
-        // the flush.
-        //
-        // They go down *before* the seek deliberately: keeping them up through
-        // it and restarting afterwards was measured and is markedly worse, so
-        // what matters is that they do not see the flush at all.
-        if cfg!(target_os = "linux") {
+        let workaround = needs_seek_workaround();
+
+        if workaround {
             for role in ["primary", "secondary"] {
                 if let Some(sink) = self.pipeline.by_name(&format!("{role}_out")) {
                     let _ = sink.set_state(gst::State::Null);
@@ -477,7 +526,7 @@ impl Playback {
             .pipeline
             .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target);
 
-        if cfg!(target_os = "linux") {
+        if workaround {
             for role in ["primary", "secondary"] {
                 if let Some(sink) = self.pipeline.by_name(&format!("{role}_out")) {
                     let _ = sink.sync_state_with_parent();
@@ -486,8 +535,9 @@ impl Playback {
             // With a sink in NULL the pipeline cannot report the seek as
             // handled, even though it takes effect through the video branch,
             // so the result says nothing here and reporting it would print a
-            // failure on every skip. The cost is that a genuine seek failure
-            // goes unreported on Linux while this workaround stands.
+            // failure on every skip. That cost is why the workaround is gated
+            // rather than unconditional: on a GStreamer that does not need it,
+            // a genuine seek failure is reported again.
             self.seeking.set(true);
             return;
         }
@@ -622,5 +672,34 @@ impl Playback {
         if let Some(handle) = self.final_report.borrow_mut().take() {
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seek_workaround_applies;
+
+    #[test]
+    fn workaround_covers_the_versions_measured_broken() {
+        // Measured failing: see the table on `needs_seek_workaround`.
+        assert!(seek_workaround_applies(1, 20));
+        assert!(seek_workaround_applies(1, 22));
+        // Older than anything tested, and older than the supported baseline.
+        assert!(seek_workaround_applies(1, 18));
+        assert!(seek_workaround_applies(0, 11));
+    }
+
+    #[test]
+    fn workaround_is_skipped_where_measured_healthy() {
+        assert!(!seek_workaround_applies(1, 24));
+        assert!(!seek_workaround_applies(1, 26));
+        // A future major release must not silently fall back into it.
+        assert!(!seek_workaround_applies(2, 0));
+    }
+
+    #[test]
+    fn the_boundary_is_exactly_at_the_fixed_release() {
+        assert!(seek_workaround_applies(1, 23));
+        assert!(!seek_workaround_applies(1, 24));
     }
 }

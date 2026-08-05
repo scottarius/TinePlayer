@@ -18,6 +18,9 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+#ifndef AppVersionNumeric
+  #define AppVersionNumeric "0.0.0"
+#endif
 #ifndef StageDir
   #define StageDir "..\dist\TinePlayer-0.0.0-windows-x64"
 #endif
@@ -40,7 +43,10 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppUrl}
 AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases
-VersionInfoVersion={#AppVersion}
+; Numbers only - Inno rejects a version with a suffix here, while AppVersion
+; above takes any string. Between releases Cargo.toml carries something like
+; 1.1.0-dev, so the two have to be allowed to differ.
+VersionInfoVersion={#AppVersionNumeric}
 
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}

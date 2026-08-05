@@ -334,7 +334,11 @@ if (-not $iscc) {
 if ($iscc) {
     Write-Host 'Installer...' -ForegroundColor Cyan
     $iss = Join-Path $PSScriptRoot 'tineplayer.iss'
-    & $iscc /Q "/DAppVersion=$version" "/DStageDir=$stage" "/DOutputDir=$Output" "/DRootDir=$root" $iss
+    # Inno's VersionInfoVersion takes numbers only, so a development version
+    # like 1.1.0-dev has to be trimmed for that field while the displayed
+    # AppVersion keeps the suffix.
+    $versionNumeric = ($version -split '[-+]')[0]
+    & $iscc /Q "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DStageDir=$stage" "/DOutputDir=$Output" "/DRootDir=$root" $iss
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed.' }
     $setup = Join-Path $Output "TinePlayer-$version-windows-x64-setup.exe"
 } else {

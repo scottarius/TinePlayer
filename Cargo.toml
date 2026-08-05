@@ -1,6 +1,14 @@
 [package]
 name = "tineplayer"
-version = "1.0.0"
+# Development versions carry `-dev` so a build from main never claims to be
+# the release it follows - "About TinePlayer v1.1.0-dev" says at a glance that
+# a bug report is not from a released build. Dropped when a release is cut,
+# then set to the next `-dev` immediately after.
+#
+# The update check parses the three leading numbers and ignores the rest, so a
+# dev build is never told to downgrade to the release behind it. Windows
+# packaging trims the suffix for the one field Inno insists is numeric.
+version = "1.1.0-dev"
 edition = "2024"
 
 # The crate keeps its lowercase name for crates.io conventions, while the
