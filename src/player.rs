@@ -465,7 +465,15 @@ impl Playback {
         // They go down *before* the seek deliberately: keeping them up through
         // it and restarting afterwards was measured and is markedly worse, so
         // what matters is that they do not see the flush at all.
-        if cfg!(target_os = "linux") {
+        // DIAGNOSTIC (temporary, branch fix/linux-seek-audio):
+        // `TINEPLAYER_NO_SEEK_WORKAROUND=1` leaves the sinks up through the
+        // flush, which is what the code did before the workaround existed.
+        // Without a way to switch it off there is no way to tell a real fix
+        // from the workaround still covering for the fault.
+        let workaround = cfg!(target_os = "linux")
+            && std::env::var("TINEPLAYER_NO_SEEK_WORKAROUND").as_deref() != Ok("1");
+
+        if workaround {
             for role in ["primary", "secondary"] {
                 if let Some(sink) = self.pipeline.by_name(&format!("{role}_out")) {
                     let _ = sink.set_state(gst::State::Null);
@@ -477,7 +485,7 @@ impl Playback {
             .pipeline
             .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target);
 
-        if cfg!(target_os = "linux") {
+        if workaround {
             for role in ["primary", "secondary"] {
                 if let Some(sink) = self.pipeline.by_name(&format!("{role}_out")) {
                     let _ = sink.sync_state_with_parent();

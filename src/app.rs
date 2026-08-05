@@ -5168,7 +5168,51 @@ impl App {
         let app = self.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(16), move || {
             app.begin_playback(restart);
+            app.diag_seek_loop();
         });
+    }
+
+    /// DIAGNOSTIC (temporary, branch fix/linux-seek-audio).
+    ///
+    /// `TINEPLAYER_SEEK_TEST=<seconds>` seeks forward every so often with no
+    /// keyboard involved, so a run can be driven over SSH. It takes the same
+    /// path a held arrow key does - `scrub` then `end_scrub`, which is
+    /// `scrub_input` then `commit_scrub` - because the bug is provoked by the
+    /// flushing seek that path issues.
+    ///
+    /// Each seek prints a line with the wall clock on it. That is what lines
+    /// the log up against the recorded audio timeline: the point of the
+    /// exercise is which seek silenced an output, and in-process metrics have
+    /// already been shown to report healthy while the audio was audibly gone.
+    fn diag_seek_loop(self: &Rc<Self>) {
+        let Ok(every) = std::env::var("TINEPLAYER_SEEK_TEST") else {
+            return;
+        };
+        let Ok(every) = every.parse::<f64>() else {
+            eprintln!("DIAG: TINEPLAYER_SEEK_TEST must be a number of seconds");
+            return;
+        };
+
+        let started = std::time::Instant::now();
+        let count = std::cell::Cell::new(0u32);
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(
+            std::time::Duration::from_secs_f64(every),
+            move || {
+                let Some(app) = weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                count.set(count.get() + 1);
+                eprintln!(
+                    "DIAG: seek #{} at {:.1}s",
+                    count.get(),
+                    started.elapsed().as_secs_f64()
+                );
+                app.scrub(crate::player::STEP_SECONDS);
+                app.end_scrub();
+                glib::ControlFlow::Continue
+            },
+        );
     }
 
     /// Swaps the black surface for the video once a frame from the resume
