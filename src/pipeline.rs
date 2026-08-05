@@ -364,7 +364,12 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     // Linux-only, matching the forced clock below. Windows is verified
     // working as it is, and this pipeline has a history of platform-specific
     // sink behavior that punishes changing both at once.
-    if cfg!(target_os = "linux") && sink.find_property("async").is_some() {
+    // DIAGNOSTIC (temporary, branch fix/linux-seek-audio):
+    // `TINEPLAYER_SINK_ASYNC=1` leaves `async` at its default. With it false
+    // the sink never re-prerolls after a flush, which is a candidate for the
+    // seek fault - so the two Linux workarounds need to be separable.
+    let keep_async = std::env::var("TINEPLAYER_SINK_ASYNC").as_deref() == Ok("1");
+    if cfg!(target_os = "linux") && !keep_async && sink.find_property("async").is_some() {
         sink.set_property("async", false);
     }
 

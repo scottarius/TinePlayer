@@ -105,10 +105,16 @@ awk -v base="$REC_START" '/^DIAG: seek/ {
 }' /tmp/tp.log
 if [[ ${PROBE:-0} == 1 ]]; then
     echo
-    echo "=== buffers per second, and flush events (PROBE=1) ==="
-    echo "    where the counts stop is where data stopped; whether sound"
-    echo "    reached a device is decided by the recording below, not here"
-    grep -E '^(PROBE|DIAG)' /tmp/tp.log
+    echo "=== buffers per second and the share of them that is not silence ==="
+    echo "    read as buffers/non-zero: 96/ 41% is data arriving and carrying"
+    echo "    audio, 96/  0% is data arriving that is digital silence, and"
+    echo "      0/  -- is nothing arriving at all - three different faults"
+    awk -v base="$REC_START" '
+        /^PROBE wall/ { t = $3 - base; $1=""; $2=""; $3=""; printf "  t=%-4d%s\n", t, $0; next }
+        /^PROBE .* event/ { print "  " $0; next }
+        /^DIAG: seek/ { wall = $NF; gsub(/[()]/, "", wall)
+                        printf "  --- seek %s at t=%.1f\n", $3, wall - base }
+    ' /tmp/tp.log
 fi
 
 echo
