@@ -16,7 +16,14 @@ RUNS="${1:-3}"
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-eval "$("$ROOT/diag/startenv.sh")"
+# Deliberately not `eval "$(startenv.sh)"`: a command substitution swallows the
+# exit status, so a failure to bring up the display sailed straight past `set
+# -e` and every run afterwards reported healthy on an empty recording.
+env_exports=$("$ROOT/diag/startenv.sh") || {
+    echo "environment did not come up - refusing to report results" >&2
+    exit 1
+}
+eval "$env_exports"
 
 CARGO="$HOME/.cargo/bin/cargo"
 command -v cargo >/dev/null && CARGO=cargo
@@ -47,7 +54,16 @@ for mode in "workaround off:1" "workaround on:"; do
         out=$(DURATION=40 EVERY=8 "$ROOT/diag/seektest.sh" 2>&1 || true)
         dead=$(echo "$out" | grep -c "silent from" || true)
         summary=$(echo "$out" | grep -E "^tp_[ab] " | sed 's/  */ /g' | tr '\n' '|')
-        if [ "$dead" -gt 0 ]; then
+
+        # A run that recorded nothing is not a healthy run, and saying so is
+        # the whole point: an empty recording produces no "silent from" line,
+        # so without this check a dead environment reports as six clean passes.
+        recorded=$(echo "$out" | grep -oE '[0-9]+s silent of [0-9]+s' |
+            awk '{print $4}' | tr -d 's' | sort -rn | head -1)
+        recorded=${recorded:-0}
+        if [ "$recorded" -lt 10 ]; then
+            echo "  run $i: NO DATA (recorded ${recorded}s - did it play at all?)"
+        elif [ "$dead" -gt 0 ]; then
             echo "  run $i: FAILED ($dead output(s) died)  $summary"
         else
             echo "  run $i: healthy  $summary"

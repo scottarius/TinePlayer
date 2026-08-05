@@ -52,13 +52,22 @@ if [ ! -S "$XDG_RUNTIME_DIR/${WAYLAND_DISPLAY:-wayland-0}" ]; then
         log "linking WSLg's wayland socket"
         ln -sf /mnt/wslg/runtime-dir/wayland-0 "$XDG_RUNTIME_DIR/wayland-0"
     else
+        # Weston 10 (bookworm) wants the backend's file name; 13 and later
+        # accept the short one and reject the old. Neither says so usefully -
+        # the failure is "unknown backend" and then a dead compositor, which
+        # looks from outside exactly like a test that ran and found nothing.
         log "starting headless weston"
-        weston --backend=headless --width=1920 --height=1080 \
-            >/tmp/weston.log 2>&1 &
-        for _ in $(seq 20); do
+        for backend in headless-backend.so headless; do
+            weston --backend="$backend" --width=1920 --height=1080 \
+                >/tmp/weston.log 2>&1 &
+            for _ in $(seq 20); do
+                [ -S "$XDG_RUNTIME_DIR/wayland-1" ] && break
+                [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
+                sleep 0.5
+            done
             [ -S "$XDG_RUNTIME_DIR/wayland-1" ] && break
             [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
-            sleep 0.5
+            log "  backend $backend did not start, trying another"
         done
     fi
 fi
