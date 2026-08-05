@@ -17,10 +17,6 @@ use gtk::glib;
 /// every device we list.
 const ALSA_PROBE_NOISE: [&str; 2] = ["gst_alsa_device_new", "gst_caps_append"];
 
-/// List available audio *output* devices (cross-platform: PipeWire/Pulse
-/// sinks on Linux, WASAPI endpoints on Windows) via GStreamer's own
-/// DeviceMonitor, instead of shelling out to a platform-specific tool like
-/// `pactl`.
 /// Just the names, for printing. Keeps GStreamer's traits in here rather than
 /// making the caller import a prelude to ask a simple question.
 pub fn output_device_names() -> Result<Vec<String>, String> {
@@ -30,6 +26,9 @@ pub fn output_device_names() -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Available audio *output* devices, through GStreamer's own DeviceMonitor
+/// rather than a platform-specific tool like `pactl` - PipeWire and Pulse
+/// sinks on Linux, WASAPI endpoints on Windows, from one call.
 pub fn list_audio_output_devices() -> Result<Vec<gst::Device>, String> {
     let monitor = gst::DeviceMonitor::new();
     let caps = gst::Caps::new_any();

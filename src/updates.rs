@@ -90,8 +90,8 @@ pub fn look() -> Option<(String, String)> {
     look_at(LATEST)
 }
 
-/// The part that talks, with the address given rather than assumed, so it can
-/// be pointed at a repository that answers while ours is still private.
+/// The part that talks, with the address given rather than assumed, so a test
+/// can point it at a repository whose releases do not depend on ours.
 fn look_at(url: &str) -> Option<(String, String)> {
     let response = minreq::get(url)
         .with_header("User-Agent", AGENT)
@@ -99,9 +99,8 @@ fn look_at(url: &str) -> Option<(String, String)> {
         .with_timeout(TIMEOUT)
         .send()
         .ok()?;
-    // 404 while the repository is private, and that is not a failure worth
-    // reporting: it reads the same as there being nothing newer, and the day
-    // the repository opens this starts working with no change here.
+    // Anything but a 200 reads as "nothing newer", per the silence this module
+    // keeps about every failure.
     if response.status_code != 200 {
         return None;
     }
@@ -247,10 +246,9 @@ mod tests {
     ///
     ///     cargo test -- --ignored --nocapture
     ///
-    /// Our own repository is private until release, and the API answers 404
-    /// for those without a token, so there is nothing else to check this
-    /// against until then. GitHub's own CLI is used because it is public,
-    /// tags releases the same way, and will not stop existing.
+    /// GitHub's own CLI is used rather than TinePlayer: it tags releases the
+    /// same way, will not stop existing, and keeps the test independent of our
+    /// own release cadence.
     #[test]
     #[ignore = "reaches the network"]
     fn a_real_release_can_be_read() {

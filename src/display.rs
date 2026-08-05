@@ -95,8 +95,15 @@ pub fn resolve_display(config: &Config) -> HashMap<String, String> {
 /// environment before GTK initializes, so it can find the desktop session
 /// when launched over SSH (which doesn't inherit them).
 pub fn apply_display_env(display: &HashMap<String, String>) {
-    // Nothing here reaches a session bus, and GTK otherwise logs a warning
-    // about being unable to reach the accessibility bus every launch.
+    // Silences GTK's warning about being unable to reach the accessibility
+    // bus, which it logs on every launch where no session bus is present.
+    //
+    // Only ever when nothing has chosen a backend already, because on Windows
+    // `enable_accessibility` picks `accesskit` and a screen reader sees
+    // nothing inside the window without it. That call runs earlier in `main`,
+    // which is what keeps this from disabling it - so the order is
+    // load-bearing, and reversing it would break screen reader support
+    // silently.
     if std::env::var("GTK_A11Y").is_err() {
         unsafe { std::env::set_var("GTK_A11Y", "none") };
     }
