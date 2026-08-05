@@ -38,7 +38,7 @@ $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recomme
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     gstreamer1.0-pulseaudio gstreamer1.0-tools \
     pipewire pipewire-pulse wireplumber pulseaudio-utils \
-    weston libxkbcommon0 >/dev/null
+    weston libxkbcommon0 dbus >/dev/null
 
 if [ ! -x "$HOME/.cargo/bin/cargo" ] && ! command -v cargo >/dev/null; then
     echo "=== installing rust ==="

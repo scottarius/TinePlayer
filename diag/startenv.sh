@@ -15,6 +15,18 @@ chmod 700 "$XDG_RUNTIME_DIR"
 
 log() { echo "$@" >&2; }
 
+# A session bus first. WirePlumber is what links a stream to a sink, and it
+# exits when it cannot reach D-Bus - which a bare container has none of. The
+# symptom is not an error anywhere useful: streams appear with sink index
+# 4294967295, meaning connected to nothing, and every recording comes out
+# empty. A VM with systemd has a session bus already and never shows this.
+if [ ! -S "$XDG_RUNTIME_DIR/bus" ] && command -v dbus-daemon >/dev/null; then
+    log "starting a session bus"
+    dbus-daemon --session --fork --address="unix:path=$XDG_RUNTIME_DIR/bus"
+fi
+[ -S "$XDG_RUNTIME_DIR/bus" ] &&
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+
 # PipeWire, started by hand rather than through systemd: a VM reached over SSH
 # often has no user session bus, and the harness only needs the daemons, not a
 # desktop.
@@ -79,5 +91,13 @@ display=wayland-0
     exit 1
 }
 
+# WirePlumber having started is not the same as it having survived, and a
+# stream linked to nothing is what that failure looks like from here.
+if ! pgrep -x wireplumber >/dev/null 2>&1; then
+    log "WARNING: wireplumber is not running - streams will not reach a sink"
+    log "         see /tmp/wireplumber.log"
+fi
+
 log "ready: $display, sinks $(pactl list short sinks | grep -c '	tp_')"
-echo "export XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$display"
+echo "export XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$display" \
+    "${DBUS_SESSION_BUS_ADDRESS:+DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS}"
