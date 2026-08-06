@@ -129,13 +129,13 @@ device.](screenshots/volume-panel.png)
 volume sliders will mute each separately. <kbd>M</kbd>, or holding the main
 volume button, mutes and restores both outputs at once.
 
-**Sync** adjust the audio delay so it lines up with the picture. Bluetooth
+**Sync** adjusts the audio delay so it lines up with the picture. Bluetooth
 headphones and other speakers can add a delay of their own and feel out of sync.
 It can be adjusted and fine-tuned here while the video is playing, per output.
 A positive value holds that output back, for sound arriving ahead of the picture;
 a negative one moves it earlier. The sync icon puts that output back to `0ms`.
 
-Both settings are saved in the settings and persist every run. See
+Both are saved and persist between runs. See
 [Audio Sync](configuration.md#audio-sync).
 
 ## Subtitles

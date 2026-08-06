@@ -37,7 +37,6 @@ It lives in the per-user config directory:
 | Mute                                                     | `primary_muted` <br/>`secondary_muted` | `false` | Whether the output is muted                                                                                                                    |
 | [Audio Sync](#audio-sync)                                | `primary_offset_ms` <br/>`secondary_offset_ms` | `0` | Adjust the sync of the audio to line it up with the picture, in milliseconds from `-1000` to `1000`                                            |
 
-
 ## Remembered State
 
 Some settings are written by TinePlayer in order to remember state.
