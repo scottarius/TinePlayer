@@ -115,6 +115,27 @@ pub struct Config {
     pub primary_muted: bool,
     #[serde(default)]
     pub secondary_muted: bool,
+    /// How far to shift this output in time, in milliseconds, so it lines up
+    /// with the picture and with the other output.
+    ///
+    /// Kept per output rather than per video for the same reason the level is:
+    /// how late a set of headphones runs is a property of the headphones. A
+    /// Bluetooth pair costs 100-200ms of encode, transmission and buffering,
+    /// and no platform reports that to GStreamer - every sink reports its own
+    /// buffer size instead, identically for a Bluetooth headset and an HDMI
+    /// socket. So nothing can work it out on our behalf, and the only figure
+    /// available is the one somebody sets by ear.
+    ///
+    /// Either direction. Positive holds this output back; negative pulls it
+    /// forward, which is bounded by how much audio the pipeline has already
+    /// buffered - measured working to at least 600ms on a Pi. Forward matters
+    /// because the picture cannot be delayed: `gtk4paintablesink` has no
+    /// offset, so audio that lags the video can only be fixed by hurrying the
+    /// audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_offset_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_offset_ms: Option<f64>,
     #[serde(default)]
     pub primary_audio_description: bool,
     #[serde(default)]
@@ -175,6 +196,8 @@ impl Default for Config {
             secondary_volume: None,
             primary_muted: false,
             secondary_muted: false,
+            primary_offset_ms: None,
+            secondary_offset_ms: None,
             primary_audio_description: false,
             secondary_audio_description: false,
             subtitle_language: None,
@@ -288,6 +311,26 @@ impl Config {
         }
     }
 
+    /// Clamped, because a delay outside the offered range is either no delay
+    /// at all or long enough to look like playback has stopped.
+    pub fn offset_ms(&self, role: &str) -> f64 {
+        let stored = match role {
+            "primary" => self.primary_offset_ms,
+            _ => self.secondary_offset_ms,
+        };
+        stored.unwrap_or(0.0).clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS)
+    }
+
+    /// Rounded to the millisecond: finer than that is below what anyone can
+    /// place by ear against a picture, and it keeps the file readable.
+    pub fn set_offset_ms(&mut self, role: &str, ms: f64) {
+        let ms = ms.clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS).round();
+        match role {
+            "primary" => self.primary_offset_ms = Some(ms),
+            _ => self.secondary_offset_ms = Some(ms),
+        }
+    }
+
     pub fn watched_percent(&self) -> f64 {
         self.watched_percent
             .unwrap_or(DEFAULT_WATCHED_PERCENT)
@@ -351,6 +394,23 @@ pub fn updates_path() -> PathBuf {
 /// false start rather than progress. Jellyfin uses 5%, which is what this
 /// matches; Kodi uses a flat 180 seconds, which is harsh on anything short.
 pub const DEFAULT_RESUME_MIN_PERCENT: f64 = 5.0;
+
+/// The furthest an output can be shifted, in milliseconds, in either
+/// direction.
+///
+/// Bluetooth costs 100-200ms and the platform already absorbs some of it - on
+/// Linux about 150ms, on macOS about 240ms, on Windows only 60ms - so the
+/// correction anyone actually dials in is well under half a second. A second
+/// is generous enough to cover a badly muxed file too, and short enough that
+/// holding the key never strands somebody a long way from where they meant to
+/// be.
+///
+/// The same figure serves both directions, though they are not symmetrical in
+/// what they cost. Holding a sink back is free. Pulling one forward spends
+/// buffered audio, and past what the pipeline holds it would arrive late and
+/// be dropped - measured working to at least 600ms on a Pi, which is where
+/// the limit was left rather than tuned to the edge.
+pub const MAX_OFFSET_MS: f64 = 1000.0;
 
 /// The floor under that share, for videos short enough that 5% is seconds.
 /// Also the whole rule for an entry saved before durations were recorded.

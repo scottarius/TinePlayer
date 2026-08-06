@@ -326,6 +326,20 @@ fn build_audio_branch(
     Ok(head)
 }
 
+/// Holds a sink back by `ms` milliseconds.
+///
+/// Shared with [`crate::player::Playback::set_offset_ms`] so a delay set while
+/// a film is playing is applied exactly as one read from the config at build
+/// time. Silently does nothing on a sink without the property, which no audio
+/// sink we build should be, rather than failing playback over a setting.
+pub fn set_offset(sink: &gst::Element, ms: f64) {
+    if sink.find_property("ts-offset").is_none() {
+        return;
+    }
+    let ns = (ms * 1_000_000.0) as i64;
+    sink.set_property("ts-offset", ns);
+}
+
 /// Creates the real sink element for a configured output device.
 ///
 /// Via `Device::create_element()` rather than a hardcoded factory name plus a
@@ -360,6 +374,12 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     if cfg!(target_os = "linux") && sink.find_property("async").is_some() {
         sink.set_property("async", false);
     }
+
+    // How far this output is held back, so it lines up with the picture and
+    // with the other one. `ts-offset` is in nanoseconds and delays rendering
+    // by that much; see `Config::offset_ms` for why the figure has to come
+    // from a person rather than from the sink.
+    set_offset(&sink, config.offset_ms(role));
 
     Ok(sink)
 }

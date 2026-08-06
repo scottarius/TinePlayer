@@ -362,6 +362,19 @@ impl Playback {
         self.pipeline.by_name(&format!("{role}_volume")).is_some()
     }
 
+    /// Holds one output back, while a film is playing, so it can be lined up
+    /// against the picture by ear rather than by arithmetic.
+    ///
+    /// Takes effect on the next buffer the sink renders, so the change is
+    /// heard within a moment without interrupting playback - which is the
+    /// point, since the only way to judge a delay is to hear it against
+    /// something.
+    pub fn set_offset_ms(&self, role: &str, ms: f64) {
+        if let Some(sink) = self.pipeline.by_name(&format!("{role}_out")) {
+            crate::pipeline::set_offset(&sink, ms);
+        }
+    }
+
     /// Holds the picture still while the scrubber is being dragged, and lets
     /// it go afterwards.
     ///

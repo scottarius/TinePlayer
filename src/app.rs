@@ -34,12 +34,17 @@ enum Setting {
     SubtitleFont,
 }
 
-/// What a slider on the settings screen is setting. All of them work in
-/// percentages, which is what makes one set of arithmetic serve the lot.
+/// What a slider on the settings screen is setting.
+///
+/// Most are percentages, which is what lets one set of arithmetic serve them.
+/// The delay is the exception: it is milliseconds, so it carries its own step,
+/// range and reading rather than borrowing the percentage ones.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Slider {
     /// The level for one output, by role.
     Volume(&'static str),
+    /// How far one output is held back, by role, in milliseconds.
+    Offset(&'static str),
     ResumeThreshold,
     WatchedThreshold,
 }
@@ -48,9 +53,13 @@ impl Slider {
     /// How far one press moves it. Levels move in fives, being a rough
     /// setting anyone can hear; the thresholds move by one, since the useful
     /// range of each is narrow enough that fives would be three choices.
+    /// The delay moves in tens, which is about the smallest step that can be
+    /// told apart against a picture and still crosses its range in a few
+    /// seconds of holding.
     fn step(self) -> f64 {
         match self {
             Slider::Volume(_) => 5.0,
+            Slider::Offset(_) => 10.0,
             _ => 1.0,
         }
     }
@@ -58,6 +67,10 @@ impl Slider {
     fn range(self) -> std::ops::RangeInclusive<f64> {
         match self {
             Slider::Volume(_) => 0.0..=100.0,
+            // Both directions. Holding a sink back is unbounded; pulling one
+            // forward is limited by how much audio the pipeline has already
+            // buffered, which measured comfortably past half a second.
+            Slider::Offset(_) => -crate::config::MAX_OFFSET_MS..=crate::config::MAX_OFFSET_MS,
             // Below one per cent is indistinguishable from starting over, and
             // past a quarter of a film nothing would ever be resumable.
             Slider::ResumeThreshold => 1.0..=25.0,
@@ -68,14 +81,42 @@ impl Slider {
     }
 }
 
+/// How an output's timing reads beside its slider.
+///
+/// Words rather than a sign. "-150 ms" is easy to misread as "150 ms" from
+/// across a room, and which way it moves the sound is the whole point of the
+/// setting.
+///
+/// Zero reads "In sync" rather than "None", which answered the wrong
+/// question - "Audio Sync: None" says there is no synchronisation, when what
+/// is true is that this output is not being shifted.
+fn offset_label(ms: f64) -> String {
+    let ms = ms.round();
+    if ms == 0.0 {
+        "In sync".to_string()
+    } else if ms > 0.0 {
+        format!("{ms} ms later")
+    } else {
+        format!("{} ms earlier", -ms)
+    }
+}
+
 /// Rows of the settings screen, in the order they appear.
 /// Rows a page jump covers, roughly a screenful at the default size. What
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
 
+/// Space kept for the reading beside a settings slider, in characters.
+///
+/// Sized to the longest any of them shows - "1000 ms earlier" - because the
+/// width is a floor and not a ceiling: a longer reading widens the label,
+/// which moves the bar, which moves under the pointer that is dragging it.
+/// Anything added here that reads longer than this has to raise it.
+const SLIDER_VALUE_CHARS: i32 = 15;
+
 /// The rows the settings screen always has. The version row below the
 /// update switch is extra, and only there while the switch is on.
-const SETTINGS_ROWS: usize = 21;
+const SETTINGS_ROWS: usize = 23;
 
 /// Every row of the settings screen, in the order it is built.
 ///
@@ -93,31 +134,51 @@ const ROW_PRIMARY_DEVICE: i32 = 3;
 const ROW_PRIMARY_LANGUAGE: i32 = 4;
 const ROW_PRIMARY_DESCRIPTION: i32 = 5;
 const ROW_PRIMARY_VOLUME: i32 = 6;
-const ROW_SECONDARY_DEVICE: i32 = 7;
-const ROW_SECONDARY_LANGUAGE: i32 = 8;
-const ROW_SECONDARY_DESCRIPTION: i32 = 9;
-const ROW_SECONDARY_VOLUME: i32 = 10;
-const ROW_SUBTITLE_LANGUAGE: i32 = 11;
-const ROW_SUBTITLE_SIZE: i32 = 12;
-const ROW_SUBTITLE_FONT: i32 = 13;
-const ROW_RESUME_THRESHOLD: i32 = 14;
-const ROW_WATCHED_THRESHOLD: i32 = 15;
-const ROW_CLEAR_DATA: i32 = 16;
-const ROW_KODI: i32 = 17;
-const ROW_ABOUT: i32 = 18;
-const ROW_NOTICES: i32 = 19;
+const ROW_PRIMARY_SYNC: i32 = 7;
+const ROW_SECONDARY_DEVICE: i32 = 8;
+const ROW_SECONDARY_LANGUAGE: i32 = 9;
+const ROW_SECONDARY_DESCRIPTION: i32 = 10;
+const ROW_SECONDARY_VOLUME: i32 = 11;
+const ROW_SECONDARY_SYNC: i32 = 12;
+const ROW_SUBTITLE_LANGUAGE: i32 = 13;
+const ROW_SUBTITLE_SIZE: i32 = 14;
+const ROW_SUBTITLE_FONT: i32 = 15;
+const ROW_RESUME_THRESHOLD: i32 = 16;
+const ROW_WATCHED_THRESHOLD: i32 = 17;
+const ROW_CLEAR_DATA: i32 = 18;
+const ROW_KODI: i32 = 19;
+const ROW_ABOUT: i32 = 20;
+const ROW_NOTICES: i32 = 21;
 /// Where the update switch sits, and the row naming a new version under it.
-const UPDATE_SWITCH_ROW: i32 = 20;
-const UPDATE_STATUS_ROW: i32 = 21;
+const UPDATE_SWITCH_ROW: i32 = 22;
+const UPDATE_STATUS_ROW: i32 = 23;
 
 /// Rows that begin a group: each output, then subtitles, then what is
 /// remembered between runs, then the housekeeping at the bottom.
-const SETTINGS_SECTIONS: [i32; 6] = [3, 7, 11, 14, 17, 18];
+const SETTINGS_SECTIONS: [i32; 6] = [
+    ROW_PRIMARY_DEVICE,
+    ROW_SECONDARY_DEVICE,
+    ROW_SUBTITLE_LANGUAGE,
+    ROW_RESUME_THRESHOLD,
+    ROW_KODI,
+    ROW_ABOUT,
+];
 /// Rows that belong to the row named above them, drawn indented so the group
 /// reads as settings of that one thing rather than as more of their own.
 /// Indentation is what lets them be called just "Preferred Language" instead
 /// of repeating "Primary" and "Secondary" in every label.
-const SETTINGS_SUBROWS: [i32; 8] = [4, 5, 6, 8, 9, 10, 12, 13];
+const SETTINGS_SUBROWS: [i32; 10] = [
+    ROW_PRIMARY_LANGUAGE,
+    ROW_PRIMARY_DESCRIPTION,
+    ROW_PRIMARY_VOLUME,
+    ROW_PRIMARY_SYNC,
+    ROW_SECONDARY_LANGUAGE,
+    ROW_SECONDARY_DESCRIPTION,
+    ROW_SECONDARY_VOLUME,
+    ROW_SECONDARY_SYNC,
+    ROW_SUBTITLE_SIZE,
+    ROW_SUBTITLE_FONT,
+];
 
 /// Sizes offered for subtitles. The middle of the range is the default; the
 /// ends are deliberately wide, since what reads well from a sofa and what
@@ -1507,6 +1568,10 @@ impl App {
                 let level = config.volume(role);
                 (level * 100.0, volume_label(level, config.muted(role)))
             }
+            Slider::Offset(role) => {
+                let ms = config.offset_ms(role);
+                (ms, offset_label(ms))
+            }
             Slider::ResumeThreshold => {
                 let percent = config.resume_min_percent().round();
                 (percent, format!("{percent}%"))
@@ -1531,12 +1596,21 @@ impl App {
                     config.set_volume(role, moved / 100.0);
                     config.set_muted(role, false);
                 }
+                Slider::Offset(role) => config.set_offset_ms(role, moved),
                 Slider::ResumeThreshold => config.resume_min_percent = Some(moved),
                 Slider::WatchedThreshold => config.watched_percent = Some(moved),
             }
         }
+        // Heard straight away when a film is playing, so a delay can be placed
+        // against the picture rather than guessed at and checked later.
+        if let Slider::Offset(role) = kind
+            && let Some(playback) = self.playback.borrow().as_ref()
+        {
+            playback.set_offset_ms(role, moved);
+        }
         value.set_text(&match kind {
             Slider::Volume(_) => volume_label(moved / 100.0, false),
+            Slider::Offset(_) => offset_label(moved),
             _ => format!("{}%", moved.round()),
         });
         self.save_volume_soon();
@@ -3460,6 +3534,11 @@ impl App {
                     true,
                 ),
                 (
+                    "Audio Sync".to_string(),
+                    offset_label(config.offset_ms("primary")),
+                    true,
+                ),
+                (
                     "Secondary Audio Device".to_string(),
                     config
                         .secondary_sink
@@ -3485,6 +3564,11 @@ impl App {
                 (
                     "Volume".to_string(),
                     volume_label(config.volume("secondary"), config.muted("secondary")),
+                    true,
+                ),
+                (
+                    "Audio Sync".to_string(),
+                    offset_label(config.offset_ms("secondary")),
                     true,
                 ),
                 (
@@ -3615,7 +3699,13 @@ impl App {
         self.settings_sliders.borrow_mut().clear();
         for (index, kind, label) in [
             (ROW_PRIMARY_VOLUME, Slider::Volume("primary"), "Volume"),
+            (ROW_PRIMARY_SYNC, Slider::Offset("primary"), "Audio Sync"),
             (ROW_SECONDARY_VOLUME, Slider::Volume("secondary"), "Volume"),
+            (
+                ROW_SECONDARY_SYNC,
+                Slider::Offset("secondary"),
+                "Audio Delay",
+            ),
             (
                 ROW_RESUME_THRESHOLD,
                 Slider::ResumeThreshold,
@@ -6151,12 +6241,20 @@ fn slider_row(
     name_it(&scale, label);
     row.append(&scale);
 
-    // Fixed width, so the bar beside it does not shift as the reading goes
-    // from "Muted" to "5%" and back.
+    // Wide enough for the longest reading any slider shows, so the bar beside
+    // it never shifts as the value changes. `set_width_chars` is a minimum
+    // rather than a maximum, so a reading longer than this would still push
+    // the bar - which is what made the sync slider jump under the pointer
+    // while it was being dragged, since "In sync" and "1000 ms earlier" are
+    // eight characters apart.
+    //
+    // The same width for every slider rather than one each. A per-row width
+    // would leave the bars ending at different places down the column, which
+    // is worse to look at than the whitespace a short reading leaves here.
     let value = gtk::Label::new(Some(reading));
     value.add_css_class("tp-value");
     value.set_xalign(1.0);
-    value.set_width_chars(6);
+    value.set_width_chars(SLIDER_VALUE_CHARS);
     row.append(&value);
 
     (row, scale, value)
