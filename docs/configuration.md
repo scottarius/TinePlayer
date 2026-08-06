@@ -36,6 +36,7 @@ It lives in the per-user config directory:
 | [Volume](#volumes)                                       | `primary_volume` <br/>`secondary_volume` | `1.0` | That output's level, from `0.0` to `1.0`                                                                                                       |
 | Mute                                                     | `primary_muted` <br/>`secondary_muted` | `false` | Whether the output is muted                                                                                                                    |
 | [Audio Sync](#audio-sync)                                | `primary_offset_ms` <br/>`secondary_offset_ms` | `0` | Adjust the sync of the audio to line it up with the picture, in milliseconds from `-1000` to `1000`                                            |
+|                                                          | `primary_offset_on` <br/>`secondary_offset_on` | `false` | Whether that output's sync adjustment is applied. Off keeps the value without using it                                                       |
 
 ## Remembered State
 
@@ -116,6 +117,16 @@ given number of milliseconds, from `-1000` to `1000`:
 
 Each output is corrected separately, so wireless headphones can be lined up
 without touching what's playing on speakers.
+
+Each one has a switch beside it in **Settings**, and starts off - nobody needs
+a delay until they find they do. Turning it off again keeps the value without
+using it, which is how to hear whether a delay is helping: winding it to zero
+answers the same question and loses the figure.
+
+**Setting the delay in the file means setting both.** `primary_offset_ms` on
+its own does nothing until `primary_offset_on` is `true` alongside it. The
+reading shows `0ms` while an output is switched off, whatever the value behind
+it is.
 
 It can be adjusted live during playback from the volume button. See
 [Volume and sync](usage.md#volume-and-sync).

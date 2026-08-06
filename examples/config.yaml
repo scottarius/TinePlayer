@@ -107,6 +107,16 @@ secondary_muted: false
 primary_offset_ms: 0
 secondary_offset_ms: 0
 
+# Whether each delay is applied. Off keeps the value and stops using it, which
+# is how you check whether a delay is helping without losing the figure you
+# found by ear.
+#
+# Missing means off, since nobody starts out needing a delay - so a delay set
+# here by hand does nothing until the matching switch below is true as well.
+
+primary_offset_on: false
+secondary_offset_on: false
+
 # How a subtitle is chosen for a video you have not picked one for. Either one
 # of the automatic modes, or a language code to always prefer that language:
 #

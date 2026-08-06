@@ -133,7 +133,10 @@ volume button, mutes and restores both outputs at once.
 headphones and other speakers can add a delay of their own and feel out of sync.
 It can be adjusted and fine-tuned here while the video is playing, per output.
 A positive value holds that output back, for sound arriving ahead of the picture;
-a negative one moves it earlier. The sync icon puts that output back to `0ms`.
+a negative one moves it earlier.
+
+The sync icon toggles that output's delay on and off while keeping whatever the delay is
+set to
 
 Both are saved and persist between runs. See
 [Audio Sync](configuration.md#audio-sync).

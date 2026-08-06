@@ -379,7 +379,7 @@ fn build_device_sink(role: &str, config: &Config) -> Result<gst::Element, String
     // with the other one. `ts-offset` is in nanoseconds and delays rendering
     // by that much; see `Config::offset_ms` for why the figure has to come
     // from a person rather than from the sink.
-    set_offset(&sink, config.offset_ms(role));
+    set_offset(&sink, config.applied_offset_ms(role));
 
     Ok(sink)
 }

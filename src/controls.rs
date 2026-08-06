@@ -56,7 +56,7 @@ type VolumeHandler = Box<dyn Fn(&str, f64, bool, bool)>;
 /// Told which output was shifted and by how many milliseconds. Separate from
 /// [`VolumeHandler`] because a delay is always worth keeping: unlike silencing
 /// everything at once, it describes the equipment rather than the moment.
-type SyncHandler = Box<dyn Fn(&str, f64)>;
+type SyncHandler = Box<dyn Fn(&str, f64, bool)>;
 
 /// Which of an output's two controls is being driven.
 ///
@@ -80,11 +80,15 @@ struct Output {
     level: gtk::Scale,
     level_reading: gtk::Label,
     /// The row and slider for how far this output is shifted in time, with
-    /// the button that puts it back in sync.
+    /// the button that turns the shift on and off.
     sync_row: gtk::Box,
     sync: gtk::Scale,
     sync_reading: gtk::Label,
-    reset: gtk::Button,
+    sync_toggle: gtk::Button,
+    /// Whether the shift is being applied. Off keeps the slider where it is:
+    /// the value is what somebody found by ear, and losing it to hear the
+    /// difference for a moment would be the opposite of useful.
+    sync_on: Cell<bool>,
     muted: Cell<bool>,
     /// What this output was doing before everything was silenced at once, so
     /// that letting go of it puts back what was there rather than unmuting an
@@ -436,11 +440,11 @@ impl Controls {
             // sync, which is the one value somebody is ever certain they
             // want and the one that stepping in tens cannot reach from an
             // arbitrary place a pointer left it in.
-            let reset = gtk::Button::new();
-            reset.set_child(Some(&crate::app::sync_image(scale)));
-            reset.add_css_class("tp-transport-button");
-            reset.set_can_focus(false);
-            name_it(&reset, &format!("Reset audio sync, {name}"));
+            let sync_toggle = gtk::Button::new();
+            sync_toggle.set_child(Some(&crate::app::sync_image(scale)));
+            sync_toggle.add_css_class("tp-transport-button");
+            sync_toggle.set_can_focus(false);
+            name_it(&sync_toggle, &format!("Use audio sync, {name}"));
 
             let sync_reading = reading_label(&crate::app::offset_label(0.0));
 
@@ -453,7 +457,7 @@ impl Controls {
                 .build();
             sync_row.set_focusable(true);
             name_it(&sync_row, &format!("Audio sync, {name}"));
-            sync_row.append(&reset);
+            sync_row.append(&sync_toggle);
             sync_row.append(&sync);
             sync_row.append(&sync_reading);
 
@@ -476,7 +480,8 @@ impl Controls {
                 sync_row,
                 sync,
                 sync_reading,
-                reset,
+                sync_toggle,
+                sync_on: Cell::new(false),
                 muted: Cell::new(false),
                 before_hush: Cell::new(false),
             });
@@ -739,9 +744,9 @@ impl Controls {
             }
             {
                 let handle = controls.clone();
-                output.reset.connect_clicked(move |_| {
+                output.sync_toggle.connect_clicked(move |_| {
                     handle.aim_at(index, Control::Sync);
-                    handle.shift_to(index, 0.0);
+                    handle.toggle_sync(index);
                 });
             }
             let handle = controls.clone();
@@ -1128,24 +1133,66 @@ impl Controls {
         let Some(output) = self.outputs.get(index) else {
             return;
         };
+        // Moving the bar turns the delay on, the way turning an output up
+        // unmutes it: a control that moves and changes nothing audible reads
+        // as a fault rather than as a setting.
+        output.sync_on.set(true);
+        Self::draw_sync(&output.sync_toggle, true);
         output.sync_reading.set_text(&crate::app::offset_label(ms));
         if let Some(handler) = self.on_sync.borrow().as_ref() {
-            handler(output.role, ms);
+            handler(output.role, ms, true);
         }
     }
 
-    /// Told about a shift, however it was made.
-    pub fn connect_sync(&self, handler: impl Fn(&str, f64) + 'static) {
+    /// Uses one output's shift or stops using it, keeping what it is set to.
+    ///
+    /// The same gesture as mute, and for the same reason: hearing the
+    /// difference means turning it off and on, which is no use if doing so
+    /// throws away the value being judged.
+    fn toggle_sync(self: &Rc<Self>, index: usize) {
+        let Some(output) = self.outputs.get(index) else {
+            return;
+        };
+        let on = !output.sync_on.get();
+        output.sync_on.set(on);
+        Self::draw_sync(&output.sync_toggle, on);
+        let ms = output.sync.value();
+        output
+            .sync_reading
+            .set_text(&crate::app::offset_label(if on { ms } else { 0.0 }));
+        if let Some(handler) = self.on_sync.borrow().as_ref() {
+            handler(output.role, ms, on);
+        }
+        self.flash(false);
+    }
+
+    /// Dimmed while the delay is not being used. One drawn mark rather than
+    /// two: there is no second glyph meaning "not synchronised", and a button
+    /// that changes shape says something different happened.
+    fn draw_sync(button: &gtk::Button, on: bool) {
+        if on {
+            button.remove_css_class("tp-off");
+        } else {
+            button.add_css_class("tp-off");
+        }
+    }
+
+    /// Told about a shift or about the switch, however it was made.
+    pub fn connect_sync(&self, handler: impl Fn(&str, f64, bool) + 'static) {
         *self.on_sync.borrow_mut() = Some(Box::new(handler));
     }
 
-    /// Where each output's shift stands, in milliseconds, so the panel shows
-    /// what the configuration holds when playback starts.
-    pub fn set_syncs(&self, offsets: &[(&str, f64)]) {
+    /// Where each output's shift stands and whether it is being applied, so
+    /// the panel shows what the configuration holds when playback starts.
+    pub fn set_syncs(&self, offsets: &[(&str, f64, bool)]) {
         for output in &self.outputs {
-            if let Some(&(_, ms)) = offsets.iter().find(|(role, _)| *role == output.role) {
+            if let Some(&(_, ms, on)) = offsets.iter().find(|(role, ..)| *role == output.role) {
                 output.sync.set_value(ms);
-                output.sync_reading.set_text(&crate::app::offset_label(ms));
+                output.sync_on.set(on);
+                Self::draw_sync(&output.sync_toggle, on);
+                output
+                    .sync_reading
+                    .set_text(&crate::app::offset_label(if on { ms } else { 0.0 }));
             }
         }
     }
@@ -1283,13 +1330,13 @@ impl Controls {
                     button.emit_clicked();
                 }
             }
-            // In the panel it is the button belonging to the selected row:
-            // mute on a volume row, back-in-sync on a sync row. Pressing the
-            // row is the same gesture in both, and doing the volume one from
-            // a sync row silenced an output somebody was lining up.
+            // In the panel it is the button belonging to the selected row,
+            // and both are the same gesture: mute on a volume row, use the
+            // delay or not on a sync row. Neither loses what it is turning
+            // off - the level and the delay both stay where they were.
             Row::Volume => match self.control.get() {
                 Control::Volume => self.toggle_muted(self.output.get()),
-                Control::Sync => self.shift_to(self.output.get(), 0.0),
+                Control::Sync => self.toggle_sync(self.output.get()),
             },
             _ => {}
         }

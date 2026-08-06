@@ -155,6 +155,37 @@ const ROW_NOTICES: i32 = 21;
 const UPDATE_SWITCH_ROW: i32 = 22;
 const UPDATE_STATUS_ROW: i32 = 23;
 
+/// Every row, in the order they are built, which is what the constants above
+/// are positions in. Inserting a row means renumbering everything below it,
+/// and a number that does not get renumbered puts a control on the wrong row
+/// rather than failing - which is how the secondary output's switch came to
+/// be built over its Preferred Language row.
+const SETTINGS_ORDER: [i32; SETTINGS_ROWS] = [
+    ROW_THEME,
+    ROW_INTERFACE_SCALE,
+    ROW_SOUNDS,
+    ROW_PRIMARY_DEVICE,
+    ROW_PRIMARY_LANGUAGE,
+    ROW_PRIMARY_DESCRIPTION,
+    ROW_PRIMARY_VOLUME,
+    ROW_PRIMARY_SYNC,
+    ROW_SECONDARY_DEVICE,
+    ROW_SECONDARY_LANGUAGE,
+    ROW_SECONDARY_DESCRIPTION,
+    ROW_SECONDARY_VOLUME,
+    ROW_SECONDARY_SYNC,
+    ROW_SUBTITLE_LANGUAGE,
+    ROW_SUBTITLE_SIZE,
+    ROW_SUBTITLE_FONT,
+    ROW_RESUME_THRESHOLD,
+    ROW_WATCHED_THRESHOLD,
+    ROW_CLEAR_DATA,
+    ROW_KODI,
+    ROW_ABOUT,
+    ROW_NOTICES,
+    UPDATE_SWITCH_ROW,
+];
+
 /// Rows that begin a group: each output, then subtitles, then what is
 /// remembered between runs, then the housekeeping at the bottom.
 const SETTINGS_SECTIONS: [i32; 6] = [
@@ -1559,7 +1590,46 @@ impl App {
             config.set_muted(role, muted);
         }
         value.set_text(&volume_label(scale.value() / 100.0, muted));
+        // On is unmuted, so the switch reads as the output being heard rather
+        // than as the mute being applied. A silenced output's bar is dimmed
+        // with it: the level it will come back to is worth still showing, and
+        // moving it while nothing can be heard is not.
+        scale.set_sensitive(!muted);
+        value.set_sensitive(!muted);
+        self.set_settings_switch(index, !muted);
         self.save_volume_soon();
+    }
+
+    /// Turns an output's delay on or off, keeping whatever it is set to.
+    ///
+    /// Off is how somebody checks whether a delay is helping: winding it to
+    /// zero would answer the same question and lose the value they spent time
+    /// finding.
+    fn toggle_settings_offset(self: &Rc<Self>, index: i32) {
+        let found = self
+            .settings_sliders
+            .borrow()
+            .iter()
+            .find(|(row, ..)| *row == index)
+            .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
+        let Some((Slider::Offset(role), scale, value)) = found else {
+            return;
+        };
+        let on = !self.config.borrow().offset_on(role);
+        {
+            let mut config = self.config.borrow_mut();
+            config.set_offset_on(role, on);
+            let _ = config.save();
+        }
+        // Heard straight away, like the delay itself: the point of the switch
+        // is comparing with and without while something is playing.
+        if let Some(playback) = self.playback.borrow().as_ref() {
+            playback.set_offset_ms(role, self.config.borrow().applied_offset_ms(role));
+        }
+        scale.set_sensitive(on);
+        value.set_text(&offset_label(self.config.borrow().applied_offset_ms(role)));
+        value.set_sensitive(on);
+        self.set_settings_switch(index, on);
     }
 
     /// Where a slider stands now, and how that reads beside it.
@@ -1571,8 +1641,13 @@ impl App {
                 (level * 100.0, volume_label(level, config.muted(role)))
             }
             Slider::Offset(role) => {
-                let ms = config.offset_ms(role);
-                (ms, offset_label(ms))
+                // The bar keeps the stored delay, so turning it back on shows
+                // what it will be; the reading says what is actually being
+                // applied, which while it is off is nothing.
+                (
+                    config.offset_ms(role),
+                    offset_label(config.applied_offset_ms(role)),
+                )
             }
             Slider::ResumeThreshold => {
                 let percent = config.resume_min_percent().round();
@@ -3537,7 +3612,7 @@ impl App {
                 ),
                 (
                     "Audio Sync".to_string(),
-                    offset_label(config.offset_ms("primary")),
+                    offset_label(config.applied_offset_ms("primary")),
                     true,
                 ),
                 (
@@ -3570,7 +3645,7 @@ impl App {
                 ),
                 (
                     "Audio Sync".to_string(),
-                    offset_label(config.offset_ms("secondary")),
+                    offset_label(config.applied_offset_ms("secondary")),
                     true,
                 ),
                 (
@@ -3636,7 +3711,7 @@ impl App {
             ]
             .to_vec()
         };
-        debug_assert_eq!(rows.len(), SETTINGS_ROWS);
+        debug_assert_eq!(rows.len(), SETTINGS_ORDER.len());
 
         // Only while the check is on: a row saying nothing is new, under a
         // switch that is off, would be reporting on something not happening.
@@ -3673,15 +3748,19 @@ impl App {
             width => width,
         } / 5;
         self.settings_switches.borrow_mut().clear();
+        // By name, not by number. These were written as 2, 5 and 9, and
+        // inserting the sync rows moved the secondary description row to 10
+        // while the 9 stayed put - so its switch was built over Preferred
+        // Language, which then had no row of its own at all.
         for (index, label, on) in [
-            (2, "Navigation Sounds", self.config.borrow().sounds),
+            (ROW_SOUNDS, "Navigation Sounds", self.config.borrow().sounds),
             (
-                5,
+                ROW_PRIMARY_DESCRIPTION,
                 "Prefer Audio Description",
                 self.config.borrow().primary_audio_description,
             ),
             (
-                9,
+                ROW_SECONDARY_DESCRIPTION,
                 "Prefer Audio Description",
                 self.config.borrow().secondary_audio_description,
             ),
@@ -3706,7 +3785,7 @@ impl App {
             (
                 ROW_SECONDARY_SYNC,
                 Slider::Offset("secondary"),
-                "Audio Delay",
+                "Audio Sync",
             ),
             (
                 ROW_RESUME_THRESHOLD,
@@ -3720,10 +3799,21 @@ impl App {
             ),
         ] {
             let (now, reading) = self.slider_state(kind);
-            let (widget, scale, value) =
-                slider_row(label, slider_width, kind.range(), now, &reading);
+            // A switch on the two that can be turned off, and none on the
+            // thresholds, which have no off - a resume threshold of "not
+            // applied" is the same as zero.
+            let toggle = match kind {
+                Slider::Volume(role) => Some(!self.config.borrow().muted(role)),
+                Slider::Offset(role) => Some(self.config.borrow().offset_on(role)),
+                _ => None,
+            };
+            let (widget, scale, value, switch) =
+                slider_row(label, slider_width, kind.range(), now, &reading, toggle);
             if let Some(row) = list.row_at_index(index) {
                 row.set_child(Some(&widget));
+            }
+            if let Some(switch) = switch {
+                self.settings_switches.borrow_mut().push((index, switch));
             }
             {
                 let app = self.clone();
@@ -3784,10 +3874,12 @@ impl App {
                     ROW_PRIMARY_LANGUAGE => app.open_setting(Setting::PrimaryLanguage),
                     ROW_PRIMARY_DESCRIPTION => app.toggle_audio_description(true),
                     ROW_PRIMARY_VOLUME => app.toggle_settings_mute(ROW_PRIMARY_VOLUME),
+                    ROW_PRIMARY_SYNC => app.toggle_settings_offset(ROW_PRIMARY_SYNC),
                     ROW_SECONDARY_DEVICE => app.open_setting(Setting::SecondaryDevice),
                     ROW_SECONDARY_LANGUAGE => app.open_setting(Setting::SecondaryLanguage),
                     ROW_SECONDARY_DESCRIPTION => app.toggle_audio_description(false),
                     ROW_SECONDARY_VOLUME => app.toggle_settings_mute(ROW_SECONDARY_VOLUME),
+                    ROW_SECONDARY_SYNC => app.toggle_settings_offset(ROW_SECONDARY_SYNC),
                     ROW_SUBTITLE_LANGUAGE => app.open_setting(Setting::SubtitleLanguage),
                     ROW_SUBTITLE_SIZE => app.open_setting(Setting::SubtitleSize),
                     ROW_SUBTITLE_FONT => app.open_setting(Setting::SubtitleFont),
@@ -3845,7 +3937,14 @@ impl App {
         } else {
             self.config.borrow().secondary_audio_description
         };
-        self.set_settings_switch(if primary { 5 } else { 9 }, on);
+        self.set_settings_switch(
+            if primary {
+                ROW_PRIMARY_DESCRIPTION
+            } else {
+                ROW_SECONDARY_DESCRIPTION
+            },
+            on,
+        );
     }
 
     /// Moves the switch on a settings row to match what it now reports.
@@ -3956,7 +4055,7 @@ impl App {
             (config.sounds, config.primary_sink.clone())
         };
         *self.sounds.borrow_mut() = Sounds::new(enabled, device);
-        self.set_settings_switch(2, enabled);
+        self.set_settings_switch(ROW_SOUNDS, enabled);
     }
 
     /// Re-renders every size in the interface at a new scale.
@@ -5488,11 +5587,11 @@ impl App {
                 controls.set_levels(&levels);
                 // What the configuration holds for each output, so the panel
                 // opens showing the shift already in force rather than zero.
-                let syncs: Vec<(&str, f64)> = {
+                let syncs: Vec<(&str, f64, bool)> = {
                     let config = self.config.borrow();
                     outputs
                         .iter()
-                        .map(|(role, _)| (*role, config.offset_ms(role)))
+                        .map(|(role, _)| (*role, config.offset_ms(role), config.offset_on(role)))
                         .collect()
                 };
                 controls.set_syncs(&syncs);
@@ -5522,11 +5621,16 @@ impl App {
                     // door: how far an output runs behind describes the
                     // equipment, not the moment.
                     let app = self.clone();
-                    controls.connect_sync(move |role, ms| {
-                        if let Some(playback) = app.playback.borrow().as_ref() {
-                            playback.set_offset_ms(role, ms);
+                    controls.connect_sync(move |role, ms, on| {
+                        {
+                            let mut config = app.config.borrow_mut();
+                            config.set_offset_ms(role, ms);
+                            config.set_offset_on(role, on);
                         }
-                        app.config.borrow_mut().set_offset_ms(role, ms);
+                        if let Some(playback) = app.playback.borrow().as_ref() {
+                            playback
+                                .set_offset_ms(role, app.config.borrow().applied_offset_ms(role));
+                        }
                         app.save_volume_soon();
                     });
                 }
@@ -6260,13 +6364,21 @@ fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
 /// percentages was a menu pretending to be a dial. Left and right move it
 /// where they would otherwise do nothing on this screen, and the row keeps
 /// the reading beside it so it can be set without looking at the bar.
+/// A row with a bar, its reading, and for the ones that can be turned off, a
+/// switch beyond it.
+///
+/// The switch rather than a value of its own: muted is not a quieter level
+/// and an unapplied delay is not a shorter one, so both are a second thing
+/// about the row, and the bar keeps saying what it will be when it is back
+/// on.
 fn slider_row(
     label: &str,
     width: i32,
     range: std::ops::RangeInclusive<f64>,
     now: f64,
     reading: &str,
-) -> (gtk::Box, gtk::Scale, gtk::Label) {
+    toggle: Option<bool>,
+) -> (gtk::Box, gtk::Scale, gtk::Label, Option<gtk::Switch>) {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(24)
@@ -6311,7 +6423,22 @@ fn slider_row(
     value.set_width_chars(READING_CHARS);
     row.append(&value);
 
-    (row, scale, value)
+    let toggle = toggle.map(|on| {
+        let switch = gtk::Switch::new();
+        switch.set_active(on);
+        name_it(&switch, label);
+        switch.set_can_focus(false);
+        switch.set_can_target(false);
+        switch.set_valign(gtk::Align::Center);
+        row.append(&switch);
+        // A bar that cannot be moved says so, rather than being moved to no
+        // effect and leaving somebody to work out why nothing changed.
+        scale.set_sensitive(on);
+        value.set_sensitive(on);
+        switch
+    });
+
+    (row, scale, value, toggle)
 }
 
 /// One piece of the notices page.
@@ -6898,6 +7025,10 @@ fn style_css(scale: f64, dark: bool) -> String {
             padding: 0px {crumb_pad}px;
         }}
         .tp-transport-button:hover {{ background-color: rgba(255, 255, 255, 0.15); }}
+        /* A control that is there but not doing anything: the sync button
+           while an output's delay is switched off. Dimmed rather than hidden,
+           since it is what turns the delay back on. */
+        .tp-off {{ opacity: 0.35; }}
         /* Where a controller is, drawn boldly enough to be found from across a
            room rather than as the hairline a focus ring would give. */
         .tp-selected {{
@@ -7218,5 +7349,45 @@ mod readings {
         assert_eq!(volume_label(0.75, false), "75%");
         assert_eq!(volume_label(0.0, false), "0%");
         assert_eq!(volume_label(1.0, false), "100%");
+    }
+}
+
+#[cfg(test)]
+mod settings_rows {
+    use super::*;
+
+    /// One row, one position. A row constant that is duplicated or skipped
+    /// means two controls built onto the same row and another left as a plain
+    /// line of text - which is what a stale number did to Preferred Language,
+    /// and it looked like a missing setting rather than like a bug.
+    #[test]
+    fn every_row_has_one_position() {
+        let mut positions = SETTINGS_ORDER;
+        positions.sort_unstable();
+        let expected: Vec<i32> = (0..SETTINGS_ROWS as i32).collect();
+        assert_eq!(positions.to_vec(), expected);
+    }
+
+    /// The row under the switch is the one row not in `SETTINGS_ORDER`: it is
+    /// pushed only while the check is on, so it sits past the fixed rows.
+    #[test]
+    fn the_update_status_row_follows_the_fixed_rows() {
+        assert_eq!(UPDATE_STATUS_ROW, SETTINGS_ROWS as i32);
+        assert_eq!(UPDATE_SWITCH_ROW, UPDATE_STATUS_ROW - 1);
+    }
+
+    /// Headings and the rows indented under them are drawn differently, so a
+    /// row named as both would be asking for two contradictory things.
+    #[test]
+    fn no_row_is_both_a_heading_and_indented_under_one() {
+        for row in SETTINGS_SECTIONS {
+            assert!(
+                !SETTINGS_SUBROWS.contains(&row),
+                "row {row} is both a section and a subrow"
+            );
+        }
+        for row in SETTINGS_SECTIONS.iter().chain(SETTINGS_SUBROWS.iter()) {
+            assert!(SETTINGS_ORDER.contains(row), "row {row} is not built");
+        }
     }
 }

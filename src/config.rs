@@ -136,6 +136,19 @@ pub struct Config {
     pub primary_offset_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_offset_ms: Option<f64>,
+    /// Whether that output's delay is applied. Off keeps the value and stops
+    /// using it, which is what somebody wants when checking whether a delay
+    /// is helping: the alternative is winding it to zero and having to find
+    /// the setting again afterwards.
+    ///
+    /// Absent means off. Nobody starts out needing a delay, so the switch
+    /// starts off and is turned on by whoever finds they need one. The cost
+    /// is that a delay written into the file by hand does nothing until this
+    /// is set alongside it, which the documentation says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_offset_on: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_offset_on: Option<bool>,
     #[serde(default)]
     pub primary_audio_description: bool,
     #[serde(default)]
@@ -198,6 +211,8 @@ impl Default for Config {
             secondary_muted: false,
             primary_offset_ms: None,
             secondary_offset_ms: None,
+            primary_offset_on: None,
+            secondary_offset_on: None,
             primary_audio_description: false,
             secondary_audio_description: false,
             subtitle_language: None,
@@ -328,6 +343,33 @@ impl Config {
         match role {
             "primary" => self.primary_offset_ms = Some(ms),
             _ => self.secondary_offset_ms = Some(ms),
+        }
+    }
+
+    /// Whether that output's delay is being applied. Unset means off.
+    pub fn offset_on(&self, role: &str) -> bool {
+        match role {
+            "primary" => self.primary_offset_on,
+            _ => self.secondary_offset_on,
+        }
+        .unwrap_or(false)
+    }
+
+    pub fn set_offset_on(&mut self, role: &str, on: bool) {
+        match role {
+            "primary" => self.primary_offset_on = Some(on),
+            _ => self.secondary_offset_on = Some(on),
+        }
+    }
+
+    /// What the pipeline should actually use: the stored delay while it is
+    /// on, and nothing while it is off. The stored value is left alone either
+    /// way, so turning it back on restores what was set rather than zero.
+    pub fn applied_offset_ms(&self, role: &str) -> f64 {
+        if self.offset_on(role) {
+            self.offset_ms(role)
+        } else {
+            0.0
         }
     }
 
@@ -626,6 +668,55 @@ mod offsets {
         };
         assert_eq!(hand_edited.offset_ms("primary"), MAX_OFFSET_MS);
         assert_eq!(hand_edited.offset_ms("secondary"), -MAX_OFFSET_MS);
+    }
+
+    /// Off until somebody turns it on, since nobody starts out needing a
+    /// delay - including when a value is present without the switch, which is
+    /// what a config edited by hand looks like.
+    #[test]
+    fn an_offset_does_nothing_until_it_is_turned_on() {
+        let mut config = Config::default();
+        assert!(!config.offset_on("primary"));
+
+        config.set_offset_ms("primary", 120.0);
+        assert!(!config.offset_on("primary"));
+        assert_eq!(config.applied_offset_ms("primary"), 0.0);
+
+        config.set_offset_on("primary", true);
+        assert_eq!(config.applied_offset_ms("primary"), 120.0);
+    }
+
+    /// The whole point of the switch: turning it off stops the delay being
+    /// used without losing the value, which somebody spent time finding by
+    /// ear and would otherwise have to find again.
+    #[test]
+    fn an_offset_turned_off_is_kept_but_not_applied() {
+        let mut config = Config::default();
+        config.set_offset_ms("secondary", -150.0);
+        config.set_offset_on("secondary", true);
+        config.set_offset_on("secondary", false);
+
+        assert_eq!(config.applied_offset_ms("secondary"), 0.0);
+        assert_eq!(config.offset_ms("secondary"), -150.0);
+
+        config.set_offset_on("secondary", true);
+        assert_eq!(config.applied_offset_ms("secondary"), -150.0);
+    }
+
+    /// Each output's switch is its own, like its delay.
+    #[test]
+    fn turning_one_output_off_leaves_the_other_alone() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 100.0);
+        config.set_offset_ms("secondary", 200.0);
+        config.set_offset_on("primary", true);
+        config.set_offset_on("secondary", true);
+        config.set_offset_on("primary", false);
+
+        assert_eq!(config.applied_offset_ms("primary"), 0.0);
+        assert_eq!(config.applied_offset_ms("secondary"), 200.0);
+        assert!(!config.offset_on("primary"));
+        assert!(config.offset_on("secondary"));
     }
 
     /// Stored to the millisecond, which is finer than anyone can place by ear
