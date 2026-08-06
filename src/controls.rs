@@ -151,42 +151,24 @@ const ROW_SPACING: i32 = 12;
 /// apart against a picture.
 const SYNC_STEP: f64 = 10.0;
 
+/// The reading beside a bar in the panel.
+///
+/// One width for both rows, so the bars above and below each other start and
+/// end in the same place, and the same width the settings sliders use.
+fn reading_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("tp-hint");
+    label.set_xalign(1.0);
+    label.set_width_chars(crate::app::READING_CHARS);
+    label
+}
+
 /// Gives a control a name for anyone who cannot see the picture on it.
 ///
 /// Every button in the strip is an icon and nothing else, which a screen
 /// reader announces as "button" and no more. The name is set here rather than
 /// as a tooltip: a tooltip is for a pointer hovering, and this interface is
 /// built to be driven without one.
-/// How far an output is shifted, as it reads beside its bar.
-///
-/// Signed and short rather than the words the settings screen uses. Here the
-/// number is watched while it changes, with the picture behind it, so what
-/// matters is seeing it move; there it is read once, at rest, where "150 ms
-/// earlier" cannot be misread and "+150ms" can.
-fn sync_label(ms: f64) -> String {
-    let ms = ms.round();
-    if ms == 0.0 {
-        "0ms".to_string()
-    } else {
-        format!("{ms:+}ms")
-    }
-}
-
-/// The reading beside a bar in the panel.
-///
-/// One width for both rows, so the bars above and below each other start and
-/// end in the same place. Wide enough for the longest either shows, which is
-/// "-1000ms", because the width is a floor rather than a ceiling: anything
-/// longer widens the label and moves the bar out from under the pointer that
-/// is dragging it.
-fn reading_label(text: &str) -> gtk::Label {
-    let label = gtk::Label::new(Some(text));
-    label.add_css_class("tp-hint");
-    label.set_xalign(1.0);
-    label.set_width_chars(7);
-    label
-}
-
 fn name_it(widget: &impl IsA<gtk::Accessible>, name: &str) {
     widget.update_property(&[gtk::accessible::Property::Label(name)]);
 }
@@ -460,7 +442,7 @@ impl Controls {
             reset.set_can_focus(false);
             name_it(&reset, &format!("Reset audio sync, {name}"));
 
-            let sync_reading = reading_label(&sync_label(0.0));
+            let sync_reading = reading_label(&crate::app::offset_label(0.0));
 
             // The same spacing as the row above, not just the same widgets:
             // the two bars sit one under the other, and gaps of different
@@ -1146,7 +1128,7 @@ impl Controls {
         let Some(output) = self.outputs.get(index) else {
             return;
         };
-        output.sync_reading.set_text(&sync_label(ms));
+        output.sync_reading.set_text(&crate::app::offset_label(ms));
         if let Some(handler) = self.on_sync.borrow().as_ref() {
             handler(output.role, ms);
         }
@@ -1163,7 +1145,7 @@ impl Controls {
         for output in &self.outputs {
             if let Some(&(_, ms)) = offsets.iter().find(|(role, _)| *role == output.role) {
                 output.sync.set_value(ms);
-                output.sync_reading.set_text(&sync_label(ms));
+                output.sync_reading.set_text(&crate::app::offset_label(ms));
             }
         }
     }

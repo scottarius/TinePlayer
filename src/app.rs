@@ -81,23 +81,23 @@ impl Slider {
     }
 }
 
-/// How an output's timing reads beside its slider.
+/// How far an output is shifted, wherever that is shown.
 ///
-/// Words rather than a sign. "-150 ms" is easy to misread as "150 ms" from
-/// across a room, and which way it moves the sound is the whole point of the
-/// setting.
+/// One function for the settings screen and the panel during playback,
+/// because two of them drifted into two different styles for the same number
+/// and the same feature read as two.
 ///
-/// Zero reads "In sync" rather than "None", which answered the wrong
-/// question - "Audio Sync: None" says there is no synchronisation, when what
-/// is true is that this output is not being shifted.
-fn offset_label(ms: f64) -> String {
+/// Signed and short. It is watched while it moves against a picture, where
+/// what matters is seeing it change; words for the direction read better at
+/// rest but turn every step into something to be re-read.
+pub fn offset_label(ms: f64) -> String {
     let ms = ms.round();
     if ms == 0.0 {
-        "In sync".to_string()
-    } else if ms > 0.0 {
-        format!("{ms} ms later")
+        // Round can give -0, which formats with a sign that says the output
+        // is shifted when it is not.
+        "0ms".to_string()
     } else {
-        format!("{} ms earlier", -ms)
+        format!("{ms:+}ms")
     }
 }
 
@@ -106,13 +106,15 @@ fn offset_label(ms: f64) -> String {
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
 
-/// Space kept for the reading beside a settings slider, in characters.
+/// Space kept for the reading beside a bar, in characters. Shared by the
+/// settings sliders and the volume panel, so a row of one lines up with a row
+/// of the other.
 ///
-/// Sized to the longest any of them shows - "1000 ms earlier" - because the
-/// width is a floor and not a ceiling: a longer reading widens the label,
-/// which moves the bar, which moves under the pointer that is dragging it.
-/// Anything added here that reads longer than this has to raise it.
-const SLIDER_VALUE_CHARS: i32 = 15;
+/// Sized to the longest any of them shows - "-1000ms" - because the width is a
+/// floor and not a ceiling: a longer reading widens the label, which moves the
+/// bar, which moves under the pointer that is dragging it. Anything added that
+/// reads longer than this has to raise it.
+pub const READING_CHARS: i32 = 7;
 
 /// The rows the settings screen always has. The version row below the
 /// update switch is extra, and only there while the switch is on.
@@ -6139,7 +6141,6 @@ fn back_button() -> gtk::Button {
     button
 }
 
-/// Where a stored language code sits in the offered list.
 /// How a level reads in the settings menu. A silenced output says so rather
 /// than showing the level it will return to, which is what the panel during
 /// playback does too.
@@ -6307,7 +6308,7 @@ fn slider_row(
     let value = gtk::Label::new(Some(reading));
     value.add_css_class("tp-value");
     value.set_xalign(1.0);
-    value.set_width_chars(SLIDER_VALUE_CHARS);
+    value.set_width_chars(READING_CHARS);
     row.append(&value);
 
     (row, scale, value)
@@ -6528,6 +6529,7 @@ fn show_row(row: &gtk::ListBoxRow) {
     adjustment.set_value(wanted.clamp(adjustment.lower(), (adjustment.upper() - page).max(0.0)));
 }
 
+/// Where a stored language code sits in the offered list.
 fn language_position(code: Option<&str>) -> Option<usize> {
     let code = code?;
     crate::languages::LANGUAGES
@@ -7152,5 +7154,69 @@ mod notices {
             .collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
         assert_eq!(texts[0], "one line and its continuation");
+    }
+}
+
+#[cfg(test)]
+mod readings {
+    use super::{offset_label, volume_label};
+
+    /// The sign is the whole reading: it says which way the sound moves, and
+    /// it is the only thing separating the two directions now that the words
+    /// are gone.
+    #[test]
+    fn a_shifted_output_reads_with_its_direction() {
+        assert_eq!(offset_label(150.0), "+150ms");
+        assert_eq!(offset_label(-150.0), "-150ms");
+        assert_eq!(offset_label(crate::config::MAX_OFFSET_MS), "+1000ms");
+        assert_eq!(offset_label(-crate::config::MAX_OFFSET_MS), "-1000ms");
+    }
+
+    /// Unshifted is a plain zero and never a signed one. Rounding a small
+    /// negative gives -0, which formats as "-0ms" and claims a shift that is
+    /// not there.
+    #[test]
+    fn an_unshifted_output_reads_without_a_sign() {
+        assert_eq!(offset_label(0.0), "0ms");
+        assert_eq!(offset_label(-0.0), "0ms");
+        assert_eq!(offset_label(-0.4), "0ms");
+        assert_eq!(offset_label(0.4), "0ms");
+    }
+
+    /// Sliders move in tens but a stored value can be anything, including
+    /// something written into the config file by hand.
+    #[test]
+    fn a_reading_is_rounded_to_the_millisecond() {
+        assert_eq!(offset_label(149.6), "+150ms");
+        assert_eq!(offset_label(-149.6), "-150ms");
+    }
+
+    /// Every reading has to fit the space kept for it, or it widens the label
+    /// and moves the bar beside it.
+    #[test]
+    fn every_reading_fits_the_space_kept_for_it() {
+        let longest = [
+            offset_label(-crate::config::MAX_OFFSET_MS),
+            offset_label(crate::config::MAX_OFFSET_MS),
+            volume_label(1.0, false),
+            volume_label(0.0, true),
+        ];
+        for reading in longest {
+            assert!(
+                reading.chars().count() <= super::READING_CHARS as usize,
+                "{reading:?} is wider than the space kept for it"
+            );
+        }
+    }
+
+    /// A silenced output says so rather than showing the level it will come
+    /// back to, which would read as though it were playing.
+    #[test]
+    fn a_silenced_output_says_so_whatever_its_level() {
+        assert_eq!(volume_label(0.75, true), "Muted");
+        assert_eq!(volume_label(0.0, true), "Muted");
+        assert_eq!(volume_label(0.75, false), "75%");
+        assert_eq!(volume_label(0.0, false), "0%");
+        assert_eq!(volume_label(1.0, false), "100%");
     }
 }

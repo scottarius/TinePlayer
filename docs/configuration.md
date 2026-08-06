@@ -2,7 +2,8 @@
 
 All settings can be configured from the **Settings** menu inside TinePlayer,
 which offers only values that make sense and lists the audio devices this
-machine actually has.
+machine actually has. For driving the player itself, see
+[Using TinePlayer](usage.md).
 
 ![TinePlayer's settings screen, showing theme, interface size, and the
 primary audio device with its language and volume.](screenshots/settings-menu.png)
@@ -21,7 +22,7 @@ It lives in the per-user config directory:
 | Theme                                                    | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                                                                      |
 | Interface Size                                           | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution                                                    |
 | Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
-| Check for updates                                        | `check_for_updates`  | `true`      | Asks GitHub once a day whether a newer TinePlayer has been released, `true` or `false` <br/>Nothing is ever downloaded or installed             |
+| Check for updates                                        | `check_for_updates`  | `true`      | Asks GitHub once a day whether a newer TinePlayer has been released, `true` or `false` <br/>Nothing is ever downloaded or installed            |
 | [Primary Audio Device](#output-devices)                  | `primary_sink`       | Unset       | Primary output device name. Required                                                                                                           |
 | Primary Language Preference                              | `primary_language`   | Unset       | Preferred primary [language code](#languages) <br/>If unset defaults to the first track                                                        |
 | [Secondary Audio Device](#output-devices)                | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
@@ -33,7 +34,9 @@ It lives in the per-user config directory:
 | Watched Threshold                                        | `watched_percent`    | `90`        | Past this percentage a video counts as watched, and its position is forgotten rather than saved                                                |
 | [Prefer Audio Description](#audio-description)           | `primary_audio_description` <br/>`secondary_audio_description` | `false` | Whether that output prefers a described track                                                                                                  |
 | [Volume](#volumes)                                       | `primary_volume` <br/>`secondary_volume` | `1.0` | That output's level, from `0.0` to `1.0`                                                                                                       |
-|                                                          | `primary_muted` <br/>`secondary_muted` | `false` | Whether that output is silenced                                                                                                                |
+| Mute                                                     | `primary_muted` <br/>`secondary_muted` | `false` | Whether the output is muted                                                                                                                    |
+| [Audio Sync](#audio-sync)                                | `primary_offset_ms` <br/>`secondary_offset_ms` | `0` | Adjust the sync of the audio to line it up with the picture, in milliseconds from `-1000` to `1000`                                            |
+
 
 ## Remembered State
 
@@ -88,12 +91,35 @@ tineplayer --list-devices
 
 Each output carries its own level and can be adjusted or muted independently.
 The volume settings persist between sessions. Set them from the settings menu
-under either output, or from the volume button during playback.
+under either output, or from the volume button during
+[playback](usage.md#volume-and-sync).
 
 Holding or long-pressing the
 primary volume button will mute both immediately, and holding it again restores
 what each output was doing. Adjusting anything in the panel keeps the muted
 state instead, and your change applies from there.
+
+## Audio Sync
+
+Bluetooth headphones or other speaker setups may add noticeable delay, and not
+all systems compensate for it. Or perhaps the audio track is just not in sync
+with the video to begin with. This setting will allow you to nudge the audio
+sync forward or backwards to line it up by ear.
+
+`primary_offset_ms` and `secondary_offset_ms` adjust the sync by the
+given number of milliseconds, from `-1000` to `1000`:
+
+| Value      | Use when                                          |
+|------------|---------------------------------------------------|
+| Positive   | The sound arrives before the picture. It is held back |
+| Negative   | The sound arrives after the picture. It is moved earlier |
+| `0`        | The output needs no correction                    |
+
+Each output is corrected separately, so wireless headphones can be lined up
+without touching what's playing on speakers.
+
+It can be adjusted live during playback from the volume button. See
+[Volume and sync](usage.md#volume-and-sync).
 
 ## Audio Description
 
@@ -115,7 +141,8 @@ already have, and how to title the track so it is picked up, see
 
 `subtitle_language` decides what to show for a video you have not yet picked
 subtitles for yourself. A choice you make for a video is remembered and always
-wins.
+wins. For choosing subtitles while watching, and which files are offered
+alongside the embedded tracks, see [Subtitles](usage.md#subtitles).
 
 | Value                       | Chooses                                                         |
 |-----------------------------|-----------------------------------------------------------------|

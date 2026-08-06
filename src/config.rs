@@ -583,3 +583,59 @@ pub fn save_tracks(
         });
     });
 }
+
+#[cfg(test)]
+mod offsets {
+    use super::{Config, MAX_OFFSET_MS};
+
+    /// Either role, since they are stored in separate fields and a match arm
+    /// that writes the wrong one silently moves the other output.
+    #[test]
+    fn each_role_keeps_its_own_offset() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 120.0);
+        config.set_offset_ms("secondary", -80.0);
+        assert_eq!(config.offset_ms("primary"), 120.0);
+        assert_eq!(config.offset_ms("secondary"), -80.0);
+    }
+
+    /// An output nothing has shifted is not shifted, rather than carrying
+    /// whatever a missing field decoded to.
+    #[test]
+    fn an_unset_offset_is_no_offset() {
+        let config = Config::default();
+        assert_eq!(config.offset_ms("primary"), 0.0);
+        assert_eq!(config.offset_ms("secondary"), 0.0);
+    }
+
+    /// Both directions, and on the way in as well as the way out: the file is
+    /// editable by hand, so a value past the limit can arrive without ever
+    /// having been through a slider.
+    #[test]
+    fn an_offset_past_the_limit_is_brought_back_to_it() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 5_000.0);
+        assert_eq!(config.offset_ms("primary"), MAX_OFFSET_MS);
+        config.set_offset_ms("primary", -5_000.0);
+        assert_eq!(config.offset_ms("primary"), -MAX_OFFSET_MS);
+
+        let hand_edited = Config {
+            primary_offset_ms: Some(9_000.0),
+            secondary_offset_ms: Some(-9_000.0),
+            ..Default::default()
+        };
+        assert_eq!(hand_edited.offset_ms("primary"), MAX_OFFSET_MS);
+        assert_eq!(hand_edited.offset_ms("secondary"), -MAX_OFFSET_MS);
+    }
+
+    /// Stored to the millisecond, which is finer than anyone can place by ear
+    /// and keeps the file readable.
+    #[test]
+    fn an_offset_is_stored_rounded() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 12.6);
+        assert_eq!(config.offset_ms("primary"), 13.0);
+        config.set_offset_ms("secondary", -12.6);
+        assert_eq!(config.offset_ms("secondary"), -13.0);
+    }
+}
