@@ -5484,6 +5484,16 @@ impl App {
                     &outputs,
                 );
                 controls.set_levels(&levels);
+                // What the configuration holds for each output, so the panel
+                // opens showing the shift already in force rather than zero.
+                let syncs: Vec<(&str, f64)> = {
+                    let config = self.config.borrow();
+                    outputs
+                        .iter()
+                        .map(|(role, _)| (*role, config.offset_ms(role)))
+                        .collect()
+                };
+                controls.set_syncs(&syncs);
                 {
                     // Kept in the configuration, so a level set once holds for
                     // the next film: two outputs are rarely matched in
@@ -5503,6 +5513,18 @@ impl App {
                             config.set_volume(role, level);
                             config.set_muted(role, muted);
                         }
+                        app.save_volume_soon();
+                    });
+
+                    // Always kept, unlike a level silenced for a knock at the
+                    // door: how far an output runs behind describes the
+                    // equipment, not the moment.
+                    let app = self.clone();
+                    controls.connect_sync(move |role, ms| {
+                        if let Some(playback) = app.playback.borrow().as_ref() {
+                            playback.set_offset_ms(role, ms);
+                        }
+                        app.config.borrow_mut().set_offset_ms(role, ms);
                         app.save_volume_soon();
                     });
                 }
@@ -5972,6 +5994,37 @@ pub fn subtitles_image(scale: f64) -> gtk::Image {
     image
 }
 
+/// The mark on the button that puts an output back in sync.
+///
+/// Drawn rather than taken from the icon theme, for the same reason the
+/// fullscreen and subtitle marks are: nothing in the theme means "line these
+/// up". `emblem-synchronizing-symbolic` comes closest and is in Adwaita, but
+/// GStreamer's Windows bundle ships no icon theme at all - there is only the
+/// set GTK compiles into itself - and a missing icon draws nothing rather
+/// than failing, which is the worst way to find out.
+///
+/// One version rather than a light and a dark one, like the subtitle mark:
+/// the control strip draws its own dark background whatever the theme is.
+/// The size of the strip's icons, before scaling: the transport buttons, the
+/// gear, and the buttons in the volume panel.
+const ICON_PX: f64 = 24.0;
+
+pub fn sync_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/sync.png");
+
+    let image = gtk::Image::new();
+    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
+        image.set_paintable(Some(&texture));
+    }
+    // The size the panel's other icons come out at, set here because
+    // `-gtk-icon-size` sizes icon names and this is a paintable, so the CSS
+    // that catches the mute button passes over this one. A pixel or two out
+    // and the button beside it is a different width, which moves the start of
+    // the bar and leaves the two bars different lengths.
+    image.set_pixel_size((ICON_PX * scale).round() as i32);
+    image
+}
+
 /// The fullscreen mark, in the direction it will take you.
 ///
 /// Drawn for this application rather than taken from the icon theme: the
@@ -6090,7 +6143,7 @@ fn back_button() -> gtk::Button {
 /// How a level reads in the settings menu. A silenced output says so rather
 /// than showing the level it will return to, which is what the panel during
 /// playback does too.
-fn volume_label(level: f64, muted: bool) -> String {
+pub fn volume_label(level: f64, muted: bool) -> String {
     if muted {
         "Muted".to_string()
     } else {
@@ -7010,7 +7063,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         section = px(28.0),
         subrow = px(28.0),
         mark = px(4.0),
-        icon = px(24.0),
+        icon = px(ICON_PX),
         icon_main = px(38.4),
         crumb_pad = px(6.0),
         leading = px(38.0),
