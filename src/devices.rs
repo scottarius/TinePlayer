@@ -53,7 +53,45 @@ pub fn list_audio_output_devices() -> Result<Vec<gst::Device>, String> {
 
     started.map_err(|e| format!("Failed to start device monitor: {e}"))?;
 
-    Ok(devices.unwrap_or_default().into_iter().collect())
+    Ok(devices
+        .unwrap_or_default()
+        .into_iter()
+        .filter(plays_here)
+        .collect())
+}
+
+/// Whether a device's sink is one this pipeline can actually use.
+///
+/// `gstreamer1.0-pipewire` adds a second device provider, so every output is
+/// then reported twice - once building a `pulsesink`, once a `pipewiresink` -
+/// under identical display names. TinePlayer has only ever depended on
+/// `gstreamer1.0-pulseaudio | gstreamer1.0-alsa`, so the PipeWire provider
+/// arrives uninvited, pulled in by a desktop environment rather than chosen.
+///
+/// It cannot simply be tolerated. Devices are matched by display name, so with
+/// duplicates present the one taken is whichever the monitor happened to list
+/// first - and measured on Debian 12 that is PipeWire's, which plays silence:
+/// the pipeline builds without complaint, reports no error, and no audio ever
+/// reaches the device. The same element works perfectly in a standalone
+/// `gst-launch` pipeline, with stereo and 5.1, so what silences it here is not
+/// yet understood. It is not the forced clock and not `async`; both were ruled
+/// out by measurement on 2026-08-06.
+///
+/// Filtering on the element rather than deduplicating by name also means a
+/// device that appears *only* from PipeWire is never offered, which is right
+/// for the same reason: it would play nothing.
+///
+/// Excluding what does not work, rather than demanding `pulsesink`, is what
+/// keeps a machine with no sound server working - there the devices come from
+/// `alsasink`, and insisting on Pulse would leave the list empty.
+fn plays_here(device: &gst::Device) -> bool {
+    let factory = device
+        .create_element(None)
+        .ok()
+        .and_then(|element| element.factory().map(|f| f.name().to_string()));
+    // A device that cannot build an element at all is kept, so the failure is
+    // reported where it can name the device rather than vanishing from a list.
+    factory.is_none_or(|name| name != "pipewiresink")
 }
 
 /// What to send audio to when nobody has chosen yet.
