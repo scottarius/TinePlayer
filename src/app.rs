@@ -77,6 +77,35 @@ const PAGE_ROWS: i32 = 8;
 /// update switch is extra, and only there while the switch is on.
 const SETTINGS_ROWS: usize = 21;
 
+/// Every row of the settings screen, in the order it is built.
+///
+/// Named rather than written as numbers at each use. The screen is coupled to
+/// these in three separate places - the list that builds the rows, the sliders
+/// attached to particular ones, and the match that acts on an activation - and
+/// nothing catches a mismatch: the compiler is satisfied either way, the row
+/// count still adds up, and the symptom is a row that quietly opens the wrong
+/// screen. Inserting a row means changing one constant rather than renumbering
+/// every literal after it.
+const ROW_THEME: i32 = 0;
+const ROW_INTERFACE_SCALE: i32 = 1;
+const ROW_SOUNDS: i32 = 2;
+const ROW_PRIMARY_DEVICE: i32 = 3;
+const ROW_PRIMARY_LANGUAGE: i32 = 4;
+const ROW_PRIMARY_DESCRIPTION: i32 = 5;
+const ROW_PRIMARY_VOLUME: i32 = 6;
+const ROW_SECONDARY_DEVICE: i32 = 7;
+const ROW_SECONDARY_LANGUAGE: i32 = 8;
+const ROW_SECONDARY_DESCRIPTION: i32 = 9;
+const ROW_SECONDARY_VOLUME: i32 = 10;
+const ROW_SUBTITLE_LANGUAGE: i32 = 11;
+const ROW_SUBTITLE_SIZE: i32 = 12;
+const ROW_SUBTITLE_FONT: i32 = 13;
+const ROW_RESUME_THRESHOLD: i32 = 14;
+const ROW_WATCHED_THRESHOLD: i32 = 15;
+const ROW_CLEAR_DATA: i32 = 16;
+const ROW_KODI: i32 = 17;
+const ROW_ABOUT: i32 = 18;
+const ROW_NOTICES: i32 = 19;
 /// Where the update switch sits, and the row naming a new version under it.
 const UPDATE_SWITCH_ROW: i32 = 20;
 const UPDATE_STATUS_ROW: i32 = 21;
@@ -3585,10 +3614,18 @@ impl App {
 
         self.settings_sliders.borrow_mut().clear();
         for (index, kind, label) in [
-            (6, Slider::Volume("primary"), "Volume"),
-            (10, Slider::Volume("secondary"), "Volume"),
-            (14, Slider::ResumeThreshold, "Resume Threshold"),
-            (15, Slider::WatchedThreshold, "Watched Threshold"),
+            (ROW_PRIMARY_VOLUME, Slider::Volume("primary"), "Volume"),
+            (ROW_SECONDARY_VOLUME, Slider::Volume("secondary"), "Volume"),
+            (
+                ROW_RESUME_THRESHOLD,
+                Slider::ResumeThreshold,
+                "Resume Threshold",
+            ),
+            (
+                ROW_WATCHED_THRESHOLD,
+                Slider::WatchedThreshold,
+                "Watched Threshold",
+            ),
         ] {
             let (now, reading) = self.slider_state(kind);
             let (widget, scale, value) =
@@ -3648,24 +3685,24 @@ impl App {
                 // row it was opened from, as the main menu does.
                 *app.settings_row.borrow_mut() = row.index();
                 match row.index() {
-                    0 => app.open_setting(Setting::Theme),
-                    1 => app.open_setting(Setting::InterfaceScale),
-                    2 => app.toggle_sounds(),
-                    3 => app.open_setting(Setting::PrimaryDevice),
-                    4 => app.open_setting(Setting::PrimaryLanguage),
-                    5 => app.toggle_audio_description(true),
-                    6 => app.toggle_settings_mute(6),
-                    7 => app.open_setting(Setting::SecondaryDevice),
-                    8 => app.open_setting(Setting::SecondaryLanguage),
-                    9 => app.toggle_audio_description(false),
-                    10 => app.toggle_settings_mute(10),
-                    11 => app.open_setting(Setting::SubtitleLanguage),
-                    12 => app.open_setting(Setting::SubtitleSize),
-                    13 => app.open_setting(Setting::SubtitleFont),
-                    16 => app.confirm_clear_data(),
-                    17 => app.show_kodi(),
-                    18 => app.show_about(),
-                    19 => app.show_notices(),
+                    ROW_THEME => app.open_setting(Setting::Theme),
+                    ROW_INTERFACE_SCALE => app.open_setting(Setting::InterfaceScale),
+                    ROW_SOUNDS => app.toggle_sounds(),
+                    ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
+                    ROW_PRIMARY_LANGUAGE => app.open_setting(Setting::PrimaryLanguage),
+                    ROW_PRIMARY_DESCRIPTION => app.toggle_audio_description(true),
+                    ROW_PRIMARY_VOLUME => app.toggle_settings_mute(ROW_PRIMARY_VOLUME),
+                    ROW_SECONDARY_DEVICE => app.open_setting(Setting::SecondaryDevice),
+                    ROW_SECONDARY_LANGUAGE => app.open_setting(Setting::SecondaryLanguage),
+                    ROW_SECONDARY_DESCRIPTION => app.toggle_audio_description(false),
+                    ROW_SECONDARY_VOLUME => app.toggle_settings_mute(ROW_SECONDARY_VOLUME),
+                    ROW_SUBTITLE_LANGUAGE => app.open_setting(Setting::SubtitleLanguage),
+                    ROW_SUBTITLE_SIZE => app.open_setting(Setting::SubtitleSize),
+                    ROW_SUBTITLE_FONT => app.open_setting(Setting::SubtitleFont),
+                    ROW_CLEAR_DATA => app.confirm_clear_data(),
+                    ROW_KODI => app.show_kodi(),
+                    ROW_ABOUT => app.show_about(),
+                    ROW_NOTICES => app.show_notices(),
                     UPDATE_SWITCH_ROW => app.toggle_update_checks(),
                     UPDATE_STATUS_ROW => app.open_release_page(),
                     _ => {}
