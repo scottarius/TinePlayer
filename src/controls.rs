@@ -832,7 +832,10 @@ impl Controls {
                 self.highlight(Some(VOLUME));
                 // The row nearest the button, since the panel opens upward
                 // from it: going up the list, the first row reached is the one
-                // at the bottom of it.
+                // at the bottom of it, which is the last output's sync.
+                //
+                // Also where `at_last_output` measures from, so moving down
+                // from here leaves the panel rather than stepping within it.
                 self.output.set(self.last_output());
                 self.control.set(Control::Sync);
                 self.selected.set(false);
@@ -1324,7 +1327,11 @@ impl Controls {
             // Volume goes its own way rather than through the button's click
             // handler: that handler cannot tell a press from a pointer, and
             // this is the one control where the difference shows.
-            Row::Buttons if self.focused.get() == VOLUME => self.open_volume(true),
+            // Opened with the button still the thing highlighted, and
+            // nothing inside it marked. Marking a row straight away meant the
+            // press that opened the panel was followed by one that worked a
+            // control nobody had moved to yet.
+            Row::Buttons if self.focused.get() == VOLUME => self.open_volume(false),
             Row::Buttons => {
                 if let Some(button) = self.order.get(self.focused.get()) {
                     button.emit_clicked();
@@ -1334,6 +1341,10 @@ impl Controls {
             // and both are the same gesture: mute on a volume row, use the
             // delay or not on a sync row. Neither loses what it is turning
             // off - the level and the delay both stay where they were.
+            // Nothing inside the panel taken hold of yet: the button is
+            // still what is highlighted, so pressing it again shuts what it
+            // opened - the same as clicking it a second time.
+            Row::Volume if !self.selected.get() => self.set_row(Row::Buttons),
             Row::Volume => match self.control.get() {
                 Control::Volume => self.toggle_muted(self.output.get()),
                 Control::Sync => self.toggle_sync(self.output.get()),
@@ -1370,6 +1381,13 @@ impl Controls {
             // The row rather than the level inside it, so the output is named
             // as well as the number: "Headphones" is the part that says which
             // of the two you are about to change.
+            // The row once one is taken hold of, and until then the button
+            // that opened the panel - which is what is highlighted, and so
+            // what a press is about to work.
+            Row::Volume if !self.selected.get() => self
+                .order
+                .get(self.focused.get())
+                .map(|button| button.clone().upcast()),
             Row::Volume => self
                 .outputs
                 .get(self.output.get())
