@@ -2658,7 +2658,7 @@ impl App {
 
     // --- File selection ------------------------------------------------
 
-    fn open_file_chooser(self: &Rc<Self>) {
+    fn open_file_chooser(self: &Rc<Self>, start: &std::path::Path) {
         // FileChooserNative rather than FileDialog: the latter needs GTK
         // 4.10, above this project's 4.6 baseline. It also gives the real
         // system file dialog on each platform.
@@ -2683,6 +2683,7 @@ impl App {
             filter.add_pattern(&format!("*.{}", extension.to_uppercase()));
         }
         chooser.add_filter(&filter);
+        open_at(&chooser, start);
 
         let all = gtk::FileFilter::new();
         all.set_name(Some("All files"));
@@ -3287,21 +3288,107 @@ impl App {
     /// `select` names the folder just stepped out of, which is then the row
     /// focus lands on. Going up otherwise dumps you at the top of a long
     /// list with no sense of where you were.
+    /// The screen for choosing a video: folders, and the videos in them.
     fn show_browser(
         self: &Rc<Self>,
         directory: &std::path::Path,
         select: Option<&std::path::Path>,
     ) {
-        // Guards against a relative folder reaching here from anywhere at
-        // all, including a `last_folder` saved before this was fixed.
-        let directory = &crate::browser::rooted(directory);
-        let (crumbs, crumb_buttons) = self.breadcrumbs(directory, false);
+        let directory = crate::browser::rooted(directory);
+        let page = self.browser_page(&directory, Browse::Videos);
+        let entries = browser_entries(&directory, Browse::Videos);
+
+        // The way out alone in the middle. Choosing here is opening a video,
+        // which the rows themselves do.
+        let footer = gtk::CenterBox::new();
+        footer.set_start_widget(Some(&page.browse));
+        footer.set_center_widget(Some(&page.cancel));
+        page.page.append(&footer);
+
+        fill_browser_list(&page.list, &entries);
+
+        {
+            let app = self.clone();
+            let entries = entries.clone();
+            let here = directory.clone();
+            page.list.connect_row_activated(move |_, row| {
+                app.sounds.borrow().click();
+                let Some(entry) = entries.get(row.index() as usize) else {
+                    return;
+                };
+                match &entry.path {
+                    Some(path) if path.is_dir() => app.show_browser(path, None),
+                    Some(path) => {
+                        let source = Source::File(path.to_path_buf());
+                        match app.set_file(&source) {
+                            Ok(()) => app.show_menu(),
+                            Err(e) => app.show_source_error(&source, &e, false),
+                        }
+                    }
+                    // Up. Only offered when there is somewhere above to go:
+                    // at the top of the tree the column to the left is how
+                    // you reach anywhere else.
+                    None => {
+                        if let Some(parent) = here.parent() {
+                            app.show_browser(parent, Some(&here));
+                        }
+                    }
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            page.cancel.connect_clicked(move |_| app.go_back());
+        }
+
+        {
+            let mut config = self.config.borrow_mut();
+            config.last_folder = Some(directory.to_path_buf());
+            let _ = config.save();
+        }
+
+        // The trail alone now that the arrow has gone: left from the current
+        // folder simply walks back up it.
+        self.wire_navigation(&page.list, &page.crumbs, std::slice::from_ref(&page.cancel));
+        self.remember_origin();
+        *self.screen.borrow_mut() = Screen::Browser;
+        self.window.set_child(Some(&self.modal(&page.page)));
+
+        let opening = select
+            .and_then(|wanted| {
+                entries
+                    .iter()
+                    .position(|entry| entry.path.as_deref() == Some(wanted))
+            })
+            // Otherwise the first real entry, skipping the rows that only
+            // lead somewhere else: up, and the empty-folder notice.
+            .or_else(|| entries.iter().position(|entry| entry.path.is_some()))
+            // Nothing to open: the way up, rather than the line saying so.
+            .unwrap_or(0) as i32;
+        if let Some(row) = page.list.row_at_index(opening) {
+            page.list.select_row(Some(&row));
+            settle_on(&row);
+        }
+    }
+
+    /// The scaffolding every browsing screen is built on.
+    ///
+    /// One page for two jobs - choosing a video, and choosing a folder to set
+    /// Kodi up in - because they are the same screen with different rows in
+    /// it. Built separately they drifted: the same trail, places column and
+    /// system-browser button written twice, so a change to how browsing looks
+    /// had to be made in both and was once made in only one.
+    ///
+    /// What differs is left to the caller: what the footer holds, what a row
+    /// does when it is chosen, and where the cursor starts.
+    fn browser_page(self: &Rc<Self>, directory: &std::path::Path, mode: Browse) -> BrowserPage {
+        let (crumbs, crumb_buttons) = self.breadcrumbs(directory, mode.folders_only());
 
         let (page, list, _back, slot) = list_page_with(&crumbs, false);
         // The arrow's slot holds a fixed width for every screen to line up
         // against. With no arrow in it, that is just a gap before the trail.
         slot.set_visible(false);
-        self.add_places_column(&page, directory, false, &crumb_buttons);
+        self.add_places_column(&page, directory, mode.folders_only(), &crumb_buttons);
         self.follow_focus(&list);
 
         // Along the foot with the way out, rather than tucked into the header:
@@ -3325,120 +3412,26 @@ impl App {
         browse.set_valign(gtk::Align::Start);
         {
             let app = self.clone();
-            browse.connect_clicked(move |_| app.open_file_chooser());
+            // Wherever the listing behind it has reached. Handing over at the
+            // top of the tree, or wherever the system dialog last was, means
+            // walking back down a path already walked.
+            let here = directory.to_path_buf();
+            browse.connect_clicked(move |_| match mode {
+                Browse::Videos => app.open_file_chooser(&here),
+                Browse::Folders => app.choose_kodi_folder_natively(&here),
+            });
         }
+
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
         cancel.add_css_class("tp-cancel");
-        // A center box rather than a row: the way out belongs in the middle
-        // wherever the other button happens to end up, and a plain row would
-        // center the pair together instead.
-        let footer = gtk::CenterBox::new();
-        footer.set_start_widget(Some(&browse));
-        footer.set_center_widget(Some(&cancel));
-        page.append(&footer);
 
-        // Entries, the icon that leads them, and the path they open. `None`
-        // steps up a level.
-        let mut rows: Vec<(String, &str, Option<std::path::PathBuf>)> = Vec::new();
-        let parent = directory.parent().map(|p| p.to_path_buf());
-        if parent.is_some() {
-            // Two dots rather than the word: it is what a file listing has
-            // always called the folder above, and it needs no translating.
-            rows.push(("..".to_string(), "folder-symbolic", None));
-        }
-        for entry in crate::browser::read(directory) {
-            // A play mark rather than a generic video one: that icon is not
-            // in this theme and fell back to the missing-image glyph, which
-            // reads as a warning about the file itself.
-            let icon = if entry.is_dir {
-                "folder-symbolic"
-            } else {
-                "media-playback-start-symbolic"
-            };
-            rows.push((entry.label.clone(), icon, Some(entry.path)));
-        }
-        if rows.is_empty() {
-            rows.push((
-                "Nothing here".to_string(),
-                "dialog-information-symbolic",
-                None,
-            ));
-        }
-
-        for (label, icon, _) in &rows {
-            // Two dots read aloud as nothing at all, being punctuation. What
-            // it does is worth saying, and where it goes even more so.
-            let spoken = if label == ".." {
-                match parent.as_deref().and_then(|path| path.file_name()) {
-                    Some(name) => format!("Up to {}", name.to_string_lossy()),
-                    None => "Up to the list of drives".to_string(),
-                }
-            } else {
-                label.clone()
-            };
-            append_named(&list, &browser_row(icon, label), &spoken);
-        }
-
-        {
-            let app = self.clone();
-            let rows = rows.clone();
-            let here = directory.to_path_buf();
-            list.connect_row_activated(move |_, row| {
-                app.sounds.borrow().click();
-                let Some((_, _, target)) = rows.get(row.index() as usize) else {
-                    return;
-                };
-                match target {
-                    Some(path) if path.is_dir() => app.show_browser(path, None),
-                    Some(path) => {
-                        let source = Source::File(path.to_path_buf());
-                        match app.set_file(&source) {
-                            Ok(()) => app.show_menu(),
-                            Err(e) => app.show_source_error(&source, &e, false),
-                        }
-                    }
-                    // Up. Only offered when there is somewhere above to go:
-                    // at the top of the tree the column to the left is how
-                    // you reach anywhere else.
-                    None => {
-                        if let Some(parent) = here.parent() {
-                            app.show_browser(parent, Some(&here));
-                        }
-                    }
-                }
-            });
-        }
-        {
-            let app = self.clone();
-            cancel.connect_clicked(move |_| app.go_back());
-        }
-
-        {
-            let mut config = self.config.borrow_mut();
-            config.last_folder = Some(directory.to_path_buf());
-            let _ = config.save();
-        }
-
-        // The trail alone now that the arrow has gone: left from the current
-        // folder simply walks back up it.
-        self.wire_navigation(&list, &crumb_buttons, std::slice::from_ref(&cancel));
-        self.remember_origin();
-        *self.screen.borrow_mut() = Screen::Browser;
-        self.window.set_child(Some(&self.modal(&page)));
-
-        let opening = select
-            .and_then(|wanted| {
-                rows.iter()
-                    .position(|(_, _, path)| path.as_deref() == Some(wanted))
-            })
-            // Otherwise the first real entry, skipping the rows that only
-            // lead somewhere else: paste, up, and the empty-folder notice.
-            .or_else(|| rows.iter().position(|(_, _, path)| path.is_some()))
-            .unwrap_or(if rows.len() > 1 { 1 } else { 0 }) as i32;
-        if let Some(row) = list.row_at_index(opening) {
-            list.select_row(Some(&row));
-            settle_on(&row);
+        BrowserPage {
+            page,
+            list,
+            crumbs: crumb_buttons,
+            browse,
+            cancel,
         }
     }
 
@@ -5031,96 +5024,44 @@ impl App {
     /// an origin to return to, none of which belong here, and threading a
     /// purpose through all of it would put the video browser at risk for the
     /// sake of a screen that shares only its shape.
+    /// The screen for choosing the folder Kodi keeps its settings in.
     fn show_kodi_folder(self: &Rc<Self>, directory: &std::path::Path) {
         let directory = crate::browser::rooted(directory);
-        let (crumbs, crumb_buttons) = self.breadcrumbs(&directory, true);
-        let (page, list, _back, slot) = list_page_with(&crumbs, false);
-        // With no arrow in it, the slot is just a gap before the trail.
-        slot.set_visible(false);
-        self.add_places_column(&page, &directory, true, &crumb_buttons);
-        self.follow_focus(&list);
-
-        // Folders only. A userdata folder is a folder, and listing the files
-        // inside it would be a list of things that cannot be chosen.
-        let folders: Vec<crate::browser::Entry> = crate::browser::read(&directory)
-            .into_iter()
-            .filter(|entry| entry.is_dir)
-            .collect();
-
-        // The system chooser as well, as the video browser offers: a pointer
-        // and a keyboard can go faster through a dialog they already know.
-        // Not focusable, and a folder chooser rather than a file one.
-        let browse_face = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        let browse_icon = gtk::Image::from_icon_name("folder-symbolic");
-        browse_icon.set_pixel_size((24.0 * self.scale.get()).round() as i32);
-        browse_face.append(&browse_icon);
-        browse_face.append(&gtk::Label::new(Some("Open System Browser")));
-        let browse = gtk::Button::builder().child(&browse_face).build();
-        browse.add_css_class("tp-button");
-        browse.add_css_class("tp-secondary");
-        browse.set_can_focus(false);
-        browse.set_valign(gtk::Align::Start);
-        {
-            let app = self.clone();
-            browse.connect_clicked(move |_| app.choose_kodi_folder_natively());
-        }
+        let page = self.browser_page(&directory, Browse::Folders);
+        let entries = browser_entries(&directory, Browse::Folders);
 
         let choose = gtk::Button::with_label("Choose");
         choose.add_css_class("tp-button");
-        let cancel = gtk::Button::with_label("Cancel");
-        cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        buttons.append(&cancel);
+        buttons.append(&page.cancel);
         buttons.append(&choose);
         let footer = gtk::CenterBox::new();
-        footer.set_start_widget(Some(&browse));
+        footer.set_start_widget(Some(&page.browse));
         footer.set_center_widget(Some(&buttons));
-        page.append(&footer);
+        page.page.append(&footer);
 
-        // Only when there is somewhere above to go. At the root of a drive
-        // the way to another one is the column to the left, not a row that
-        // leads out of the listing entirely.
-        let up = directory.parent().is_some();
-        if up {
-            append_named(
-                &list,
-                &browser_row("folder-symbolic", ".."),
-                "Up one folder",
-            );
-        }
-        for entry in &folders {
-            append_named(
-                &list,
-                &browser_row("folder-symbolic", &entry.label),
-                &entry.label,
-            );
-        }
+        fill_browser_list(&page.list, &entries);
 
         {
             let app = self.clone();
-            let directory = directory.clone();
-            let paths: Vec<std::path::PathBuf> =
-                folders.iter().map(|entry| entry.path.clone()).collect();
-            list.connect_row_activated(move |_, row| {
+            let entries = entries.clone();
+            let here = directory.clone();
+            page.list.connect_row_activated(move |_, row| {
                 app.sounds.borrow().click();
-                let index = row.index() as usize;
-                if up && index == 0 {
-                    if let Some(parent) = directory.parent() {
-                        app.show_kodi_folder(parent);
-                    }
+                let Some(entry) = entries.get(row.index() as usize) else {
                     return;
-                }
-                let offset = if up { 1 } else { 0 };
-                if let Some(path) = paths.get(index - offset) {
-                    app.show_kodi_folder(path);
+                };
+                match &entry.path {
+                    Some(path) => app.show_kodi_folder(path),
+                    None => {
+                        if let Some(parent) = here.parent() {
+                            app.show_kodi_folder(parent);
+                        }
+                    }
                 }
             });
         }
@@ -5136,7 +5077,7 @@ impl App {
         }
         {
             let app = self.clone();
-            cancel.connect_clicked(move |_| {
+            page.cancel.connect_clicked(move |_| {
                 app.sounds.borrow().click();
                 app.show_kodi_choose();
             });
@@ -5144,17 +5085,21 @@ impl App {
 
         // Same order they are laid out in, or moving between them runs
         // backwards against what is on screen.
-        self.wire_navigation(&list, &crumb_buttons, &[cancel.clone(), choose.clone()]);
+        self.wire_navigation(
+            &page.list,
+            &page.crumbs,
+            &[page.cancel.clone(), choose.clone()],
+        );
         *self.screen.borrow_mut() = Screen::KodiFolder;
-        self.window.set_child(Some(&self.modal(&page)));
-        if let Some(row) = list.row_at_index(0) {
-            list.select_row(Some(&row));
+        self.window.set_child(Some(&self.modal(&page.page)));
+        if let Some(row) = page.list.row_at_index(0) {
+            page.list.select_row(Some(&row));
             settle_on(&row);
         }
     }
 
     /// The system's own folder chooser, for anyone who would rather use it.
-    fn choose_kodi_folder_natively(self: &Rc<Self>) {
+    fn choose_kodi_folder_natively(self: &Rc<Self>, start: &std::path::Path) {
         let chooser = gtk::FileChooserNative::new(
             Some("Choose Kodi's userdata folder"),
             Some(&self.window),
@@ -5162,6 +5107,7 @@ impl App {
             Some("Choose"),
             Some("Cancel"),
         );
+        open_at(&chooser, start);
         let app = self.clone();
         // Held by the closure so the dialog outlives this function; a dropped
         // FileChooserNative closes before the user can answer. Same handling
@@ -7060,6 +7006,140 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
 
     row.set_sensitive(enabled);
     row
+}
+
+/// What a browsing screen is for: opening a video, or choosing a folder.
+///
+/// The two screens differ in what they list, what the footer holds and what a
+/// row does. Everything else - the trail, the places column, the system
+/// browser - is the same, and used to be written twice.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Browse {
+    Videos,
+    Folders,
+}
+
+impl Browse {
+    /// Whether only folders are worth showing. A folder is being chosen here,
+    /// so the files inside it would be a list of things that cannot be picked.
+    fn folders_only(self) -> bool {
+        self == Browse::Folders
+    }
+}
+
+/// The parts of a browsing screen its caller still has to finish.
+struct BrowserPage {
+    page: gtk::Box,
+    list: gtk::ListBox,
+    crumbs: Vec<gtk::Button>,
+    browse: gtk::Button,
+    cancel: gtk::Button,
+}
+
+/// One row of a listing: what it says, what it is drawn with, where it goes,
+/// and how it reads aloud. A path of `None` is the way up.
+#[derive(Clone)]
+struct BrowserEntry {
+    label: String,
+    icon: &'static str,
+    path: Option<std::path::PathBuf>,
+    spoken: String,
+    /// Something to read rather than somewhere to go: the line saying a
+    /// folder holds nothing worth listing.
+    notice: bool,
+}
+
+/// Fills a listing, and leaves the notice as a line of text.
+///
+/// A notice drawn like an entry invites being chosen, and choosing it walked
+/// back up a level - which reads as a broken listing rather than as an empty
+/// folder. Centred, dimmer, without an icon, and passed over by the cursor.
+fn fill_browser_list(list: &gtk::ListBox, entries: &[BrowserEntry]) {
+    for entry in entries {
+        if entry.notice {
+            let label = gtk::Label::new(Some(&entry.label));
+            label.add_css_class("tp-row");
+            label.add_css_class("tp-hint");
+            label.set_xalign(0.5);
+            append_named(list, &label, &entry.spoken);
+            if let Some(row) = label.parent().and_downcast::<gtk::ListBoxRow>() {
+                row.set_selectable(false);
+                row.set_activatable(false);
+            }
+        } else {
+            append_named(list, &browser_row(entry.icon, &entry.label), &entry.spoken);
+        }
+    }
+}
+
+/// Opens a system dialog where the built-in browser already is.
+///
+/// Best effort: a folder that has since been unplugged or removed leaves the
+/// dialog wherever it would have opened anyway, which is better than refusing
+/// to open at all.
+fn open_at(chooser: &gtk::FileChooserNative, start: &std::path::Path) {
+    if start.is_dir() {
+        let _ = chooser.set_current_folder(Some(&gtk::gio::File::for_path(start)));
+    }
+}
+
+/// What a folder shows in a given mode: the way up, then what is inside.
+fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntry> {
+    let mut entries = Vec::new();
+    if let Some(parent) = directory.parent() {
+        // Two dots rather than the word: it is what a file listing has always
+        // called the folder above, and it needs no translating. Read aloud it
+        // is punctuation and says nothing, so the spoken name says where it
+        // goes instead.
+        entries.push(BrowserEntry {
+            label: "..".to_string(),
+            icon: "folder-symbolic",
+            path: None,
+            spoken: match parent.file_name() {
+                Some(name) => format!("Up to {}", name.to_string_lossy()),
+                None => "Up to the list of drives".to_string(),
+            },
+            notice: false,
+        });
+    }
+    for entry in crate::browser::read(directory) {
+        if mode.folders_only() && !entry.is_dir {
+            continue;
+        }
+        // A play mark rather than a generic video one: that icon is not in
+        // this theme and fell back to the missing-image glyph, which reads as
+        // a warning about the file itself.
+        let icon = if entry.is_dir {
+            "folder-symbolic"
+        } else {
+            "media-playback-start-symbolic"
+        };
+        entries.push(BrowserEntry {
+            label: entry.label.clone(),
+            icon,
+            path: Some(entry.path),
+            spoken: entry.label,
+            notice: false,
+        });
+    }
+    // Only where the listing is what you came for. A folder with nothing to
+    // play in it is worth saying, since the alternative reads as a folder
+    // that failed to load; a folder with no folders under it is not empty at
+    // all - it is full of files this screen has no reason to show, and
+    // calling it empty would be wrong.
+    //
+    // Counting the way up as nothing, since it fills the list on its own and
+    // is why this never appeared before.
+    if mode == Browse::Videos && entries.iter().all(|entry| entry.path.is_none()) {
+        entries.push(BrowserEntry {
+            label: "Nothing here".to_string(),
+            icon: "",
+            path: None,
+            spoken: "Nothing here".to_string(),
+            notice: true,
+        });
+    }
+    entries
 }
 
 /// A browser row: an icon from the desktop's own set, then the name.
