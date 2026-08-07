@@ -26,11 +26,9 @@ enum Setting {
     SecondaryTrack,
     Subtitles,
     Theme,
-    InterfaceScale,
     PrimaryLanguage,
     SecondaryLanguage,
     SubtitleLanguage,
-    SubtitleSize,
     SubtitleFont,
 }
 
@@ -45,6 +43,10 @@ enum Slider {
     Volume(&'static str),
     /// How far one output is held back, by role, in milliseconds.
     Offset(&'static str),
+    /// How big the interface is, in steps either side of its normal size.
+    Scale,
+    /// Subtitle size, in points against the video's own resolution.
+    SubtitleSize,
     ResumeThreshold,
     WatchedThreshold,
 }
@@ -60,6 +62,13 @@ impl Slider {
         match self {
             Slider::Volume(_) => 5.0,
             Slider::Offset(_) => 10.0,
+            // A tenth of a step, which is about a nine per cent change in
+            // size - small enough to settle on a size, large enough to cross
+            // the range in a few seconds of holding.
+            Slider::Scale => 0.1,
+            // A point at a time. The range is small enough that anything
+            // coarser would be six choices in a row of buttons.
+            Slider::SubtitleSize => 1.0,
             _ => 1.0,
         }
     }
@@ -77,8 +86,52 @@ impl Slider {
             // Anything under half is not watching it, and a hundred means
             // sitting through the credits to be counted.
             Slider::WatchedThreshold => 50.0..=100.0,
+            // Steps rather than the multiplier itself, so the middle is the
+            // normal size and the two halves are the same length. Three steps
+            // either way, which is a third at one end and three times at the
+            // other.
+            Slider::Scale => -3.0..=3.0,
+            // Against the video's own height rather than the screen's, so
+            // these hold whatever it is played back on. Below eight is
+            // unreadable at any size; past twenty-four covers the picture.
+            Slider::SubtitleSize => 8.0..=24.0,
         }
     }
+}
+
+/// A size chosen by hand, held to what the slider could have produced.
+///
+/// The file is editable, so it can hold anything at all; the interface has to
+/// stay usable enough to change it back from inside.
+fn chosen_scale(config: &crate::config::Config) -> Option<f64> {
+    config
+        .ui_scale
+        .map(|scale| scale.clamp(appearance::MIN_CHOSEN_SCALE, appearance::MAX_CHOSEN_SCALE))
+}
+
+/// A size in steps either side of normal, as the multiplier it means.
+///
+/// Geometric rather than added: a step down is the same change as a step up,
+/// so three steps down is exactly a third where three up is exactly three
+/// times. Adding a fixed amount instead would make the lower half of the
+/// slider cover almost nothing and the upper half everything.
+fn scale_from_steps(steps: f64) -> f64 {
+    let scale = 3f64.powf(steps / 3.0);
+    // To the hundredth, so the file holds a number somebody could have typed
+    // and the reading beside the bar is what was stored.
+    (scale * 100.0).round() / 100.0
+}
+
+/// The same, backwards, for putting the bar where a stored size says.
+fn steps_from_scale(scale: f64) -> f64 {
+    3.0 * scale.max(0.01).log(3.0)
+}
+
+/// How a size reads beside its bar: the multiplier, without trailing noughts.
+fn scale_label(scale: f64) -> String {
+    let text = format!("{scale:.2}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{text}x")
 }
 
 /// How far an output is shifted, wherever that is shown.
@@ -118,7 +171,7 @@ pub const READING_CHARS: i32 = 7;
 
 /// The rows the settings screen always has. The version row below the
 /// update switch is extra, and only there while the switch is on.
-const SETTINGS_ROWS: usize = 23;
+const SETTINGS_ROWS: usize = 24;
 
 /// Every row of the settings screen, in the order it is built.
 ///
@@ -153,6 +206,8 @@ const ROW_ABOUT: i32 = 20;
 const ROW_NOTICES: i32 = 21;
 /// Where the update switch sits, and the row naming a new version under it.
 const UPDATE_SWITCH_ROW: i32 = 22;
+/// The version this is, and what the check made of it. Always built, unlike
+/// the check itself, which can be turned off.
 const UPDATE_STATUS_ROW: i32 = 23;
 
 /// Every row, in the order they are built, which is what the constants above
@@ -184,6 +239,7 @@ const SETTINGS_ORDER: [i32; SETTINGS_ROWS] = [
     ROW_ABOUT,
     ROW_NOTICES,
     UPDATE_SWITCH_ROW,
+    UPDATE_STATUS_ROW,
 ];
 
 /// Rows that begin a group: each output, then subtitles, then what is
@@ -213,18 +269,10 @@ const SETTINGS_SUBROWS: [i32; 10] = [
     ROW_SUBTITLE_FONT,
 ];
 
-/// Sizes offered for subtitles. The middle of the range is the default; the
-/// ends are deliberately wide, since what reads well from a sofa and what
-/// reads well at a desk are genuinely different.
-const SUBTITLE_SIZES: [u32; 8] = [8, 10, 12, 14, 16, 18, 20, 24];
-
 /// Font families offered in the menu. Generic names Pango always resolves
 /// rather than an enumeration of everything installed, which would run to
 /// hundreds of rows. `subtitle_font` in the config takes any description.
 const SUBTITLE_FONTS: [&str; 5] = ["Sans Bold", "Sans", "Serif Bold", "Serif", "Monospace Bold"];
-
-/// Fixed interface scales offered alongside automatic detection.
-const UI_SCALES: [f64; 6] = [1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
 
 /// Menu rows that begin a new group: the primary pair and the secondary
 /// pair each get separating space above them.
@@ -380,6 +428,21 @@ pub struct App {
     /// The switches on the settings screen, by row, so a toggle can move the
     /// one it belongs to instead of rebuilding the screen under the viewer.
     settings_switches: RefCell<Vec<(i32, gtk::Switch)>>,
+    /// The settings list itself, so a row can be redrawn without rebuilding
+    /// the screen around it.
+    settings_list: RefCell<Option<gtk::ListBox>>,
+    /// Whether the settings row about to be activated was clicked rather than
+    /// chosen with a key or a gamepad. A switch row responds to a press on
+    /// the switch itself, not to a click anywhere along the row - but Enter
+    /// on the selected row must still work it, and both arrive here as the
+    /// same activation.
+    clicked_row: Cell<bool>,
+    /// Set while a switch is being moved to match what it already reports, so
+    /// its own handler knows not to act on it.
+    settling_switch: Cell<bool>,
+    /// The size a drag has reached, kept until the bar is let go. Nothing
+    /// while the size is not being dragged.
+    wanted_scale: Cell<Option<f64>>,
     nav_footer: RefCell<Vec<gtk::Button>>,
     /// Buttons above the list, currently the browser's path trail. Up from
     /// the first row reaches them, the way Down reaches the footer.
@@ -530,6 +593,10 @@ impl App {
             copy_root: RefCell::new(None),
             kodi_draft: RefCell::new(None),
             settings_switches: RefCell::new(Vec::new()),
+            settings_list: RefCell::new(None),
+            clicked_row: Cell::new(false),
+            settling_switch: Cell::new(false),
+            wanted_scale: Cell::new(None),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
@@ -578,19 +645,22 @@ impl App {
         // been realized, and on a mixed setup (a television beside a desk
         // monitor) that is the difference between a readable menu and a tiny
         // one. Skipped entirely when the size was set by hand.
-        if app.config.borrow().ui_scale.is_none() {
-            let weak = Rc::downgrade(&app);
-            window.connect_realize(move |window| {
-                let Some(app) = weak.upgrade() else { return };
-                let Some(monitor) = appearance::monitor_for_window(window) else {
-                    return;
-                };
-                let actual = appearance::scale_for(&monitor);
-                if actual != app.scale.get() {
-                    app.restyle(actual);
-                }
-            });
-        }
+        // Watched whatever the size is set to now: a size set by hand can be
+        // handed back to the screen while running, and nothing would be
+        // listening if these were attached only when it started out
+        // automatic. `follow_automatic_scale` decides whether to act.
+        let weak = Rc::downgrade(&app);
+        window.connect_realize(move |window| {
+            let Some(app) = weak.upgrade() else { return };
+            app.follow_automatic_scale(window);
+        });
+        // And again whenever the window fills the screen or stops doing so,
+        // since that is what the automatic size depends on.
+        let weak = Rc::downgrade(&app);
+        window.connect_fullscreened_notify(move |window| {
+            let Some(app) = weak.upgrade() else { return };
+            app.follow_automatic_scale(window);
+        });
 
         app.install_key_handling();
 
@@ -1558,16 +1628,28 @@ impl App {
         // pointer, or from the panel during playback, otherwise carries its
         // odd remainder through every press that follows.
         let step = kind.step();
-        let now = scale.value().round();
+        let now = scale.value();
+        // Nudged by a step from where it is, snapped onto the step grid. The
+        // nudge is what the epsilon protects: a value already sitting exactly
+        // on a step would otherwise floor to itself and go nowhere, which is
+        // what stopped the interface size after one press - its steps are a
+        // tenth, and rounding to a whole number made every press compute the
+        // same target.
+        let ratio = now / step;
         let moved = if direction > 0 {
-            (now / step).floor() * step + step
+            ((ratio + 1e-6).floor() + 1.0) * step
         } else {
-            (now / step).ceil() * step - step
+            ((ratio - 1e-6).ceil() - 1.0) * step
         };
         let range = kind.range();
         let moved = moved.clamp(*range.start(), *range.end());
         scale.set_value(moved);
         self.set_slider(kind, moved, &value);
+        // Safe here: nothing is holding the bar, so redrawing cannot be read
+        // as another movement.
+        if kind == Slider::Scale {
+            self.apply_scale(moved);
+        }
         true
     }
 
@@ -1657,6 +1739,26 @@ impl App {
                 let percent = config.watched_percent().round();
                 (percent, format!("{percent}%"))
             }
+            Slider::Scale => {
+                // The bar sits at whatever size is in force either way, so
+                // turning the switch off starts from what is on screen. The
+                // reading says Auto rather than the number, since while the
+                // switch is on that number is a consequence and not a
+                // setting.
+                let chosen = chosen_scale(&config);
+                let scale = chosen.unwrap_or_else(|| self.scale.get());
+                let reading = match chosen {
+                    Some(scale) => scale_label(scale),
+                    None => "Auto".to_string(),
+                };
+                (steps_from_scale(scale), reading)
+            }
+            Slider::SubtitleSize => {
+                let size = config
+                    .subtitle_size
+                    .unwrap_or(crate::pipeline::DEFAULT_SUBTITLE_SIZE);
+                (size as f64, size.to_string())
+            }
         }
     }
 
@@ -1676,8 +1778,15 @@ impl App {
                 Slider::Offset(role) => config.set_offset_ms(role, moved),
                 Slider::ResumeThreshold => config.resume_min_percent = Some(moved),
                 Slider::WatchedThreshold => config.watched_percent = Some(moved),
+                Slider::Scale => config.ui_scale = Some(scale_from_steps(moved)),
+                Slider::SubtitleSize => config.subtitle_size = Some(moved.round() as u32),
             }
         }
+        // Nothing redrawn here. Restyling moves the bar under whatever is
+        // moving it, which GTK reads as another movement, which restyles
+        // again - a loop that ran the size to its limit as soon as it was
+        // dragged. Who calls this decides when it is safe: a key press
+        // applies at once, a drag waits to be let go.
         // Heard straight away when a film is playing, so a delay can be placed
         // against the picture rather than guessed at and checked later.
         if let Slider::Offset(role) = kind
@@ -1688,6 +1797,8 @@ impl App {
         value.set_text(&match kind {
             Slider::Volume(_) => volume_label(moved / 100.0, false),
             Slider::Offset(_) => offset_label(moved),
+            Slider::Scale => scale_label(scale_from_steps(moved)),
+            Slider::SubtitleSize => format!("{}", moved.round()),
             _ => format!("{}%", moved.round()),
         });
         self.save_volume_soon();
@@ -2098,11 +2209,9 @@ impl App {
             Setting::SecondaryTrack => "Secondary Audio Track",
             Setting::Subtitles => "Subtitles",
             Setting::Theme => "Theme",
-            Setting::InterfaceScale => "Interface Size",
             Setting::PrimaryLanguage => "Primary Language Preference",
             Setting::SecondaryLanguage => "Secondary Language Preference",
             Setting::SubtitleLanguage => "Subtitle Preference",
-            Setting::SubtitleSize => "Subtitle Size",
             Setting::SubtitleFont => "Subtitle Font",
         };
         let (page, list, back, _header) = list_page(title, true);
@@ -2178,17 +2287,6 @@ impl App {
                     entries.push((name.to_string(), Some(position)));
                 }
             }
-            Setting::InterfaceScale => {
-                current = self
-                    .config
-                    .borrow()
-                    .ui_scale
-                    .and_then(|scale| UI_SCALES.iter().position(|offered| *offered == scale));
-                entries.push(("Automatic".to_string(), None));
-                for (position, scale) in UI_SCALES.iter().enumerate() {
-                    entries.push((format!("{scale}x"), Some(position)));
-                }
-            }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let configured = {
                     let config = self.config.borrow();
@@ -2248,22 +2346,6 @@ impl App {
                         crate::languages::menu_name(code, name, native),
                         Some(modes + position),
                     ));
-                }
-            }
-            Setting::SubtitleSize => {
-                let chosen = self
-                    .config
-                    .borrow()
-                    .subtitle_size
-                    .unwrap_or(crate::pipeline::DEFAULT_SUBTITLE_SIZE);
-                current = SUBTITLE_SIZES.iter().position(|size| *size == chosen);
-                for (position, size) in SUBTITLE_SIZES.iter().enumerate() {
-                    let note = if *size == crate::pipeline::DEFAULT_SUBTITLE_SIZE {
-                        "  (default)"
-                    } else {
-                        ""
-                    };
-                    entries.push((format!("{size}{note}"), Some(position)));
                 }
             }
             Setting::SubtitleFont => {
@@ -2499,23 +2581,6 @@ impl App {
                     return true;
                 }
             }
-            Setting::InterfaceScale => {
-                let picked = choice.and_then(|index| UI_SCALES.get(index).copied());
-                {
-                    let mut config = self.config.borrow_mut();
-                    config.ui_scale = picked;
-                    let _ = config.save();
-                }
-                // Automatic means measuring the display again rather than
-                // keeping whatever was last in force.
-                let scale = picked.unwrap_or_else(|| {
-                    appearance::monitor_for_window(&self.window)
-                        .as_ref()
-                        .map(appearance::scale_for)
-                        .unwrap_or(1.0)
-                });
-                self.restyle(scale);
-            }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let picked = choice
                     .and_then(|index| crate::languages::LANGUAGES.get(index))
@@ -2536,11 +2601,6 @@ impl App {
                 });
                 let mut config = self.config.borrow_mut();
                 config.subtitle_language = picked;
-                let _ = config.save();
-            }
-            Setting::SubtitleSize => {
-                let mut config = self.config.borrow_mut();
-                config.subtitle_size = choice.and_then(|index| SUBTITLE_SIZES.get(index).copied());
                 let _ = config.save();
             }
             Setting::SubtitleFont => {
@@ -3692,11 +3752,7 @@ impl App {
                     // configuring starts.
                     true,
                 ),
-                (
-                    format!("About TinePlayer v{}", env!("CARGO_PKG_VERSION")),
-                    String::new(),
-                    true,
-                ),
+                ("About TinePlayer".to_string(), String::new(), true),
                 ("Third Party Notices".to_string(), String::new(), true),
                 (
                     "Check for updates".to_string(),
@@ -3708,25 +3764,11 @@ impl App {
                     .to_string(),
                     true,
                 ),
+                (self.version_label(), self.version_status(), true),
             ]
             .to_vec()
         };
         debug_assert_eq!(rows.len(), SETTINGS_ORDER.len());
-
-        // Only while the check is on: a row saying nothing is new, under a
-        // switch that is off, would be reporting on something not happening.
-        let mut rows = rows;
-        if self.config.borrow().check_for_updates {
-            let state = self.updates.borrow();
-            rows.push(match crate::updates::newer(&state) {
-                Some((version, _)) => (
-                    format!("New version: v{}", version.trim_start_matches(['v', 'V'])),
-                    String::new(),
-                    true,
-                ),
-                None => (crate::updates::NOTHING_NEW.to_string(), String::new(), true),
-            });
-        }
 
         for (label, value, enabled) in &rows {
             append_named(
@@ -3779,6 +3821,8 @@ impl App {
 
         self.settings_sliders.borrow_mut().clear();
         for (index, kind, label) in [
+            (ROW_INTERFACE_SCALE, Slider::Scale, "Interface Size"),
+            (ROW_SUBTITLE_SIZE, Slider::SubtitleSize, "Subtitle Size"),
             (ROW_PRIMARY_VOLUME, Slider::Volume("primary"), "Volume"),
             (ROW_PRIMARY_SYNC, Slider::Offset("primary"), "Audio Sync"),
             (ROW_SECONDARY_VOLUME, Slider::Volume("secondary"), "Volume"),
@@ -3805,6 +3849,10 @@ impl App {
             let toggle = match kind {
                 Slider::Volume(role) => Some(!self.config.borrow().muted(role)),
                 Slider::Offset(role) => Some(self.config.borrow().offset_on(role)),
+                // On means the size is worked out from the screen, which is
+                // the one switch here that turns the bar beside it off rather
+                // than on.
+                Slider::Scale => Some(self.config.borrow().ui_scale.is_none()),
                 _ => None,
             };
             let (widget, scale, value, switch) =
@@ -3815,17 +3863,85 @@ impl App {
             if let Some(switch) = switch {
                 self.settings_switches.borrow_mut().push((index, switch));
             }
+            if kind == Slider::Scale {
+                let by_hand = self.config.borrow().ui_scale.is_some();
+                scale.set_sensitive(by_hand);
+                value.set_sensitive(by_hand);
+            }
             {
                 let app = self.clone();
                 let value = value.clone();
-                scale.connect_change_value(move |_, _, moved| {
+                scale.connect_change_value(move |_, scroll, moved| {
                     app.set_slider(kind, moved, &value);
+                    if kind == Slider::Scale {
+                        // A drag reports Jump, over and over, while the
+                        // pointer holds the bar. Anything else - a step, a
+                        // page, a scroll wheel - is finished by the time it
+                        // arrives and can be drawn straight away.
+                        if scroll == gtk::ScrollType::Jump {
+                            app.wanted_scale.set(Some(moved));
+                        } else {
+                            app.apply_scale(moved);
+                        }
+                    }
                     glib::Propagation::Proceed
                 });
+            }
+            // Let go of, and only then redrawn. Watched rather than handled,
+            // so the bar keeps its own grip on the pointer while it is being
+            // dragged.
+            if kind == Slider::Scale {
+                let app = self.clone();
+                let watcher = gtk::EventControllerLegacy::new();
+                watcher.set_propagation_phase(gtk::PropagationPhase::Bubble);
+                watcher.connect_event(move |_, event| {
+                    let done = matches!(
+                        event.event_type(),
+                        gdk::EventType::ButtonRelease | gdk::EventType::TouchEnd
+                    );
+                    if done && let Some(steps) = app.wanted_scale.take() {
+                        app.apply_scale(steps);
+                    }
+                    glib::Propagation::Proceed
+                });
+                scale.add_controller(watcher);
             }
             self.settings_sliders
                 .borrow_mut()
                 .push((index, kind, scale, value));
+        }
+
+        // Each switch reports its own presses, now that it takes them rather
+        // than letting them fall through to the row. Guarded against the
+        // moves made from here when the same setting is worked another way.
+        for (index, switch) in self.settings_switches.borrow().iter() {
+            let app = self.clone();
+            let index = *index;
+            switch.connect_state_set(move |_, _| {
+                if !app.settling_switch.get() {
+                    app.sounds.borrow().click();
+                    app.apply_switch_row(index);
+                }
+                glib::Propagation::Proceed
+            });
+        }
+
+        // Watched in the capture phase, so a press is known about before
+        // anything else handles it. Cleared on the way out rather than on
+        // release, because the row is activated in between - and a press that
+        // never activates a row must not leave the next key press looking
+        // like a click.
+        {
+            let app = self.clone();
+            let click = gtk::GestureClick::new();
+            click.set_propagation_phase(gtk::PropagationPhase::Capture);
+            click.connect_pressed(move |_, _, _, _| app.clicked_row.set(true));
+            let app = self.clone();
+            click.connect_released(move |_, _, _, _| {
+                let app = app.clone();
+                glib::idle_add_local_once(move || app.clicked_row.set(false));
+            });
+            list.add_controller(click);
         }
 
         for index in SETTINGS_SECTIONS {
@@ -3839,15 +3955,15 @@ impl App {
             }
         }
 
-        // The row naming a new version carries its own mark, for as long as
-        // the version is there. Reaching it is what takes the mark off the
-        // settings button: arriving on the row is the moment somebody has
-        // been told, and pressing it should not be required to stop being
-        // nagged about something already seen.
-        if crate::updates::newer(&self.updates.borrow()).is_some()
-            && let Some(row) = list.row_at_index(UPDATE_STATUS_ROW)
-        {
-            row.add_css_class("tp-badge-row");
+        *self.settings_list.borrow_mut() = Some(list.clone());
+
+        // Reaching the row is what takes the mark off the settings button:
+        // arriving on it is the moment somebody has been told, and pressing
+        // it should not be required to stop being nagged about something
+        // already seen. Attached whether or not there is anything new, since
+        // a check finishing while this screen is open can make there be -
+        // acknowledging nothing is harmless.
+        if let Some(row) = list.row_at_index(UPDATE_STATUS_ROW) {
             let app = self.clone();
             let controller = gtk::EventControllerFocus::new();
             controller.connect_enter(move |_| {
@@ -3858,36 +3974,48 @@ impl App {
             });
             row.add_controller(controller);
         }
+        self.refresh_version_row();
 
         {
             let app = self.clone();
             list.connect_row_activated(move |_, row| {
-                app.sounds.borrow().click();
+                // A switch is worked by pressing the switch, not by clicking
+                // the row it sits on: the row is a wide target, and hitting it
+                // on the way past should not change a setting. Enter on the
+                // selected row still does, which arrives here with nothing
+                // having been clicked.
+                if app.clicked_row.replace(false) && row_has_switch(row.index()) {
+                    return;
+                }
+                // A switch row is answered by the switch, which plays its own
+                // click when it moves. Playing one here too would double it.
+                if !row_has_switch(row.index()) {
+                    app.sounds.borrow().click();
+                }
                 // Remembered so returning from a chooser lands back on the
                 // row it was opened from, as the main menu does.
                 *app.settings_row.borrow_mut() = row.index();
                 match row.index() {
                     ROW_THEME => app.open_setting(Setting::Theme),
-                    ROW_INTERFACE_SCALE => app.open_setting(Setting::InterfaceScale),
-                    ROW_SOUNDS => app.toggle_sounds(),
+                    ROW_INTERFACE_SCALE => app.work_switch_row(ROW_INTERFACE_SCALE),
+                    ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
                     ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
                     ROW_PRIMARY_LANGUAGE => app.open_setting(Setting::PrimaryLanguage),
-                    ROW_PRIMARY_DESCRIPTION => app.toggle_audio_description(true),
-                    ROW_PRIMARY_VOLUME => app.toggle_settings_mute(ROW_PRIMARY_VOLUME),
-                    ROW_PRIMARY_SYNC => app.toggle_settings_offset(ROW_PRIMARY_SYNC),
+                    ROW_PRIMARY_DESCRIPTION => app.work_switch_row(ROW_PRIMARY_DESCRIPTION),
+                    ROW_PRIMARY_VOLUME => app.work_switch_row(ROW_PRIMARY_VOLUME),
+                    ROW_PRIMARY_SYNC => app.work_switch_row(ROW_PRIMARY_SYNC),
                     ROW_SECONDARY_DEVICE => app.open_setting(Setting::SecondaryDevice),
                     ROW_SECONDARY_LANGUAGE => app.open_setting(Setting::SecondaryLanguage),
-                    ROW_SECONDARY_DESCRIPTION => app.toggle_audio_description(false),
-                    ROW_SECONDARY_VOLUME => app.toggle_settings_mute(ROW_SECONDARY_VOLUME),
-                    ROW_SECONDARY_SYNC => app.toggle_settings_offset(ROW_SECONDARY_SYNC),
+                    ROW_SECONDARY_DESCRIPTION => app.work_switch_row(ROW_SECONDARY_DESCRIPTION),
+                    ROW_SECONDARY_VOLUME => app.work_switch_row(ROW_SECONDARY_VOLUME),
+                    ROW_SECONDARY_SYNC => app.work_switch_row(ROW_SECONDARY_SYNC),
                     ROW_SUBTITLE_LANGUAGE => app.open_setting(Setting::SubtitleLanguage),
-                    ROW_SUBTITLE_SIZE => app.open_setting(Setting::SubtitleSize),
                     ROW_SUBTITLE_FONT => app.open_setting(Setting::SubtitleFont),
                     ROW_CLEAR_DATA => app.confirm_clear_data(),
                     ROW_KODI => app.show_kodi(),
                     ROW_ABOUT => app.show_about(),
                     ROW_NOTICES => app.show_notices(),
-                    UPDATE_SWITCH_ROW => app.toggle_update_checks(),
+                    UPDATE_SWITCH_ROW => app.work_switch_row(UPDATE_SWITCH_ROW),
                     UPDATE_STATUS_ROW => app.open_release_page(),
                     _ => {}
                 }
@@ -3949,6 +4077,7 @@ impl App {
 
     /// Moves the switch on a settings row to match what it now reports.
     fn set_settings_switch(&self, index: i32, on: bool) {
+        self.settling_switch.set(true);
         if let Some((_, switch)) = self
             .settings_switches
             .borrow()
@@ -3956,6 +4085,43 @@ impl App {
             .find(|(row, _)| *row == index)
         {
             switch.set_active(on);
+        }
+        self.settling_switch.set(false);
+    }
+
+    /// Works the switch on a row the way a click on it would.
+    ///
+    /// Through the switch rather than straight to the setting, because GTK
+    /// only runs the sliding animation from the switch's own gesture and
+    /// activation. Setting its state moves it there in one frame, which is
+    /// what made a key press look different from a click.
+    fn work_switch_row(self: &Rc<Self>, index: i32) {
+        let switch = self
+            .settings_switches
+            .borrow()
+            .iter()
+            .find(|(row, _)| *row == index)
+            .map(|(_, switch)| switch.clone());
+        match switch {
+            // Its own handler carries on from here, as it does for a click.
+            Some(switch) => {
+                switch.activate();
+            }
+            None => self.apply_switch_row(index),
+        }
+    }
+
+    /// What a switch row actually changes, once something has asked for it.
+    fn apply_switch_row(self: &Rc<Self>, index: i32) {
+        match index {
+            ROW_INTERFACE_SCALE => self.toggle_automatic_scale(),
+            ROW_SOUNDS => self.toggle_sounds(),
+            ROW_PRIMARY_DESCRIPTION => self.toggle_audio_description(true),
+            ROW_SECONDARY_DESCRIPTION => self.toggle_audio_description(false),
+            ROW_PRIMARY_VOLUME | ROW_SECONDARY_VOLUME => self.toggle_settings_mute(index),
+            ROW_PRIMARY_SYNC | ROW_SECONDARY_SYNC => self.toggle_settings_offset(index),
+            UPDATE_SWITCH_ROW => self.toggle_update_checks(),
+            _ => {}
         }
     }
 
@@ -3975,7 +4141,60 @@ impl App {
         if on {
             self.check_for_updates(true);
         }
-        self.show_settings();
+        self.set_settings_switch(UPDATE_SWITCH_ROW, on);
+        self.refresh_version_row();
+    }
+
+    /// The version this is, on the left of its row.
+    fn version_label(&self) -> String {
+        format!("Current Version: v{}", env!("CARGO_PKG_VERSION"))
+    }
+
+    /// What the check made of it, on the right, or nothing while checking is
+    /// off. "Up to date" rather than "Latest", which beside an arrow read as
+    /// an instruction to go and get the latest rather than as a statement
+    /// that this is it.
+    fn version_status(&self) -> String {
+        if !self.config.borrow().check_for_updates {
+            return String::new();
+        }
+        match crate::updates::newer(&self.updates.borrow()) {
+            Some((version, _)) => {
+                format!(
+                    "Update available: v{}",
+                    version.trim_start_matches(['v', 'V'])
+                )
+            }
+            None => "Up to date".to_string(),
+        }
+    }
+
+    /// Redraws the row naming the version, in place.
+    ///
+    /// In place rather than by rebuilding the screen: turning the check on or
+    /// off changes two words, and rebuilding for it threw the whole page away
+    /// and drew it again - which flickers and moves every row under whatever
+    /// was pointing at one.
+    fn refresh_version_row(&self) {
+        let list = self.settings_list.borrow().clone();
+        let Some(row) = list.and_then(|list| list.row_at_index(UPDATE_STATUS_ROW)) else {
+            return;
+        };
+        let (label, value) = (self.version_label(), self.version_status());
+        let widget = menu_row(&label, &value, true);
+        // The arrow means "this opens something", so it belongs only when
+        // there is a release to go and look at.
+        let newer = crate::updates::newer(&self.updates.borrow()).is_some();
+        if let Some(chevron) = widget.last_child() {
+            chevron.set_visible(newer);
+        }
+        row.set_child(Some(&widget));
+        name_it(&row, &row_name(&label, &value));
+        if newer {
+            row.add_css_class("tp-badge-row");
+        } else {
+            row.remove_css_class("tp-badge-row");
+        }
     }
 
     /// Opens the release page in whatever the machine uses for links.
@@ -4022,9 +4241,11 @@ impl App {
             *app.updates.borrow_mut() = state;
             app.draw_update_badge();
             // Only if Settings is open behind it, so the answer appears
-            // rather than waiting to be opened again.
+            // rather than waiting to be opened again. The one row, not the
+            // screen: rebuilding it under somebody reading it is a flicker
+            // and a jump for the sake of two words.
             if *app.screen.borrow() == Screen::Settings {
-                app.show_settings();
+                app.refresh_version_row();
             }
             glib::ControlFlow::Break
         });
@@ -4056,6 +4277,76 @@ impl App {
         };
         *self.sounds.borrow_mut() = Sounds::new(enabled, device);
         self.set_settings_switch(ROW_SOUNDS, enabled);
+    }
+
+    /// Hands the size back to the screen, or takes it over by hand.
+    ///
+    /// Taking it over keeps whatever is on screen now, so the switch changes
+    /// who decides the size rather than the size itself.
+    fn toggle_automatic_scale(self: &Rc<Self>) {
+        let now_automatic = self.config.borrow().ui_scale.is_some();
+        {
+            let mut config = self.config.borrow_mut();
+            // Taking it over keeps what is on screen, so the switch changes
+            // who decides the size rather than the size itself.
+            config.ui_scale = if now_automatic {
+                None
+            } else {
+                Some(self.scale.get())
+            };
+            let _ = config.save();
+        }
+        if now_automatic {
+            self.follow_automatic_scale(&self.window.clone());
+        }
+        let found = self
+            .settings_sliders
+            .borrow()
+            .iter()
+            .find(|(row, ..)| *row == ROW_INTERFACE_SCALE)
+            .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
+        if let Some((kind, scale, value)) = found {
+            let (now, reading) = self.slider_state(kind);
+            scale.set_value(now);
+            value.set_text(&reading);
+            scale.set_sensitive(!now_automatic);
+            value.set_sensitive(!now_automatic);
+        }
+        self.set_settings_switch(ROW_INTERFACE_SCALE, now_automatic);
+    }
+
+    /// Redraws the interface at the size the bar is now at.
+    fn apply_scale(&self, steps: f64) {
+        let scale = scale_from_steps(steps);
+        if scale != self.scale.get() {
+            self.restyle(scale);
+        }
+        let _ = self.config.borrow().save();
+    }
+
+    /// Re-renders at whatever the automatic size should be now.
+    ///
+    /// The screen's own scale while the window fills it, and 1x while it does
+    /// not. The automatic size exists for a television read from a sofa, and
+    /// a window on the same 4K monitor is read from arm's length - scaling
+    /// that up only leaves less room in a window somebody chose the size of.
+    ///
+    /// A size set by hand is that size in both, which is what asking for one
+    /// means.
+    fn follow_automatic_scale(&self, window: &gtk::ApplicationWindow) {
+        if self.config.borrow().ui_scale.is_some() {
+            return;
+        }
+        let wanted = if window.is_fullscreen() {
+            appearance::monitor_for_window(window)
+                .map(|monitor| appearance::scale_for(&monitor))
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        if wanted != self.scale.get() {
+            self.restyle(wanted);
+        }
     }
 
     /// Re-renders every size in the interface at a new scale.
@@ -6220,6 +6511,23 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
 }
 
 /// How a settings row reads aloud: the setting, then what it is set to.
+/// Whether a settings row carries a switch, and so is worked by the switch
+/// rather than by a click anywhere along it.
+fn row_has_switch(index: i32) -> bool {
+    matches!(
+        index,
+        ROW_INTERFACE_SCALE
+            | ROW_SOUNDS
+            | ROW_PRIMARY_DESCRIPTION
+            | ROW_SECONDARY_DESCRIPTION
+            | ROW_PRIMARY_VOLUME
+            | ROW_SECONDARY_VOLUME
+            | ROW_PRIMARY_SYNC
+            | ROW_SECONDARY_SYNC
+            | UPDATE_SWITCH_ROW
+    )
+}
+
 fn row_name(label: &str, value: &str) -> String {
     if value.is_empty() {
         label.to_string()
@@ -6351,7 +6659,6 @@ fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
     // that about nothing in particular.
     name_it(&switch, label);
     switch.set_can_focus(false);
-    switch.set_can_target(false);
     switch.set_valign(gtk::Align::Center);
     row.append(&switch);
 
@@ -6404,6 +6711,10 @@ fn slider_row(
     scale.set_can_focus(false);
     scale.set_value(now);
     scale.add_css_class("tp-progress");
+    // Settings bars only. The same class draws the video timeline and the
+    // bars in the volume panel, which sit over a picture rather than on a
+    // page of rows and are not the ones that disappear into the background.
+    scale.add_css_class("tp-bar");
     name_it(&scale, label);
     row.append(&scale);
 
@@ -6423,12 +6734,46 @@ fn slider_row(
     value.set_width_chars(READING_CHARS);
     row.append(&value);
 
+    // The wheel scrolls the list it is in, rather than moving the bar under
+    // the pointer. A settings screen is a list first: passing over a slider
+    // on the way down it should not change a setting, and the value that
+    // changes is the one nobody was looking at.
+    //
+    // Taken in the capture phase so the bar never sees it, and passed on to
+    // the scroller by hand, since stopping the event stops it reaching the
+    // list as well.
+    let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+    wheel.connect_scroll(|controller, _, down| {
+        let Some(scroller) = controller
+            .widget()
+            .and_then(|widget| widget.ancestor(gtk::ScrolledWindow::static_type()))
+            .and_downcast::<gtk::ScrolledWindow>()
+        else {
+            return glib::Propagation::Stop;
+        };
+        let adjustment = scroller.vadjustment();
+        // A row at a time, near enough: the step increment on a list is the
+        // height of what it holds, and a tenth of a page where it is not set.
+        let step = if adjustment.step_increment() > 0.0 {
+            adjustment.step_increment()
+        } else {
+            adjustment.page_size() / 10.0
+        };
+        let wanted = adjustment.value() + down * step;
+        adjustment.set_value(wanted.clamp(
+            adjustment.lower(),
+            (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
+        ));
+        glib::Propagation::Stop
+    });
+    scale.add_controller(wheel);
+
     let toggle = toggle.map(|on| {
         let switch = gtk::Switch::new();
         switch.set_active(on);
         name_it(&switch, label);
         switch.set_can_focus(false);
-        switch.set_can_target(false);
         switch.set_valign(gtk::Align::Center);
         row.append(&switch);
         // A bar that cannot be moved says so, rather than being moved to no
@@ -6725,9 +7070,10 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
 fn browser_row(icon: &str, text: &str) -> gtk::Box {
     // The padding goes on the row rather than the label, so it applies
     // before the icon as well as around the text.
+    //
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(16)
+        .spacing(12)
         .css_classes(["tp-row"])
         .build();
 
@@ -6877,17 +7223,23 @@ fn style_css(scale: f64, dark: bool) -> String {
             min-width: {switch_w}px;
             min-height: {switch_h}px;
             border-radius: {switch_h}px;
+            background-color: {trough};
+            background-image: none;
+            border-color: transparent;
         }}
         .tp-row switch > slider {{
             min-width: {slider}px;
             min-height: {slider}px;
             border-radius: {switch_h}px;
+            /* The same knob as a slider carries, for the same reason. Only
+               while the switch is off: checked, the knob sits on the lit fill
+               and needs to be the dark one below. */
+            background-color: {knob};
         }}
         .tp-row switch:checked {{
-            background-color: {switch_on};
-            border-color: {switch_on};
+            background-color: {fill};
+            border-color: {fill};
         }}
-        .tp-row switch:checked > slider {{ background-color: {switch_knob}; }}
         .tp-chevron {{ font-size: {row}px; opacity: 0.5; }}
         .tp-hint {{ font-size: {hint}px; opacity: 0.7; }}
         /* The one screen made of paragraphs. Looser than a row of settings,
@@ -7062,7 +7414,7 @@ fn style_css(scale: f64, dark: bool) -> String {
            very thing that says where playback is. */
         .tp-progress.tp-selected {{ background-color: transparent; }}
         .tp-progress.tp-selected slider {{
-            background-color: #ffffff;
+            background-color: {knob};
             outline: {outline}px solid {highlight};
             outline-offset: {outline}px;
             min-width: {handle}px;
@@ -7098,6 +7450,41 @@ fn style_css(scale: f64, dark: bool) -> String {
         .tp-subtitles-button:disabled {{ opacity: 0.2; }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
+        /* Settings bars, drawn to be found rather than to be tasteful. The
+           theme's own colours put a faint handle on a faint trough, which on
+           a dark background is a bar that has to be looked for.
+
+           Three steps apart, so the parts stay told from each other: the
+           handle brightest, the part behind it dimmer, the rest dimmer again.
+           Deliberately not the highlight colour, which is what a selected row
+           is painted with - a blue bar on a blue row is the one case where
+           the theme's choice vanishes completely. */
+        .tp-bar trough {{ background-color: {trough}; background-image: none; }}
+        .tp-bar trough > highlight, .tp-bar progress {{
+            background-color: {fill};
+            background-image: none;
+        }}
+        /* `background-image: none` first, or none of the colour below shows:
+           the theme paints handles and troughs with a gradient image, which
+           sits over any background colour set under it. The same trap the
+           transport buttons work around. */
+        .tp-bar slider, .tp-row switch > slider {{
+            background-image: none;
+            background-color: {knob};
+            box-shadow: none;
+            /* A ring against the knob's own brightness, so one knob colour
+               reads both on the dim trough and on the lit fill it travels
+               onto - sliders and switches alike. */
+            border: {edge}px solid {knob_edge};
+        }}
+        .tp-bar slider {{
+            min-width: {handle}px;
+            min-height: {handle}px;
+        }}
+        /* An output that is silenced or a delay not being applied: the row
+           still says what it is set to, quietly. */
+        .tp-bar:disabled trough > highlight,
+        .tp-bar:disabled progress {{ background-color: {trough}; }}
         /* Reads as a path rather than a row of buttons, until one takes
            focus and the shared button:focus rule highlights it. */
         .tp-crumb {{
@@ -7178,18 +7565,34 @@ fn style_css(scale: f64, dark: bool) -> String {
         badge_indent = px(24.0),
         // What reads against the selection highlight rather than into it.
         on_highlight = "#ffffff",
-        row = px(26.0),
+        row = px(21.0),
         hint = px(20.0),
         small = px(17.0),
         tight_v = px(7.0),
         tight_h = px(10.0),
-        pad_v = px(16.0),
-        pad_h = px(24.0),
+        pad_v = px(9.0),
+        pad_h = px(18.0),
         radius = px(8.0),
         outline = px(2.0).max(1),
         handle = px(18.0),
-        switch_on = if dark { "#dcdcdc" } else { "#707070" },
-        switch_knob = if dark { "#1c1c1c" } else { "#ffffff" },
+        // Bright on dark; on light a white knob held in by its ring rather
+        // than a dark disc, which read as heavy against a white row and
+        // heavier still in a column of them.
+        knob = if dark { "#dcdcdc" } else { "#ffffff" },
+        fill = if dark { "#b9b9b9" } else { "#8e8e8e" },
+        trough = if dark {
+            "rgba(255, 255, 255, 0.13)"
+        } else {
+            "rgba(0, 0, 0, 0.11)"
+        },
+        // On light the ring is what makes a white knob visible at all, so
+        // it carries the contrast the knob itself no longer does.
+        knob_edge = if dark {
+            "rgba(0, 0, 0, 0.55)"
+        } else {
+            "rgba(0, 0, 0, 0.38)"
+        },
+        edge = px(1.0).max(1),
         switch_w = px(64.0),
         switch_h = px(32.0),
         slider = px(26.0),
@@ -7201,7 +7604,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         crumb_pad = px(6.0),
         leading = px(38.0),
         back_icon = px(22.0),
-        row_icon = px(22.0),
+        row_icon = px(18.0),
         bar = px(6.0),
         // A literal color rather than a theme name: GTK's named colors
         // differ between themes and libadwaita, and an undefined one makes
@@ -7368,11 +7771,11 @@ mod settings_rows {
         assert_eq!(positions.to_vec(), expected);
     }
 
-    /// The row under the switch is the one row not in `SETTINGS_ORDER`: it is
-    /// pushed only while the check is on, so it sits past the fixed rows.
+    /// The version sits last, under the switch that decides whether anything
+    /// is said about newer ones.
     #[test]
-    fn the_update_status_row_follows_the_fixed_rows() {
-        assert_eq!(UPDATE_STATUS_ROW, SETTINGS_ROWS as i32);
+    fn the_version_row_comes_last_and_follows_the_switch() {
+        assert_eq!(UPDATE_STATUS_ROW, SETTINGS_ROWS as i32 - 1);
         assert_eq!(UPDATE_SWITCH_ROW, UPDATE_STATUS_ROW - 1);
     }
 

@@ -5,8 +5,9 @@ which offers only values that make sense and lists the audio devices this
 machine actually has. For driving the player itself, see
 [Using TinePlayer](usage.md).
 
-![TinePlayer's settings screen, showing theme, interface size, and the
-primary audio device with its language and volume.](screenshots/settings-menu.png)
+![TinePlayer's settings screen: theme, interface size with its automatic
+switch, and each output's language, description, volume and audio
+sync.](screenshots/settings-menu.png)
 
 The same settings are stored in `config.yaml`, which can be edited directly. TinePlayer reads it at startup, so
 restart it after editing.
@@ -20,7 +21,7 @@ It lives in the per-user config directory:
 | Setting                                                  | Key                  | Default     | Description                                                                                                                                    |
 |----------------------------------------------------------|----------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | Theme                                                    | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                                                                      |
-| Interface Size                                           | `ui_scale`           | Unset       | Interface scale, such as `1.5` <br/>If unset scales automatically to the display resolution                                                    |
+| [Interface Size](#interface-size)                        | `ui_scale`           | Unset       | Interface scale, such as `1.5`, from `0.33` to `3` <br/>If unset it defaults to 1.0 and auto-scales to the display resolution in fullscreen    |
 | Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
 | Check for updates                                        | `check_for_updates`  | `true`      | Asks GitHub once a day whether a newer TinePlayer has been released, `true` or `false` <br/>Nothing is ever downloaded or installed            |
 | [Primary Audio Device](#output-devices)                  | `primary_sink`       | Unset       | Primary output device name. Required                                                                                                           |
@@ -28,7 +29,7 @@ It lives in the per-user config directory:
 | [Secondary Audio Device](#output-devices)                | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
 | Secondary Language Preference                            | `secondary_language` | Unset       | Preferred secondary [language code](#languages) <br/>If unset defaults to the second track                                                     |
 | [Subtitle Preference](#choosing-subtitles-automatically) | `subtitle_language`  | `primary_forced` | How a subtitle is chosen automatically: `none`, `primary_forced`, `primary`, `secondary_forced`, `secondary`, or a [language code](#languages) |
-| Subtitle Size                                            | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's                                                                                    |
+| Subtitle Size                                            | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's, from `8` to `24`                                                                  |
 | [Subtitle Font](#subtitle-fonts)                         | `subtitle_font`      | `Sans Bold` | Font Family and style name                                                                                                                     |
 | Resume Threshold                                         | `resume_min_percent` | `5`         | How far in before stopping counts as somewhere to resume from, as a percentage of the running time. Never less than 10 seconds                 |
 | Watched Threshold                                        | `watched_percent`    | `90`        | Past this percentage a video counts as watched, and its position is forgotten rather than saved                                                |
@@ -36,7 +37,7 @@ It lives in the per-user config directory:
 | [Volume](#volumes)                                       | `primary_volume` <br/>`secondary_volume` | `1.0` | That output's level, from `0.0` to `1.0`                                                                                                       |
 | Mute                                                     | `primary_muted` <br/>`secondary_muted` | `false` | Whether the output is muted                                                                                                                    |
 | [Audio Sync](#audio-sync)                                | `primary_offset_ms` <br/>`secondary_offset_ms` | `0` | Adjust the sync of the audio to line it up with the picture, in milliseconds from `-1000` to `1000`                                            |
-|                                                          | `primary_offset_on` <br/>`secondary_offset_on` | `false` | Whether that output's sync adjustment is applied. Off keeps the value without using it                                                       |
+|                                                          | `primary_offset_on` <br/>`secondary_offset_on` | `false` | Whether that output's sync adjustment is applied. Off keeps the value without using it                                                         |
 
 ## Remembered State
 
@@ -76,6 +77,19 @@ subtitle_language: ru
 subtitle_size: 12
 subtitle_font: Sans Bold
 ```
+
+## Interface Size
+
+The interface can be scaled to your liking, or left to auto-scale itself.
+
+When auto-scaling is enabled (default) the normal scale will be 1.0x when
+windowed, and when fullscreen it scales to the display's height, using 1080p as
+the 1.0x baseline, so a 4K TV goes to 2.0x. The scale is based on the display
+height the desktop reports, which takes into account its own scaling.
+
+Auto-scaling can be disabled in the Settings menu or by setting `ui_scale`
+in the config file. A size set this way applies to both windowed and
+fullscreen, and is held to the same `0.33` to `3` the slider offers.
 
 ## Output Devices
 

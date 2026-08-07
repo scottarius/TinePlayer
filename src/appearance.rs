@@ -20,6 +20,15 @@ const REFERENCE_HEIGHT: f64 = 1080.0;
 /// it) than to want smaller text at a distance.
 const MIN_SCALE: f64 = 1.0;
 const MAX_SCALE: f64 = 3.0;
+
+/// What a size chosen by hand is held to: the ends of the slider that sets
+/// it, which are three steps either side of the normal size.
+///
+/// Held rather than trusted because the file can say anything, and a size of
+/// 0.05 draws an interface too small to find the setting that would put it
+/// back - the only way out being the file it came from.
+pub const MIN_CHOSEN_SCALE: f64 = 0.33;
+pub const MAX_CHOSEN_SCALE: f64 = 3.0;
 /// Quarter steps, so a 1440p display lands on a clean 1.25 rather than
 /// 1.3333, which produces uneven rounding across the various sizes.
 const STEP: f64 = 0.25;
@@ -72,7 +81,7 @@ pub fn tallest_monitor() -> Option<gdk::Monitor> {
 /// Resolves the configured scale, detecting one if it was left unset.
 pub fn resolve_scale(configured: Option<f64>, monitor: Option<&gdk::Monitor>) -> f64 {
     if let Some(scale) = configured {
-        return scale;
+        return scale.clamp(MIN_CHOSEN_SCALE, MAX_CHOSEN_SCALE);
     }
     monitor.map(scale_for).unwrap_or(MIN_SCALE)
 }
@@ -199,4 +208,31 @@ fn portal_color_scheme() -> Option<u32> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod chosen_sizes {
+    use super::*;
+
+    /// The file can hold anything, including a size that would draw an
+    /// interface too small to find the setting that would put it back.
+    #[test]
+    fn a_size_set_by_hand_is_held_to_what_the_slider_offers() {
+        assert_eq!(resolve_scale(Some(0.05), None), MIN_CHOSEN_SCALE);
+        assert_eq!(resolve_scale(Some(12.0), None), MAX_CHOSEN_SCALE);
+    }
+
+    /// Anything the slider itself can produce passes through untouched.
+    #[test]
+    fn a_size_within_the_range_is_left_alone() {
+        for scale in [MIN_CHOSEN_SCALE, 0.69, 1.0, 1.44, 2.08, MAX_CHOSEN_SCALE] {
+            assert_eq!(resolve_scale(Some(scale), None), scale);
+        }
+    }
+
+    /// With nothing chosen and no monitor to measure, the designed size.
+    #[test]
+    fn nothing_chosen_and_nothing_to_measure_is_the_designed_size() {
+        assert_eq!(resolve_scale(None, None), MIN_SCALE);
+    }
 }
