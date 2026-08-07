@@ -26,11 +26,9 @@ enum Setting {
     SecondaryTrack,
     Subtitles,
     Theme,
-    InterfaceScale,
     PrimaryLanguage,
     SecondaryLanguage,
     SubtitleLanguage,
-    SubtitleSize,
     SubtitleFont,
 }
 
@@ -45,6 +43,10 @@ enum Slider {
     Volume(&'static str),
     /// How far one output is held back, by role, in milliseconds.
     Offset(&'static str),
+    /// How big the interface is, in steps either side of its normal size.
+    Scale,
+    /// Subtitle size, in points against the video's own resolution.
+    SubtitleSize,
     ResumeThreshold,
     WatchedThreshold,
 }
@@ -60,6 +62,13 @@ impl Slider {
         match self {
             Slider::Volume(_) => 5.0,
             Slider::Offset(_) => 10.0,
+            // A tenth of a step, which is about a nine per cent change in
+            // size - small enough to settle on a size, large enough to cross
+            // the range in a few seconds of holding.
+            Slider::Scale => 0.1,
+            // A point at a time. The range is small enough that anything
+            // coarser would be six choices in a row of buttons.
+            Slider::SubtitleSize => 1.0,
             _ => 1.0,
         }
     }
@@ -77,8 +86,42 @@ impl Slider {
             // Anything under half is not watching it, and a hundred means
             // sitting through the credits to be counted.
             Slider::WatchedThreshold => 50.0..=100.0,
+            // Steps rather than the multiplier itself, so the middle is the
+            // normal size and the two halves are the same length. Three steps
+            // either way, which is a third at one end and three times at the
+            // other.
+            Slider::Scale => -3.0..=3.0,
+            // Against the video's own height rather than the screen's, so
+            // these hold whatever it is played back on. Below eight is
+            // unreadable at any size; past twenty-four covers the picture.
+            Slider::SubtitleSize => 8.0..=24.0,
         }
     }
+}
+
+/// A size in steps either side of normal, as the multiplier it means.
+///
+/// Geometric rather than added: a step down is the same change as a step up,
+/// so three steps down is exactly a third where three up is exactly three
+/// times. Adding a fixed amount instead would make the lower half of the
+/// slider cover almost nothing and the upper half everything.
+fn scale_from_steps(steps: f64) -> f64 {
+    let scale = 3f64.powf(steps / 3.0);
+    // To the hundredth, so the file holds a number somebody could have typed
+    // and the reading beside the bar is what was stored.
+    (scale * 100.0).round() / 100.0
+}
+
+/// The same, backwards, for putting the bar where a stored size says.
+fn steps_from_scale(scale: f64) -> f64 {
+    3.0 * scale.max(0.01).log(3.0)
+}
+
+/// How a size reads beside its bar: the multiplier, without trailing noughts.
+fn scale_label(scale: f64) -> String {
+    let text = format!("{scale:.2}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{text}x")
 }
 
 /// How far an output is shifted, wherever that is shown.
@@ -216,18 +259,10 @@ const SETTINGS_SUBROWS: [i32; 10] = [
     ROW_SUBTITLE_FONT,
 ];
 
-/// Sizes offered for subtitles. The middle of the range is the default; the
-/// ends are deliberately wide, since what reads well from a sofa and what
-/// reads well at a desk are genuinely different.
-const SUBTITLE_SIZES: [u32; 8] = [8, 10, 12, 14, 16, 18, 20, 24];
-
 /// Font families offered in the menu. Generic names Pango always resolves
 /// rather than an enumeration of everything installed, which would run to
 /// hundreds of rows. `subtitle_font` in the config takes any description.
 const SUBTITLE_FONTS: [&str; 5] = ["Sans Bold", "Sans", "Serif Bold", "Serif", "Monospace Bold"];
-
-/// Fixed interface scales offered alongside automatic detection.
-const UI_SCALES: [f64; 6] = [1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
 
 /// Menu rows that begin a new group: the primary pair and the secondary
 /// pair each get separating space above them.
@@ -395,6 +430,9 @@ pub struct App {
     /// Set while a switch is being moved to match what it already reports, so
     /// its own handler knows not to act on it.
     settling_switch: Cell<bool>,
+    /// The size a drag has reached, kept until the bar is let go. Nothing
+    /// while the size is not being dragged.
+    wanted_scale: Cell<Option<f64>>,
     nav_footer: RefCell<Vec<gtk::Button>>,
     /// Buttons above the list, currently the browser's path trail. Up from
     /// the first row reaches them, the way Down reaches the footer.
@@ -548,6 +586,7 @@ impl App {
             settings_list: RefCell::new(None),
             clicked_row: Cell::new(false),
             settling_switch: Cell::new(false),
+            wanted_scale: Cell::new(None),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
@@ -596,19 +635,22 @@ impl App {
         // been realized, and on a mixed setup (a television beside a desk
         // monitor) that is the difference between a readable menu and a tiny
         // one. Skipped entirely when the size was set by hand.
-        if app.config.borrow().ui_scale.is_none() {
-            let weak = Rc::downgrade(&app);
-            window.connect_realize(move |window| {
-                let Some(app) = weak.upgrade() else { return };
-                let Some(monitor) = appearance::monitor_for_window(window) else {
-                    return;
-                };
-                let actual = appearance::scale_for(&monitor);
-                if actual != app.scale.get() {
-                    app.restyle(actual);
-                }
-            });
-        }
+        // Watched whatever the size is set to now: a size set by hand can be
+        // handed back to the screen while running, and nothing would be
+        // listening if these were attached only when it started out
+        // automatic. `follow_automatic_scale` decides whether to act.
+        let weak = Rc::downgrade(&app);
+        window.connect_realize(move |window| {
+            let Some(app) = weak.upgrade() else { return };
+            app.follow_automatic_scale(window);
+        });
+        // And again whenever the window fills the screen or stops doing so,
+        // since that is what the automatic size depends on.
+        let weak = Rc::downgrade(&app);
+        window.connect_fullscreened_notify(move |window| {
+            let Some(app) = weak.upgrade() else { return };
+            app.follow_automatic_scale(window);
+        });
 
         app.install_key_handling();
 
@@ -1576,16 +1618,28 @@ impl App {
         // pointer, or from the panel during playback, otherwise carries its
         // odd remainder through every press that follows.
         let step = kind.step();
-        let now = scale.value().round();
+        let now = scale.value();
+        // Nudged by a step from where it is, snapped onto the step grid. The
+        // nudge is what the epsilon protects: a value already sitting exactly
+        // on a step would otherwise floor to itself and go nowhere, which is
+        // what stopped the interface size after one press - its steps are a
+        // tenth, and rounding to a whole number made every press compute the
+        // same target.
+        let ratio = now / step;
         let moved = if direction > 0 {
-            (now / step).floor() * step + step
+            ((ratio + 1e-6).floor() + 1.0) * step
         } else {
-            (now / step).ceil() * step - step
+            ((ratio - 1e-6).ceil() - 1.0) * step
         };
         let range = kind.range();
         let moved = moved.clamp(*range.start(), *range.end());
         scale.set_value(moved);
         self.set_slider(kind, moved, &value);
+        // Safe here: nothing is holding the bar, so redrawing cannot be read
+        // as another movement.
+        if kind == Slider::Scale {
+            self.apply_scale(moved);
+        }
         true
     }
 
@@ -1675,6 +1729,25 @@ impl App {
                 let percent = config.watched_percent().round();
                 (percent, format!("{percent}%"))
             }
+            Slider::Scale => {
+                // The bar sits at whatever size is in force either way, so
+                // turning the switch off starts from what is on screen. The
+                // reading says Auto rather than the number, since while the
+                // switch is on that number is a consequence and not a
+                // setting.
+                let scale = config.ui_scale.unwrap_or_else(|| self.scale.get());
+                let reading = match config.ui_scale {
+                    Some(scale) => scale_label(scale),
+                    None => "Auto".to_string(),
+                };
+                (steps_from_scale(scale), reading)
+            }
+            Slider::SubtitleSize => {
+                let size = config
+                    .subtitle_size
+                    .unwrap_or(crate::pipeline::DEFAULT_SUBTITLE_SIZE);
+                (size as f64, size.to_string())
+            }
         }
     }
 
@@ -1694,8 +1767,15 @@ impl App {
                 Slider::Offset(role) => config.set_offset_ms(role, moved),
                 Slider::ResumeThreshold => config.resume_min_percent = Some(moved),
                 Slider::WatchedThreshold => config.watched_percent = Some(moved),
+                Slider::Scale => config.ui_scale = Some(scale_from_steps(moved)),
+                Slider::SubtitleSize => config.subtitle_size = Some(moved.round() as u32),
             }
         }
+        // Nothing redrawn here. Restyling moves the bar under whatever is
+        // moving it, which GTK reads as another movement, which restyles
+        // again - a loop that ran the size to its limit as soon as it was
+        // dragged. Who calls this decides when it is safe: a key press
+        // applies at once, a drag waits to be let go.
         // Heard straight away when a film is playing, so a delay can be placed
         // against the picture rather than guessed at and checked later.
         if let Slider::Offset(role) = kind
@@ -1706,6 +1786,8 @@ impl App {
         value.set_text(&match kind {
             Slider::Volume(_) => volume_label(moved / 100.0, false),
             Slider::Offset(_) => offset_label(moved),
+            Slider::Scale => scale_label(scale_from_steps(moved)),
+            Slider::SubtitleSize => format!("{}", moved.round()),
             _ => format!("{}%", moved.round()),
         });
         self.save_volume_soon();
@@ -2116,11 +2198,9 @@ impl App {
             Setting::SecondaryTrack => "Secondary Audio Track",
             Setting::Subtitles => "Subtitles",
             Setting::Theme => "Theme",
-            Setting::InterfaceScale => "Interface Size",
             Setting::PrimaryLanguage => "Primary Language Preference",
             Setting::SecondaryLanguage => "Secondary Language Preference",
             Setting::SubtitleLanguage => "Subtitle Preference",
-            Setting::SubtitleSize => "Subtitle Size",
             Setting::SubtitleFont => "Subtitle Font",
         };
         let (page, list, back, _header) = list_page(title, true);
@@ -2196,17 +2276,6 @@ impl App {
                     entries.push((name.to_string(), Some(position)));
                 }
             }
-            Setting::InterfaceScale => {
-                current = self
-                    .config
-                    .borrow()
-                    .ui_scale
-                    .and_then(|scale| UI_SCALES.iter().position(|offered| *offered == scale));
-                entries.push(("Automatic".to_string(), None));
-                for (position, scale) in UI_SCALES.iter().enumerate() {
-                    entries.push((format!("{scale}x"), Some(position)));
-                }
-            }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let configured = {
                     let config = self.config.borrow();
@@ -2266,22 +2335,6 @@ impl App {
                         crate::languages::menu_name(code, name, native),
                         Some(modes + position),
                     ));
-                }
-            }
-            Setting::SubtitleSize => {
-                let chosen = self
-                    .config
-                    .borrow()
-                    .subtitle_size
-                    .unwrap_or(crate::pipeline::DEFAULT_SUBTITLE_SIZE);
-                current = SUBTITLE_SIZES.iter().position(|size| *size == chosen);
-                for (position, size) in SUBTITLE_SIZES.iter().enumerate() {
-                    let note = if *size == crate::pipeline::DEFAULT_SUBTITLE_SIZE {
-                        "  (default)"
-                    } else {
-                        ""
-                    };
-                    entries.push((format!("{size}{note}"), Some(position)));
                 }
             }
             Setting::SubtitleFont => {
@@ -2517,23 +2570,6 @@ impl App {
                     return true;
                 }
             }
-            Setting::InterfaceScale => {
-                let picked = choice.and_then(|index| UI_SCALES.get(index).copied());
-                {
-                    let mut config = self.config.borrow_mut();
-                    config.ui_scale = picked;
-                    let _ = config.save();
-                }
-                // Automatic means measuring the display again rather than
-                // keeping whatever was last in force.
-                let scale = picked.unwrap_or_else(|| {
-                    appearance::monitor_for_window(&self.window)
-                        .as_ref()
-                        .map(appearance::scale_for)
-                        .unwrap_or(1.0)
-                });
-                self.restyle(scale);
-            }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let picked = choice
                     .and_then(|index| crate::languages::LANGUAGES.get(index))
@@ -2554,11 +2590,6 @@ impl App {
                 });
                 let mut config = self.config.borrow_mut();
                 config.subtitle_language = picked;
-                let _ = config.save();
-            }
-            Setting::SubtitleSize => {
-                let mut config = self.config.borrow_mut();
-                config.subtitle_size = choice.and_then(|index| SUBTITLE_SIZES.get(index).copied());
                 let _ = config.save();
             }
             Setting::SubtitleFont => {
@@ -3779,6 +3810,8 @@ impl App {
 
         self.settings_sliders.borrow_mut().clear();
         for (index, kind, label) in [
+            (ROW_INTERFACE_SCALE, Slider::Scale, "Interface Size"),
+            (ROW_SUBTITLE_SIZE, Slider::SubtitleSize, "Subtitle Size"),
             (ROW_PRIMARY_VOLUME, Slider::Volume("primary"), "Volume"),
             (ROW_PRIMARY_SYNC, Slider::Offset("primary"), "Audio Sync"),
             (ROW_SECONDARY_VOLUME, Slider::Volume("secondary"), "Volume"),
@@ -3805,6 +3838,10 @@ impl App {
             let toggle = match kind {
                 Slider::Volume(role) => Some(!self.config.borrow().muted(role)),
                 Slider::Offset(role) => Some(self.config.borrow().offset_on(role)),
+                // On means the size is worked out from the screen, which is
+                // the one switch here that turns the bar beside it off rather
+                // than on.
+                Slider::Scale => Some(self.config.borrow().ui_scale.is_none()),
                 _ => None,
             };
             let (widget, scale, value, switch) =
@@ -3815,13 +3852,48 @@ impl App {
             if let Some(switch) = switch {
                 self.settings_switches.borrow_mut().push((index, switch));
             }
+            if kind == Slider::Scale {
+                let by_hand = self.config.borrow().ui_scale.is_some();
+                scale.set_sensitive(by_hand);
+                value.set_sensitive(by_hand);
+            }
             {
                 let app = self.clone();
                 let value = value.clone();
-                scale.connect_change_value(move |_, _, moved| {
+                scale.connect_change_value(move |_, scroll, moved| {
                     app.set_slider(kind, moved, &value);
+                    if kind == Slider::Scale {
+                        // A drag reports Jump, over and over, while the
+                        // pointer holds the bar. Anything else - a step, a
+                        // page, a scroll wheel - is finished by the time it
+                        // arrives and can be drawn straight away.
+                        if scroll == gtk::ScrollType::Jump {
+                            app.wanted_scale.set(Some(moved));
+                        } else {
+                            app.apply_scale(moved);
+                        }
+                    }
                     glib::Propagation::Proceed
                 });
+            }
+            // Let go of, and only then redrawn. Watched rather than handled,
+            // so the bar keeps its own grip on the pointer while it is being
+            // dragged.
+            if kind == Slider::Scale {
+                let app = self.clone();
+                let watcher = gtk::EventControllerLegacy::new();
+                watcher.set_propagation_phase(gtk::PropagationPhase::Bubble);
+                watcher.connect_event(move |_, event| {
+                    let done = matches!(
+                        event.event_type(),
+                        gdk::EventType::ButtonRelease | gdk::EventType::TouchEnd
+                    );
+                    if done && let Some(steps) = app.wanted_scale.take() {
+                        app.apply_scale(steps);
+                    }
+                    glib::Propagation::Proceed
+                });
+                scale.add_controller(watcher);
             }
             self.settings_sliders
                 .borrow_mut()
@@ -3914,7 +3986,7 @@ impl App {
                 *app.settings_row.borrow_mut() = row.index();
                 match row.index() {
                     ROW_THEME => app.open_setting(Setting::Theme),
-                    ROW_INTERFACE_SCALE => app.open_setting(Setting::InterfaceScale),
+                    ROW_INTERFACE_SCALE => app.work_switch_row(ROW_INTERFACE_SCALE),
                     ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
                     ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
                     ROW_PRIMARY_LANGUAGE => app.open_setting(Setting::PrimaryLanguage),
@@ -3927,7 +3999,6 @@ impl App {
                     ROW_SECONDARY_VOLUME => app.work_switch_row(ROW_SECONDARY_VOLUME),
                     ROW_SECONDARY_SYNC => app.work_switch_row(ROW_SECONDARY_SYNC),
                     ROW_SUBTITLE_LANGUAGE => app.open_setting(Setting::SubtitleLanguage),
-                    ROW_SUBTITLE_SIZE => app.open_setting(Setting::SubtitleSize),
                     ROW_SUBTITLE_FONT => app.open_setting(Setting::SubtitleFont),
                     ROW_CLEAR_DATA => app.confirm_clear_data(),
                     ROW_KODI => app.show_kodi(),
@@ -4032,6 +4103,7 @@ impl App {
     /// What a switch row actually changes, once something has asked for it.
     fn apply_switch_row(self: &Rc<Self>, index: i32) {
         match index {
+            ROW_INTERFACE_SCALE => self.toggle_automatic_scale(),
             ROW_SOUNDS => self.toggle_sounds(),
             ROW_PRIMARY_DESCRIPTION => self.toggle_audio_description(true),
             ROW_SECONDARY_DESCRIPTION => self.toggle_audio_description(false),
@@ -4194,6 +4266,76 @@ impl App {
         };
         *self.sounds.borrow_mut() = Sounds::new(enabled, device);
         self.set_settings_switch(ROW_SOUNDS, enabled);
+    }
+
+    /// Hands the size back to the screen, or takes it over by hand.
+    ///
+    /// Taking it over keeps whatever is on screen now, so the switch changes
+    /// who decides the size rather than the size itself.
+    fn toggle_automatic_scale(self: &Rc<Self>) {
+        let now_automatic = self.config.borrow().ui_scale.is_some();
+        {
+            let mut config = self.config.borrow_mut();
+            // Taking it over keeps what is on screen, so the switch changes
+            // who decides the size rather than the size itself.
+            config.ui_scale = if now_automatic {
+                None
+            } else {
+                Some(self.scale.get())
+            };
+            let _ = config.save();
+        }
+        if now_automatic {
+            self.follow_automatic_scale(&self.window.clone());
+        }
+        let found = self
+            .settings_sliders
+            .borrow()
+            .iter()
+            .find(|(row, ..)| *row == ROW_INTERFACE_SCALE)
+            .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
+        if let Some((kind, scale, value)) = found {
+            let (now, reading) = self.slider_state(kind);
+            scale.set_value(now);
+            value.set_text(&reading);
+            scale.set_sensitive(!now_automatic);
+            value.set_sensitive(!now_automatic);
+        }
+        self.set_settings_switch(ROW_INTERFACE_SCALE, now_automatic);
+    }
+
+    /// Redraws the interface at the size the bar is now at.
+    fn apply_scale(&self, steps: f64) {
+        let scale = scale_from_steps(steps);
+        if scale != self.scale.get() {
+            self.restyle(scale);
+        }
+        let _ = self.config.borrow().save();
+    }
+
+    /// Re-renders at whatever the automatic size should be now.
+    ///
+    /// The screen's own scale while the window fills it, and 1x while it does
+    /// not. The automatic size exists for a television read from a sofa, and
+    /// a window on the same 4K monitor is read from arm's length - scaling
+    /// that up only leaves less room in a window somebody chose the size of.
+    ///
+    /// A size set by hand is that size in both, which is what asking for one
+    /// means.
+    fn follow_automatic_scale(&self, window: &gtk::ApplicationWindow) {
+        if self.config.borrow().ui_scale.is_some() {
+            return;
+        }
+        let wanted = if window.is_fullscreen() {
+            appearance::monitor_for_window(window)
+                .map(|monitor| appearance::scale_for(&monitor))
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        if wanted != self.scale.get() {
+            self.restyle(wanted);
+        }
     }
 
     /// Re-renders every size in the interface at a new scale.
@@ -6363,7 +6505,8 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
 fn row_has_switch(index: i32) -> bool {
     matches!(
         index,
-        ROW_SOUNDS
+        ROW_INTERFACE_SCALE
+            | ROW_SOUNDS
             | ROW_PRIMARY_DESCRIPTION
             | ROW_SECONDARY_DESCRIPTION
             | ROW_PRIMARY_VOLUME
@@ -6579,6 +6722,41 @@ fn slider_row(
     value.set_xalign(1.0);
     value.set_width_chars(READING_CHARS);
     row.append(&value);
+
+    // The wheel scrolls the list it is in, rather than moving the bar under
+    // the pointer. A settings screen is a list first: passing over a slider
+    // on the way down it should not change a setting, and the value that
+    // changes is the one nobody was looking at.
+    //
+    // Taken in the capture phase so the bar never sees it, and passed on to
+    // the scroller by hand, since stopping the event stops it reaching the
+    // list as well.
+    let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+    wheel.connect_scroll(|controller, _, down| {
+        let Some(scroller) = controller
+            .widget()
+            .and_then(|widget| widget.ancestor(gtk::ScrolledWindow::static_type()))
+            .and_downcast::<gtk::ScrolledWindow>()
+        else {
+            return glib::Propagation::Stop;
+        };
+        let adjustment = scroller.vadjustment();
+        // A row at a time, near enough: the step increment on a list is the
+        // height of what it holds, and a tenth of a page where it is not set.
+        let step = if adjustment.step_increment() > 0.0 {
+            adjustment.step_increment()
+        } else {
+            adjustment.page_size() / 10.0
+        };
+        let wanted = adjustment.value() + down * step;
+        adjustment.set_value(wanted.clamp(
+            adjustment.lower(),
+            (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
+        ));
+        glib::Propagation::Stop
+    });
+    scale.add_controller(wheel);
 
     let toggle = toggle.map(|on| {
         let switch = gtk::Switch::new();
