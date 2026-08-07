@@ -16,12 +16,15 @@
 # that cannot be asked.
 theme: dark
 
-# Multiplies every font size and spacing in the interface.
+# Multiplies every font size and spacing in the interface, from 0.33 to 3.
 #
-# Leave it out and the size is worked out from the display, which is what suits
-# a television: a 4K screen the desktop is not already scaling would otherwise
-# draw a ten-foot interface at desk-monitor size. Set it to pin the size
-# regardless.
+# Leave it out and the size follows the display while the window is fullscreen,
+# which is what suits a television: a 4K screen the desktop is not already
+# scaling would otherwise draw a ten-foot interface at desk-monitor size.
+# Windowed, it stays at 1, since the same screen across a desk is read from
+# arm's length.
+#
+# Set it and that size applies either way.
 ui_scale: 1.5
 
 # A short click when moving through the menus, played through the primary

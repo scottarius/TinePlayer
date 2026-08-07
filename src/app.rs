@@ -99,6 +99,16 @@ impl Slider {
     }
 }
 
+/// A size chosen by hand, held to what the slider could have produced.
+///
+/// The file is editable, so it can hold anything at all; the interface has to
+/// stay usable enough to change it back from inside.
+fn chosen_scale(config: &crate::config::Config) -> Option<f64> {
+    config
+        .ui_scale
+        .map(|scale| scale.clamp(appearance::MIN_CHOSEN_SCALE, appearance::MAX_CHOSEN_SCALE))
+}
+
 /// A size in steps either side of normal, as the multiplier it means.
 ///
 /// Geometric rather than added: a step down is the same change as a step up,
@@ -1735,8 +1745,9 @@ impl App {
                 // reading says Auto rather than the number, since while the
                 // switch is on that number is a consequence and not a
                 // setting.
-                let scale = config.ui_scale.unwrap_or_else(|| self.scale.get());
-                let reading = match config.ui_scale {
+                let chosen = chosen_scale(&config);
+                let scale = chosen.unwrap_or_else(|| self.scale.get());
+                let reading = match chosen {
                     Some(scale) => scale_label(scale),
                     None => "Auto".to_string(),
                 };
