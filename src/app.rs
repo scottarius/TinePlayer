@@ -155,6 +155,11 @@ pub fn offset_label(ms: f64) -> String {
 }
 
 /// Rows of the settings screen, in the order they appear.
+/// Longer than a keyboard leaves between repeats, and short enough not to read
+/// as a delay on an ordinary press. Windows repeats at up to thirty a second,
+/// which is a gap of about thirty-three milliseconds.
+const REPEAT_GAP: std::time::Duration = std::time::Duration::from_millis(90);
+
 /// Rows a page jump covers, roughly a screenful at the default size. What
 /// makes a folder of a hundred films navigable without a hundred presses.
 const PAGE_ROWS: i32 = 8;
@@ -440,6 +445,16 @@ pub struct App {
     /// Set while a switch is being moved to match what it already reports, so
     /// its own handler knows not to act on it.
     settling_switch: Cell<bool>,
+    /// Whether the key that works the highlighted control is still down, so
+    /// that holding it acts once rather than on every repeat the keyboard
+    /// sends.
+    key_held: Cell<bool>,
+    /// Whether the press now in progress started the volume button's hold,
+    /// and so still has the ordinary press to do when the key comes up.
+    hold_started: Cell<bool>,
+    /// Counts releases, so one waiting to be believed can be dropped when a
+    /// repeat arrives behind it.
+    releases: Cell<u64>,
     /// The size a drag has reached, kept until the bar is let go. Nothing
     /// while the size is not being dragged.
     wanted_scale: Cell<Option<f64>>,
@@ -596,6 +611,9 @@ impl App {
             settings_list: RefCell::new(None),
             clicked_row: Cell::new(false),
             settling_switch: Cell::new(false),
+            key_held: Cell::new(false),
+            hold_started: Cell::new(false),
+            releases: Cell::new(0),
             wanted_scale: Cell::new(None),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
@@ -841,18 +859,6 @@ impl App {
                 // Only while the button row is held: elsewhere in playback
                 // there is nothing highlighted to press, and Enter should not
                 // quietly become a second play/pause.
-                gdk::Key::Return | gdk::Key::KP_Enter if playing => {
-                    let on_buttons = app
-                        .controls
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|controls| controls.takes_activation());
-                    if !on_buttons {
-                        return glib::Propagation::Proceed;
-                    }
-                    app.press_activate();
-                    glib::Propagation::Stop
-                }
                 gdk::Key::Up if playing => {
                     app.enter_controls();
                     glib::Propagation::Stop
@@ -982,16 +988,9 @@ impl App {
         });
         {
             let app = self.clone();
-            controller.connect_key_released(move |_, key, _, _| {
-                match key {
-                    gdk::Key::Left | gdk::Key::Right => app.end_scrub(),
-                    // Where the press of a held button is finally acted on,
-                    // if holding it did not already mean something else.
-                    gdk::Key::Return | gdk::Key::KP_Enter if app.playback.borrow().is_some() => {
-                        app.release_activate()
-                    }
-                    _ => {}
-                }
+            controller.connect_key_released(move |_, key, _, _| match key {
+                gdk::Key::Left | gdk::Key::Right => app.end_scrub(),
+                _ => {}
             });
         }
         // Dropping a file on the window loads it, from any screen including
@@ -1024,6 +1023,33 @@ impl App {
         }
 
         self.window.add_controller(controller);
+
+        // Enter, taken before the focused widget can have it.
+        //
+        // A transport button is a real button, and GTK activates a focused
+        // one on Enter - so the key never reached the handler above at all.
+        // Holding it opened and shut the panel on every repeat while nothing
+        // here saw a single press. Claimed in the capture phase, which runs
+        // from the window down, and only while the strip has something
+        // highlighted: everywhere else Enter still belongs to whatever has
+        // the focus.
+        let capture = gtk::EventControllerKey::new();
+        capture.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let app = self.clone();
+        capture.connect_key_pressed(move |_, key, _, _| {
+            if !matches!(key, gdk::Key::Return | gdk::Key::KP_Enter) || !app.strip_takes_enter() {
+                return glib::Propagation::Proceed;
+            }
+            app.press_activate();
+            glib::Propagation::Stop
+        });
+        let app = self.clone();
+        capture.connect_key_released(move |_, key, _, _| {
+            if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter) && app.strip_takes_enter() {
+                app.release_activate();
+            }
+        });
+        self.window.add_controller(capture);
     }
 
     /// One level up: out of playback, out of a chooser, or out of the
@@ -1179,10 +1205,38 @@ impl App {
     /// Cloned out of the cell before anything is pressed: stop and settings
     /// both tear playback down, which takes this same cell mutably, and doing
     /// that while a read borrow is alive panics.
+    /// Whether Enter belongs to the control strip rather than to whatever
+    /// happens to have the focus.
+    fn strip_takes_enter(&self) -> bool {
+        self.playback.borrow().is_some()
+            && self
+                .controls
+                .borrow()
+                .as_ref()
+                .is_some_and(|controls| controls.takes_activation())
+    }
+
     fn press_activate(self: &Rc<Self>) {
         let controls = self.controls.borrow().clone();
         let Some(controls) = controls else { return };
-        if controls.holds_press() {
+        // Any release waiting to be believed is not one: the key is still
+        // down. See `release_activate`.
+        self.releases.set(self.releases.get() + 1);
+        // Once per press, however long it is held. A key down sends presses
+        // over and over, and acting on each one turned holding Enter into a
+        // control worked dozens of times a second - a delay running away, or
+        // an output muted and unmuted until the key came up.
+        if self.key_held.replace(true) {
+            return;
+        }
+        // Decided here rather than again on the way up: acting on a press can
+        // move the strip somewhere else, and a release that asks a second
+        // time gets an answer about wherever it has just moved to. Closing
+        // the panel this way put the highlight back on the button, so the
+        // release read as a fresh press on it and opened the panel again.
+        let holds = controls.holds_press();
+        self.hold_started.set(holds);
+        if holds {
             controls.press_volume();
         } else {
             controls.activate_focused();
@@ -1192,9 +1246,31 @@ impl App {
     /// Letting go of a held button. Does the ordinary thing unless the hold
     /// already did something else.
     fn release_activate(self: &Rc<Self>) {
+        // Held back rather than acted on, because a key held down does not
+        // simply repeat: it sends a release before each repeat, and taking
+        // those at face value ended the hold before it could ever reach its
+        // six hundred milliseconds - so holding Enter on the volume button
+        // opened and shut the panel over and over instead of silencing
+        // everything. A release followed closely by a press was never one.
+        let mark = self.releases.get() + 1;
+        self.releases.set(mark);
+        let app = self.clone();
+        glib::timeout_add_local_once(REPEAT_GAP, move || {
+            if app.releases.get() != mark {
+                return;
+            }
+            app.finish_release();
+        });
+    }
+
+    /// A release that outlived the gap between repeats, and so is real.
+    fn finish_release(self: &Rc<Self>) {
+        self.key_held.set(false);
         let controls = self.controls.borrow().clone();
         let Some(controls) = controls else { return };
-        if controls.holds_press() && controls.release_volume() {
+        // Only a press that started a hold has anything left to do here.
+        // Everything else acted on the way down.
+        if self.hold_started.replace(false) && controls.release_volume() {
             controls.activate_focused();
         }
     }
