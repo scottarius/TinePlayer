@@ -183,9 +183,6 @@ pub fn acknowledge(state: &mut State) {
     }
 }
 
-/// How the row reads when there is nothing newer.
-pub const NOTHING_NEW: &str = "No new version";
-
 #[cfg(test)]
 mod tests {
     use super::*;

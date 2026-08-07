@@ -118,7 +118,7 @@ pub const READING_CHARS: i32 = 7;
 
 /// The rows the settings screen always has. The version row below the
 /// update switch is extra, and only there while the switch is on.
-const SETTINGS_ROWS: usize = 23;
+const SETTINGS_ROWS: usize = 24;
 
 /// Every row of the settings screen, in the order it is built.
 ///
@@ -153,6 +153,8 @@ const ROW_ABOUT: i32 = 20;
 const ROW_NOTICES: i32 = 21;
 /// Where the update switch sits, and the row naming a new version under it.
 const UPDATE_SWITCH_ROW: i32 = 22;
+/// The version this is, and what the check made of it. Always built, unlike
+/// the check itself, which can be turned off.
 const UPDATE_STATUS_ROW: i32 = 23;
 
 /// Every row, in the order they are built, which is what the constants above
@@ -184,6 +186,7 @@ const SETTINGS_ORDER: [i32; SETTINGS_ROWS] = [
     ROW_ABOUT,
     ROW_NOTICES,
     UPDATE_SWITCH_ROW,
+    UPDATE_STATUS_ROW,
 ];
 
 /// Rows that begin a group: each output, then subtitles, then what is
@@ -380,6 +383,18 @@ pub struct App {
     /// The switches on the settings screen, by row, so a toggle can move the
     /// one it belongs to instead of rebuilding the screen under the viewer.
     settings_switches: RefCell<Vec<(i32, gtk::Switch)>>,
+    /// The settings list itself, so a row can be redrawn without rebuilding
+    /// the screen around it.
+    settings_list: RefCell<Option<gtk::ListBox>>,
+    /// Whether the settings row about to be activated was clicked rather than
+    /// chosen with a key or a gamepad. A switch row responds to a press on
+    /// the switch itself, not to a click anywhere along the row - but Enter
+    /// on the selected row must still work it, and both arrive here as the
+    /// same activation.
+    clicked_row: Cell<bool>,
+    /// Set while a switch is being moved to match what it already reports, so
+    /// its own handler knows not to act on it.
+    settling_switch: Cell<bool>,
     nav_footer: RefCell<Vec<gtk::Button>>,
     /// Buttons above the list, currently the browser's path trail. Up from
     /// the first row reaches them, the way Down reaches the footer.
@@ -530,6 +545,9 @@ impl App {
             copy_root: RefCell::new(None),
             kodi_draft: RefCell::new(None),
             settings_switches: RefCell::new(Vec::new()),
+            settings_list: RefCell::new(None),
+            clicked_row: Cell::new(false),
+            settling_switch: Cell::new(false),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
             controls: RefCell::new(None),
@@ -3692,11 +3710,7 @@ impl App {
                     // configuring starts.
                     true,
                 ),
-                (
-                    format!("About TinePlayer v{}", env!("CARGO_PKG_VERSION")),
-                    String::new(),
-                    true,
-                ),
+                ("About TinePlayer".to_string(), String::new(), true),
                 ("Third Party Notices".to_string(), String::new(), true),
                 (
                     "Check for updates".to_string(),
@@ -3708,25 +3722,11 @@ impl App {
                     .to_string(),
                     true,
                 ),
+                (self.version_label(), self.version_status(), true),
             ]
             .to_vec()
         };
         debug_assert_eq!(rows.len(), SETTINGS_ORDER.len());
-
-        // Only while the check is on: a row saying nothing is new, under a
-        // switch that is off, would be reporting on something not happening.
-        let mut rows = rows;
-        if self.config.borrow().check_for_updates {
-            let state = self.updates.borrow();
-            rows.push(match crate::updates::newer(&state) {
-                Some((version, _)) => (
-                    format!("New version: v{}", version.trim_start_matches(['v', 'V'])),
-                    String::new(),
-                    true,
-                ),
-                None => (crate::updates::NOTHING_NEW.to_string(), String::new(), true),
-            });
-        }
 
         for (label, value, enabled) in &rows {
             append_named(
@@ -3828,6 +3828,39 @@ impl App {
                 .push((index, kind, scale, value));
         }
 
+        // Each switch reports its own presses, now that it takes them rather
+        // than letting them fall through to the row. Guarded against the
+        // moves made from here when the same setting is worked another way.
+        for (index, switch) in self.settings_switches.borrow().iter() {
+            let app = self.clone();
+            let index = *index;
+            switch.connect_state_set(move |_, _| {
+                if !app.settling_switch.get() {
+                    app.sounds.borrow().click();
+                    app.apply_switch_row(index);
+                }
+                glib::Propagation::Proceed
+            });
+        }
+
+        // Watched in the capture phase, so a press is known about before
+        // anything else handles it. Cleared on the way out rather than on
+        // release, because the row is activated in between - and a press that
+        // never activates a row must not leave the next key press looking
+        // like a click.
+        {
+            let app = self.clone();
+            let click = gtk::GestureClick::new();
+            click.set_propagation_phase(gtk::PropagationPhase::Capture);
+            click.connect_pressed(move |_, _, _, _| app.clicked_row.set(true));
+            let app = self.clone();
+            click.connect_released(move |_, _, _, _| {
+                let app = app.clone();
+                glib::idle_add_local_once(move || app.clicked_row.set(false));
+            });
+            list.add_controller(click);
+        }
+
         for index in SETTINGS_SECTIONS {
             if let Some(row) = list.row_at_index(index) {
                 row.add_css_class("tp-section-start");
@@ -3839,15 +3872,15 @@ impl App {
             }
         }
 
-        // The row naming a new version carries its own mark, for as long as
-        // the version is there. Reaching it is what takes the mark off the
-        // settings button: arriving on the row is the moment somebody has
-        // been told, and pressing it should not be required to stop being
-        // nagged about something already seen.
-        if crate::updates::newer(&self.updates.borrow()).is_some()
-            && let Some(row) = list.row_at_index(UPDATE_STATUS_ROW)
-        {
-            row.add_css_class("tp-badge-row");
+        *self.settings_list.borrow_mut() = Some(list.clone());
+
+        // Reaching the row is what takes the mark off the settings button:
+        // arriving on it is the moment somebody has been told, and pressing
+        // it should not be required to stop being nagged about something
+        // already seen. Attached whether or not there is anything new, since
+        // a check finishing while this screen is open can make there be -
+        // acknowledging nothing is harmless.
+        if let Some(row) = list.row_at_index(UPDATE_STATUS_ROW) {
             let app = self.clone();
             let controller = gtk::EventControllerFocus::new();
             controller.connect_enter(move |_| {
@@ -3858,28 +3891,41 @@ impl App {
             });
             row.add_controller(controller);
         }
+        self.refresh_version_row();
 
         {
             let app = self.clone();
             list.connect_row_activated(move |_, row| {
-                app.sounds.borrow().click();
+                // A switch is worked by pressing the switch, not by clicking
+                // the row it sits on: the row is a wide target, and hitting it
+                // on the way past should not change a setting. Enter on the
+                // selected row still does, which arrives here with nothing
+                // having been clicked.
+                if app.clicked_row.replace(false) && row_has_switch(row.index()) {
+                    return;
+                }
+                // A switch row is answered by the switch, which plays its own
+                // click when it moves. Playing one here too would double it.
+                if !row_has_switch(row.index()) {
+                    app.sounds.borrow().click();
+                }
                 // Remembered so returning from a chooser lands back on the
                 // row it was opened from, as the main menu does.
                 *app.settings_row.borrow_mut() = row.index();
                 match row.index() {
                     ROW_THEME => app.open_setting(Setting::Theme),
                     ROW_INTERFACE_SCALE => app.open_setting(Setting::InterfaceScale),
-                    ROW_SOUNDS => app.toggle_sounds(),
+                    ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
                     ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
                     ROW_PRIMARY_LANGUAGE => app.open_setting(Setting::PrimaryLanguage),
-                    ROW_PRIMARY_DESCRIPTION => app.toggle_audio_description(true),
-                    ROW_PRIMARY_VOLUME => app.toggle_settings_mute(ROW_PRIMARY_VOLUME),
-                    ROW_PRIMARY_SYNC => app.toggle_settings_offset(ROW_PRIMARY_SYNC),
+                    ROW_PRIMARY_DESCRIPTION => app.work_switch_row(ROW_PRIMARY_DESCRIPTION),
+                    ROW_PRIMARY_VOLUME => app.work_switch_row(ROW_PRIMARY_VOLUME),
+                    ROW_PRIMARY_SYNC => app.work_switch_row(ROW_PRIMARY_SYNC),
                     ROW_SECONDARY_DEVICE => app.open_setting(Setting::SecondaryDevice),
                     ROW_SECONDARY_LANGUAGE => app.open_setting(Setting::SecondaryLanguage),
-                    ROW_SECONDARY_DESCRIPTION => app.toggle_audio_description(false),
-                    ROW_SECONDARY_VOLUME => app.toggle_settings_mute(ROW_SECONDARY_VOLUME),
-                    ROW_SECONDARY_SYNC => app.toggle_settings_offset(ROW_SECONDARY_SYNC),
+                    ROW_SECONDARY_DESCRIPTION => app.work_switch_row(ROW_SECONDARY_DESCRIPTION),
+                    ROW_SECONDARY_VOLUME => app.work_switch_row(ROW_SECONDARY_VOLUME),
+                    ROW_SECONDARY_SYNC => app.work_switch_row(ROW_SECONDARY_SYNC),
                     ROW_SUBTITLE_LANGUAGE => app.open_setting(Setting::SubtitleLanguage),
                     ROW_SUBTITLE_SIZE => app.open_setting(Setting::SubtitleSize),
                     ROW_SUBTITLE_FONT => app.open_setting(Setting::SubtitleFont),
@@ -3887,7 +3933,7 @@ impl App {
                     ROW_KODI => app.show_kodi(),
                     ROW_ABOUT => app.show_about(),
                     ROW_NOTICES => app.show_notices(),
-                    UPDATE_SWITCH_ROW => app.toggle_update_checks(),
+                    UPDATE_SWITCH_ROW => app.work_switch_row(UPDATE_SWITCH_ROW),
                     UPDATE_STATUS_ROW => app.open_release_page(),
                     _ => {}
                 }
@@ -3949,6 +3995,7 @@ impl App {
 
     /// Moves the switch on a settings row to match what it now reports.
     fn set_settings_switch(&self, index: i32, on: bool) {
+        self.settling_switch.set(true);
         if let Some((_, switch)) = self
             .settings_switches
             .borrow()
@@ -3956,6 +4003,42 @@ impl App {
             .find(|(row, _)| *row == index)
         {
             switch.set_active(on);
+        }
+        self.settling_switch.set(false);
+    }
+
+    /// Works the switch on a row the way a click on it would.
+    ///
+    /// Through the switch rather than straight to the setting, because GTK
+    /// only runs the sliding animation from the switch's own gesture and
+    /// activation. Setting its state moves it there in one frame, which is
+    /// what made a key press look different from a click.
+    fn work_switch_row(self: &Rc<Self>, index: i32) {
+        let switch = self
+            .settings_switches
+            .borrow()
+            .iter()
+            .find(|(row, _)| *row == index)
+            .map(|(_, switch)| switch.clone());
+        match switch {
+            // Its own handler carries on from here, as it does for a click.
+            Some(switch) => {
+                switch.activate();
+            }
+            None => self.apply_switch_row(index),
+        }
+    }
+
+    /// What a switch row actually changes, once something has asked for it.
+    fn apply_switch_row(self: &Rc<Self>, index: i32) {
+        match index {
+            ROW_SOUNDS => self.toggle_sounds(),
+            ROW_PRIMARY_DESCRIPTION => self.toggle_audio_description(true),
+            ROW_SECONDARY_DESCRIPTION => self.toggle_audio_description(false),
+            ROW_PRIMARY_VOLUME | ROW_SECONDARY_VOLUME => self.toggle_settings_mute(index),
+            ROW_PRIMARY_SYNC | ROW_SECONDARY_SYNC => self.toggle_settings_offset(index),
+            UPDATE_SWITCH_ROW => self.toggle_update_checks(),
+            _ => {}
         }
     }
 
@@ -3975,7 +4058,60 @@ impl App {
         if on {
             self.check_for_updates(true);
         }
-        self.show_settings();
+        self.set_settings_switch(UPDATE_SWITCH_ROW, on);
+        self.refresh_version_row();
+    }
+
+    /// The version this is, on the left of its row.
+    fn version_label(&self) -> String {
+        format!("Current Version: v{}", env!("CARGO_PKG_VERSION"))
+    }
+
+    /// What the check made of it, on the right, or nothing while checking is
+    /// off. "Up to date" rather than "Latest", which beside an arrow read as
+    /// an instruction to go and get the latest rather than as a statement
+    /// that this is it.
+    fn version_status(&self) -> String {
+        if !self.config.borrow().check_for_updates {
+            return String::new();
+        }
+        match crate::updates::newer(&self.updates.borrow()) {
+            Some((version, _)) => {
+                format!(
+                    "Update available: v{}",
+                    version.trim_start_matches(['v', 'V'])
+                )
+            }
+            None => "Up to date".to_string(),
+        }
+    }
+
+    /// Redraws the row naming the version, in place.
+    ///
+    /// In place rather than by rebuilding the screen: turning the check on or
+    /// off changes two words, and rebuilding for it threw the whole page away
+    /// and drew it again - which flickers and moves every row under whatever
+    /// was pointing at one.
+    fn refresh_version_row(&self) {
+        let list = self.settings_list.borrow().clone();
+        let Some(row) = list.and_then(|list| list.row_at_index(UPDATE_STATUS_ROW)) else {
+            return;
+        };
+        let (label, value) = (self.version_label(), self.version_status());
+        let widget = menu_row(&label, &value, true);
+        // The arrow means "this opens something", so it belongs only when
+        // there is a release to go and look at.
+        let newer = crate::updates::newer(&self.updates.borrow()).is_some();
+        if let Some(chevron) = widget.last_child() {
+            chevron.set_visible(newer);
+        }
+        row.set_child(Some(&widget));
+        name_it(&row, &row_name(&label, &value));
+        if newer {
+            row.add_css_class("tp-badge-row");
+        } else {
+            row.remove_css_class("tp-badge-row");
+        }
     }
 
     /// Opens the release page in whatever the machine uses for links.
@@ -4022,9 +4158,11 @@ impl App {
             *app.updates.borrow_mut() = state;
             app.draw_update_badge();
             // Only if Settings is open behind it, so the answer appears
-            // rather than waiting to be opened again.
+            // rather than waiting to be opened again. The one row, not the
+            // screen: rebuilding it under somebody reading it is a flicker
+            // and a jump for the sake of two words.
             if *app.screen.borrow() == Screen::Settings {
-                app.show_settings();
+                app.refresh_version_row();
             }
             glib::ControlFlow::Break
         });
@@ -6220,6 +6358,22 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
 }
 
 /// How a settings row reads aloud: the setting, then what it is set to.
+/// Whether a settings row carries a switch, and so is worked by the switch
+/// rather than by a click anywhere along it.
+fn row_has_switch(index: i32) -> bool {
+    matches!(
+        index,
+        ROW_SOUNDS
+            | ROW_PRIMARY_DESCRIPTION
+            | ROW_SECONDARY_DESCRIPTION
+            | ROW_PRIMARY_VOLUME
+            | ROW_SECONDARY_VOLUME
+            | ROW_PRIMARY_SYNC
+            | ROW_SECONDARY_SYNC
+            | UPDATE_SWITCH_ROW
+    )
+}
+
 fn row_name(label: &str, value: &str) -> String {
     if value.is_empty() {
         label.to_string()
@@ -6351,7 +6505,6 @@ fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
     // that about nothing in particular.
     name_it(&switch, label);
     switch.set_can_focus(false);
-    switch.set_can_target(false);
     switch.set_valign(gtk::Align::Center);
     row.append(&switch);
 
@@ -6404,6 +6557,10 @@ fn slider_row(
     scale.set_can_focus(false);
     scale.set_value(now);
     scale.add_css_class("tp-progress");
+    // Settings bars only. The same class draws the video timeline and the
+    // bars in the volume panel, which sit over a picture rather than on a
+    // page of rows and are not the ones that disappear into the background.
+    scale.add_css_class("tp-bar");
     name_it(&scale, label);
     row.append(&scale);
 
@@ -6428,7 +6585,6 @@ fn slider_row(
         switch.set_active(on);
         name_it(&switch, label);
         switch.set_can_focus(false);
-        switch.set_can_target(false);
         switch.set_valign(gtk::Align::Center);
         row.append(&switch);
         // A bar that cannot be moved says so, rather than being moved to no
@@ -6878,17 +7034,23 @@ fn style_css(scale: f64, dark: bool) -> String {
             min-width: {switch_w}px;
             min-height: {switch_h}px;
             border-radius: {switch_h}px;
+            background-color: {trough};
+            background-image: none;
+            border-color: transparent;
         }}
         .tp-row switch > slider {{
             min-width: {slider}px;
             min-height: {slider}px;
             border-radius: {switch_h}px;
+            /* The same knob as a slider carries, for the same reason. Only
+               while the switch is off: checked, the knob sits on the lit fill
+               and needs to be the dark one below. */
+            background-color: {knob};
         }}
         .tp-row switch:checked {{
-            background-color: {switch_on};
-            border-color: {switch_on};
+            background-color: {fill};
+            border-color: {fill};
         }}
-        .tp-row switch:checked > slider {{ background-color: {switch_knob}; }}
         .tp-chevron {{ font-size: {row}px; opacity: 0.5; }}
         .tp-hint {{ font-size: {hint}px; opacity: 0.7; }}
         /* The one screen made of paragraphs. Looser than a row of settings,
@@ -7063,7 +7225,7 @@ fn style_css(scale: f64, dark: bool) -> String {
            very thing that says where playback is. */
         .tp-progress.tp-selected {{ background-color: transparent; }}
         .tp-progress.tp-selected slider {{
-            background-color: #ffffff;
+            background-color: {knob};
             outline: {outline}px solid {highlight};
             outline-offset: {outline}px;
             min-width: {handle}px;
@@ -7099,6 +7261,41 @@ fn style_css(scale: f64, dark: bool) -> String {
         .tp-subtitles-button:disabled {{ opacity: 0.2; }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
+        /* Settings bars, drawn to be found rather than to be tasteful. The
+           theme's own colours put a faint handle on a faint trough, which on
+           a dark background is a bar that has to be looked for.
+
+           Three steps apart, so the parts stay told from each other: the
+           handle brightest, the part behind it dimmer, the rest dimmer again.
+           Deliberately not the highlight colour, which is what a selected row
+           is painted with - a blue bar on a blue row is the one case where
+           the theme's choice vanishes completely. */
+        .tp-bar trough {{ background-color: {trough}; background-image: none; }}
+        .tp-bar trough > highlight, .tp-bar progress {{
+            background-color: {fill};
+            background-image: none;
+        }}
+        /* `background-image: none` first, or none of the colour below shows:
+           the theme paints handles and troughs with a gradient image, which
+           sits over any background colour set under it. The same trap the
+           transport buttons work around. */
+        .tp-bar slider, .tp-row switch > slider {{
+            background-image: none;
+            background-color: {knob};
+            box-shadow: none;
+            /* A ring against the knob's own brightness, so one knob colour
+               reads both on the dim trough and on the lit fill it travels
+               onto - sliders and switches alike. */
+            border: {edge}px solid {knob_edge};
+        }}
+        .tp-bar slider {{
+            min-width: {handle}px;
+            min-height: {handle}px;
+        }}
+        /* An output that is silenced or a delay not being applied: the row
+           still says what it is set to, quietly. */
+        .tp-bar:disabled trough > highlight,
+        .tp-bar:disabled progress {{ background-color: {trough}; }}
         /* Reads as a path rather than a row of buttons, until one takes
            focus and the shared button:focus rule highlights it. */
         .tp-crumb {{
@@ -7189,8 +7386,24 @@ fn style_css(scale: f64, dark: bool) -> String {
         radius = px(8.0),
         outline = px(2.0).max(1),
         handle = px(18.0),
-        switch_on = if dark { "#dcdcdc" } else { "#707070" },
-        switch_knob = if dark { "#1c1c1c" } else { "#ffffff" },
+        // Bright on dark; on light a white knob held in by its ring rather
+        // than a dark disc, which read as heavy against a white row and
+        // heavier still in a column of them.
+        knob = if dark { "#dcdcdc" } else { "#ffffff" },
+        fill = if dark { "#b9b9b9" } else { "#8e8e8e" },
+        trough = if dark {
+            "rgba(255, 255, 255, 0.13)"
+        } else {
+            "rgba(0, 0, 0, 0.11)"
+        },
+        // On light the ring is what makes a white knob visible at all, so
+        // it carries the contrast the knob itself no longer does.
+        knob_edge = if dark {
+            "rgba(0, 0, 0, 0.55)"
+        } else {
+            "rgba(0, 0, 0, 0.38)"
+        },
+        edge = px(1.0).max(1),
         switch_w = px(64.0),
         switch_h = px(32.0),
         slider = px(26.0),
@@ -7369,11 +7582,11 @@ mod settings_rows {
         assert_eq!(positions.to_vec(), expected);
     }
 
-    /// The row under the switch is the one row not in `SETTINGS_ORDER`: it is
-    /// pushed only while the check is on, so it sits past the fixed rows.
+    /// The version sits last, under the switch that decides whether anything
+    /// is said about newer ones.
     #[test]
-    fn the_update_status_row_follows_the_fixed_rows() {
-        assert_eq!(UPDATE_STATUS_ROW, SETTINGS_ROWS as i32);
+    fn the_version_row_comes_last_and_follows_the_switch() {
+        assert_eq!(UPDATE_STATUS_ROW, SETTINGS_ROWS as i32 - 1);
         assert_eq!(UPDATE_SWITCH_ROW, UPDATE_STATUS_ROW - 1);
     }
 
