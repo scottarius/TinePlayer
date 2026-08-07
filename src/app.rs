@@ -6725,9 +6725,10 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
 fn browser_row(icon: &str, text: &str) -> gtk::Box {
     // The padding goes on the row rather than the label, so it applies
     // before the icon as well as around the text.
+    //
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(16)
+        .spacing(12)
         .css_classes(["tp-row"])
         .build();
 
@@ -7178,13 +7179,13 @@ fn style_css(scale: f64, dark: bool) -> String {
         badge_indent = px(24.0),
         // What reads against the selection highlight rather than into it.
         on_highlight = "#ffffff",
-        row = px(26.0),
+        row = px(21.0),
         hint = px(20.0),
         small = px(17.0),
         tight_v = px(7.0),
         tight_h = px(10.0),
-        pad_v = px(16.0),
-        pad_h = px(24.0),
+        pad_v = px(9.0),
+        pad_h = px(18.0),
         radius = px(8.0),
         outline = px(2.0).max(1),
         handle = px(18.0),
@@ -7201,7 +7202,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         crumb_pad = px(6.0),
         leading = px(38.0),
         back_icon = px(22.0),
-        row_icon = px(22.0),
+        row_icon = px(18.0),
         bar = px(6.0),
         // A literal color rather than a theme name: GTK's named colors
         // differ between themes and libadwaita, and an undefined one makes
