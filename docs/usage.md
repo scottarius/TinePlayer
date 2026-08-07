@@ -113,12 +113,33 @@ Everything is reachable with a keyboard or a gamepad. A mouse is not required, b
 The playback controls hide themselves after a few seconds of stillness, and
 come back on any interaction.
 
-![The playback control bar, with the volume panel open above it
-showing a slider for each output.](screenshots/control-bar.png)
+![The playback control bar: the position along the top, then settings, stop,
+skip back, pause, skip forward, subtitles, volume and
+fullscreen.](screenshots/control-bar.png)
 
-Each output keeps its own volume, so the described or second-language track can
-sit at a different level from the one the room is hearing. <kbd>M</kbd> mutes
-and restores both at once.
+### Volume and sync
+
+The volume button opens a panel above the controls, holding audio settings
+for each output. When open, the controls will not auto-hide until closed.
+
+![The volume panel, with a volume and a sync bar under each output
+device.](screenshots/volume-panel.png)
+
+**Volume** levels can be set per output. The speaker icons next to the
+volume sliders will mute each separately. <kbd>M</kbd>, or holding the main
+volume button, mutes and restores both outputs at once.
+
+**Sync** adjusts the audio delay so it lines up with the picture. Bluetooth
+headphones and other speakers can add a delay of their own and feel out of sync.
+It can be adjusted and fine-tuned here while the video is playing, per output.
+A positive value holds that output back, for sound arriving ahead of the picture;
+a negative one moves it earlier.
+
+The sync icon toggles that output's delay on and off while keeping whatever the delay is
+set to
+
+Both are saved and persist between runs. See
+[Audio Sync](configuration.md#audio-sync).
 
 ## Subtitles
 

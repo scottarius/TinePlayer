@@ -53,17 +53,57 @@ pub enum Row {
 /// knocked on last week would be a bug rather than a memory.
 type VolumeHandler = Box<dyn Fn(&str, f64, bool, bool)>;
 
+/// Told which output was shifted and by how many milliseconds. Separate from
+/// [`VolumeHandler`] because a delay is always worth keeping: unlike silencing
+/// everything at once, it describes the equipment rather than the moment.
+type SyncHandler = Box<dyn Fn(&str, f64, bool)>;
+
+/// Which of an output's two controls is being driven.
+///
+/// The panel is navigated by this pair rather than by output alone: up and
+/// down step through every control of every output in turn, so that grouping
+/// the two under a device heading reads the way it behaves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Control {
+    Volume,
+    Sync,
+}
+
 /// One output's controls inside the volume panel.
 struct Output {
     role: &'static str,
+    /// The heading and both rows, hidden together when this output is not in
+    /// use.
+    group: gtk::Box,
     row: gtk::Box,
     mute: gtk::Button,
     level: gtk::Scale,
+    level_reading: gtk::Label,
+    /// The row and slider for how far this output is shifted in time, with
+    /// the button that turns the shift on and off.
+    sync_row: gtk::Box,
+    sync: gtk::Scale,
+    sync_reading: gtk::Label,
+    sync_toggle: gtk::Button,
+    /// Whether the shift is being applied. Off keeps the slider where it is:
+    /// the value is what somebody found by ear, and losing it to hear the
+    /// difference for a moment would be the opposite of useful.
+    sync_on: Cell<bool>,
     muted: Cell<bool>,
     /// What this output was doing before everything was silenced at once, so
     /// that letting go of it puts back what was there rather than unmuting an
     /// output somebody had deliberately turned off.
     before_hush: Cell<bool>,
+}
+
+impl Output {
+    /// The focusable row for one of this output's controls.
+    fn row_for(&self, control: Control) -> &gtk::Box {
+        match control {
+            Control::Volume => &self.row,
+            Control::Sync => &self.sync_row,
+        }
+    }
 }
 
 /// How long the strip stays up after the last input. Long enough to read a
@@ -99,6 +139,33 @@ pub const HOLD: Duration = Duration::from_millis(600);
 /// enough to cross it in a second of held input, fine enough to settle on a
 /// level rather than overshoot it.
 const VOLUME_STEP: f64 = 0.05;
+
+/// How wide the panel is, before scaling. A minimum rather than a fixed
+/// width, but with the device names now cut to fit rather than stretching it,
+/// it is what the panel actually comes out at.
+const PANEL_WIDTH: f64 = 420.0;
+
+/// Between a row's button, its bar and its reading. The same for both rows,
+/// because different spacing gives the two bars different lengths and they
+/// sit one above the other.
+const ROW_SPACING: i32 = 12;
+
+/// How far one press shifts an output, in milliseconds. The same step the
+/// settings slider uses, which is about the smallest change that can be told
+/// apart against a picture.
+const SYNC_STEP: f64 = 10.0;
+
+/// The reading beside a bar in the panel.
+///
+/// One width for both rows, so the bars above and below each other start and
+/// end in the same place, and the same width the settings sliders use.
+fn reading_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("tp-hint");
+    label.set_xalign(1.0);
+    label.set_width_chars(crate::app::READING_CHARS);
+    label
+}
 
 /// Gives a control a name for anyone who cannot see the picture on it.
 ///
@@ -165,10 +232,16 @@ pub struct Controls {
     row: Cell<Row>,
     /// Told about every level and mute change, whichever way it was made.
     on_volume: RefCell<Option<VolumeHandler>>,
+    /// The same for a change to how far an output is shifted in time.
+    on_sync: RefCell<Option<SyncHandler>>,
     /// The volume panel, and which output within it is selected.
     panel: gtk::Revealer,
     outputs: Vec<Output>,
     output: Cell<usize>,
+    /// Which of the selected output's two controls is being driven. Together
+    /// with `output` this is the position in the panel: up and down step
+    /// through every control of every output in turn.
+    control: Cell<Control>,
     /// The volume button's own icon, which reports everything being silenced
     /// at once: the panel it opens says so too, but not while it is closed.
     volume_icon: gtk::Image,
@@ -310,9 +383,13 @@ impl Controls {
         panel.add_css_class("tp-volume-panel");
         let mut rows = Vec::new();
         for (role, name) in outputs {
+            // Cut rather than allowed to stretch the panel. Device names run
+            // long - "Headphones (2- Arctis Nova Pro Wireless)" - and a panel
+            // sized to the longest one would be most of the screen.
             let label = gtk::Label::builder()
                 .label(name)
                 .halign(gtk::Align::Start)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
                 .css_classes(["tp-hint"])
                 .build();
 
@@ -330,32 +407,81 @@ impl Controls {
             level.add_css_class("tp-progress");
             name_it(&level, &format!("Volume, {name}"));
 
-            let pair = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(12)
-                .build();
-            pair.append(&mute);
-            pair.append(&level);
+            let level_reading = reading_label(&crate::app::volume_label(1.0, false));
 
+            // The device names itself once, above its controls, rather than
+            // each control repeating it. The heading is not focusable, so it
+            // is never stepped onto and never announced on its own - which is
+            // why each row below carries the device in its own name.
             let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(ROW_SPACING)
+                .build();
+            row.set_focusable(true);
+            name_it(&row, &format!("Volume, {name}"));
+            row.append(&mute);
+            row.append(&level);
+            row.append(&level_reading);
+
+            let sync = gtk::Scale::with_range(
+                gtk::Orientation::Horizontal,
+                -crate::config::MAX_OFFSET_MS,
+                crate::config::MAX_OFFSET_MS,
+                1.0,
+            );
+            sync.set_draw_value(false);
+            sync.set_hexpand(true);
+            sync.set_can_focus(false);
+            sync.add_css_class("tp-progress");
+            name_it(&sync, &format!("Audio sync, {name}"));
+
+            // The same shape as the row above: a button the width of the
+            // mute one, then the bar. Pressing it puts the output back in
+            // sync, which is the one value somebody is ever certain they
+            // want and the one that stepping in tens cannot reach from an
+            // arbitrary place a pointer left it in.
+            let sync_toggle = gtk::Button::new();
+            sync_toggle.set_child(Some(&crate::app::sync_image(scale)));
+            sync_toggle.add_css_class("tp-transport-button");
+            sync_toggle.set_can_focus(false);
+            name_it(&sync_toggle, &format!("Use audio sync, {name}"));
+
+            let sync_reading = reading_label(&crate::app::offset_label(0.0));
+
+            // The same spacing as the row above, not just the same widgets:
+            // the two bars sit one under the other, and gaps of different
+            // sizes either side leave them visibly different lengths.
+            let sync_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(ROW_SPACING)
+                .build();
+            sync_row.set_focusable(true);
+            name_it(&sync_row, &format!("Audio sync, {name}"));
+            sync_row.append(&sync_toggle);
+            sync_row.append(&sync);
+            sync_row.append(&sync_reading);
+
+            let group = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
                 .spacing(4)
                 .build();
-            // The row takes the focus for this output, rather than the mute
-            // button or the slider inside it: which of the two outputs you
-            // are on is the part worth hearing, and the controls within it
-            // are named already.
-            row.set_focusable(true);
-            name_it(&row, name);
-            row.append(&label);
-            row.append(&pair);
-            panel.append(&row);
+            group.append(&label);
+            group.append(&row);
+            group.append(&sync_row);
+            panel.append(&group);
 
             rows.push(Output {
                 role,
+                group,
                 row,
                 mute,
                 level,
+                level_reading,
+                sync_row,
+                sync,
+                sync_reading,
+                sync_toggle,
+                sync_on: Cell::new(false),
                 muted: Cell::new(false),
                 before_hush: Cell::new(false),
             });
@@ -365,7 +491,7 @@ impl Controls {
         // popover is its own surface, constrained to the monitor and not to
         // the window - GTK 3's window constraint is gone - so in a window it
         // hangs off the edge of the frame. Built into the strip it cannot.
-        panel.set_size_request((280.0 * scale) as i32, -1);
+        panel.set_size_request((PANEL_WIDTH * scale) as i32, -1);
         panel.set_halign(gtk::Align::End);
         let panel_reveal = gtk::Revealer::builder()
             .transition_type(gtk::RevealerTransitionType::SlideUp)
@@ -546,9 +672,11 @@ impl Controls {
             focused: Cell::new(PLAY),
             row: Cell::new(Row::None),
             on_volume: RefCell::new(None),
+            on_sync: RefCell::new(None),
             panel: panel_reveal,
             outputs: rows,
             output: Cell::new(0),
+            control: Cell::new(Control::Volume),
             volume_icon,
             hushed: Cell::new(false),
             hold: Cell::new(0),
@@ -606,10 +734,26 @@ impl Controls {
                     handle.toggle_muted(index);
                 });
             }
+            {
+                let handle = controls.clone();
+                output.level.connect_change_value(move |_, _, value| {
+                    handle.aim_at(index, Control::Volume);
+                    handle.set_level(index, value.clamp(0.0, 1.0));
+                    glib::Propagation::Proceed
+                });
+            }
+            {
+                let handle = controls.clone();
+                output.sync_toggle.connect_clicked(move |_| {
+                    handle.aim_at(index, Control::Sync);
+                    handle.toggle_sync(index);
+                });
+            }
             let handle = controls.clone();
-            output.level.connect_change_value(move |_, _, value| {
-                handle.aim_at_output(index);
-                handle.set_level(index, value.clamp(0.0, 1.0));
+            let max = crate::config::MAX_OFFSET_MS;
+            output.sync.connect_change_value(move |_, _, value| {
+                handle.aim_at(index, Control::Sync);
+                handle.set_sync(index, value.clamp(-max, max));
                 glib::Propagation::Proceed
             });
         }
@@ -625,12 +769,15 @@ impl Controls {
         for output in &self.outputs {
             match levels.iter().find(|(role, _, _)| *role == output.role) {
                 Some(&(_, level, muted)) => {
-                    output.row.set_visible(true);
+                    output.group.set_visible(true);
                     output.level.set_value(level);
+                    output
+                        .level_reading
+                        .set_text(&crate::app::volume_label(level, muted));
                     output.muted.set(muted);
                     Self::draw_mute(&output.mute, level, muted);
                 }
-                None => output.row.set_visible(false),
+                None => output.group.set_visible(false),
             }
         }
     }
@@ -683,10 +830,11 @@ impl Controls {
                 self.timeline_active(false);
                 self.focused.set(VOLUME);
                 self.highlight(Some(VOLUME));
-                // The output nearest the button, since the panel opens upward
+                // The row nearest the button, since the panel opens upward
                 // from it: going up the list, the first row reached is the one
                 // at the bottom of it.
                 self.output.set(self.last_output());
+                self.control.set(Control::Sync);
                 self.selected.set(false);
                 self.select_output_row(None);
                 self.panel.set_reveal_child(true);
@@ -820,7 +968,15 @@ impl Controls {
     /// pointer does. If a mark is already showing it follows along, so the
     /// two ways of driving it do not disagree about where it is.
     fn aim_at_output(&self, index: usize) {
+        self.aim_at(index, Control::Volume);
+    }
+
+    /// Points the panel at one control of one output, which is what a pointer
+    /// touching a slider means: it is about to change that one, so the
+    /// keyboard should carry on from there rather than from wherever it was.
+    fn aim_at(&self, index: usize, control: Control) {
         self.output.set(index);
+        self.control.set(control);
         if self.selected.get() {
             self.select_output();
         }
@@ -830,8 +986,15 @@ impl Controls {
     fn last_output(&self) -> usize {
         self.outputs
             .iter()
-            .rposition(|output| output.row.is_visible())
+            .rposition(|output| output.group.is_visible())
             .unwrap_or(0)
+    }
+
+    /// The lowest place in the panel, counted through every control. Distinct
+    /// from [`Self::last_output`], which is an output: conflating the two made
+    /// the panel start at a position no output has, so nothing moved.
+    fn last_position(&self) -> usize {
+        self.last_output() * 2 + 1
     }
 
     /// Whether the selected output is the lowest one, which is what makes a
@@ -839,7 +1002,7 @@ impl Controls {
     /// nothing is marked, so the first press takes hold of the panel instead
     /// of closing it.
     pub fn at_last_output(&self) -> bool {
-        self.selected.get() && self.output.get() >= self.last_output()
+        self.selected.get() && self.position() >= self.last_position()
     }
 
     /// Moves between outputs, stopping at either end rather than wrapping,
@@ -855,14 +1018,21 @@ impl Controls {
             self.flash(false);
             return;
         }
-        let mut index = self.output.get() as isize;
+        // Every control of every output in turn, so that moving down from an
+        // output's volume lands on its own sync rather than skipping to the
+        // next device. Counted rather than held as a flat list: the outputs
+        // are the thing everything else here is indexed by, and a second
+        // ordering to keep in step would be one more thing to get wrong.
+        let mut position = self.position() as isize;
         loop {
-            index += delta;
-            if index < 0 || index as usize >= self.outputs.len() {
+            position += delta;
+            if position < 0 || position as usize >= self.outputs.len() * 2 {
                 return;
             }
-            if self.outputs[index as usize].row.is_visible() {
-                self.output.set(index as usize);
+            let (index, control) = Self::at(position as usize);
+            if self.outputs[index].group.is_visible() {
+                self.output.set(index);
+                self.control.set(control);
                 break;
             }
         }
@@ -870,19 +1040,42 @@ impl Controls {
         self.flash(false);
     }
 
+    /// Where the panel is now, counted through every control of every output.
+    fn position(&self) -> usize {
+        self.output.get() * 2 + usize::from(self.control.get() == Control::Sync)
+    }
+
+    /// The output and control at a counted position.
+    fn at(position: usize) -> (usize, Control) {
+        (
+            position / 2,
+            if position.is_multiple_of(2) {
+                Control::Volume
+            } else {
+                Control::Sync
+            },
+        )
+    }
+
     fn select_output(&self) {
-        self.select_output_row(Some(self.output.get()));
+        self.select_output_row(Some(self.position()));
         // Everything that moves within the panel comes through here, both
         // the first press that takes hold of it and every one after.
         self.announce_current();
     }
 
-    fn select_output_row(&self, index: Option<usize>) {
-        for (position, output) in self.outputs.iter().enumerate() {
-            if Some(position) == index {
-                output.row.add_css_class("tp-selected");
-            } else {
-                output.row.remove_css_class("tp-selected");
+    /// Marks one control of one output, by counted position, and clears every
+    /// other. `None` clears them all.
+    fn select_output_row(&self, position: Option<usize>) {
+        for (index, output) in self.outputs.iter().enumerate() {
+            for control in [Control::Volume, Control::Sync] {
+                let this = index * 2 + usize::from(control == Control::Sync);
+                let row = output.row_for(control);
+                if Some(this) == position {
+                    row.add_css_class("tp-selected");
+                } else {
+                    row.remove_css_class("tp-selected");
+                }
             }
         }
     }
@@ -896,9 +1089,112 @@ impl Controls {
         let Some(output) = self.outputs.get(index) else {
             return;
         };
-        let level = (output.level.value() + delta as f64 * VOLUME_STEP).clamp(0.0, 1.0);
-        output.level.set_value(level);
-        self.set_level(index, level);
+        match self.control.get() {
+            Control::Volume => {
+                let level = (output.level.value() + delta as f64 * VOLUME_STEP).clamp(0.0, 1.0);
+                output.level.set_value(level);
+                self.set_level(index, level);
+            }
+            Control::Sync => self.shift_by(index, delta),
+        }
+    }
+
+    /// Steps one output's shift, snapped to whole steps.
+    ///
+    /// Snapped because a pointer can leave the slider anywhere - 37ms, say -
+    /// and stepping in tens from there would pass either side of zero without
+    /// ever landing on it, which is the one value somebody is certain to want
+    /// back.
+    fn shift_by(self: &Rc<Self>, index: usize, delta: isize) {
+        let Some(output) = self.outputs.get(index) else {
+            return;
+        };
+        let steps = (output.sync.value() / SYNC_STEP).round() + delta as f64;
+        self.shift_to(index, steps * SYNC_STEP);
+    }
+
+    /// Puts one output at a given shift, moving the slider with it.
+    fn shift_to(self: &Rc<Self>, index: usize, ms: f64) {
+        let Some(output) = self.outputs.get(index) else {
+            return;
+        };
+        let max = crate::config::MAX_OFFSET_MS;
+        let ms = ms.clamp(-max, max);
+        output.sync.set_value(ms);
+        self.set_sync(index, ms);
+        self.flash(false);
+    }
+
+    /// Shifts one output in time and tells whoever is listening, so the change
+    /// is heard against the picture as it is made. That is the whole reason
+    /// this sits over the video rather than only in the settings menu: a delay
+    /// can be judged against what is on screen and not by arithmetic.
+    fn set_sync(self: &Rc<Self>, index: usize, ms: f64) {
+        let Some(output) = self.outputs.get(index) else {
+            return;
+        };
+        // Moving the bar turns the delay on, the way turning an output up
+        // unmutes it: a control that moves and changes nothing audible reads
+        // as a fault rather than as a setting.
+        output.sync_on.set(true);
+        Self::draw_sync(&output.sync_toggle, true);
+        output.sync_reading.set_text(&crate::app::offset_label(ms));
+        if let Some(handler) = self.on_sync.borrow().as_ref() {
+            handler(output.role, ms, true);
+        }
+    }
+
+    /// Uses one output's shift or stops using it, keeping what it is set to.
+    ///
+    /// The same gesture as mute, and for the same reason: hearing the
+    /// difference means turning it off and on, which is no use if doing so
+    /// throws away the value being judged.
+    fn toggle_sync(self: &Rc<Self>, index: usize) {
+        let Some(output) = self.outputs.get(index) else {
+            return;
+        };
+        let on = !output.sync_on.get();
+        output.sync_on.set(on);
+        Self::draw_sync(&output.sync_toggle, on);
+        let ms = output.sync.value();
+        output
+            .sync_reading
+            .set_text(&crate::app::offset_label(if on { ms } else { 0.0 }));
+        if let Some(handler) = self.on_sync.borrow().as_ref() {
+            handler(output.role, ms, on);
+        }
+        self.flash(false);
+    }
+
+    /// Dimmed while the delay is not being used. One drawn mark rather than
+    /// two: there is no second glyph meaning "not synchronised", and a button
+    /// that changes shape says something different happened.
+    fn draw_sync(button: &gtk::Button, on: bool) {
+        if on {
+            button.remove_css_class("tp-off");
+        } else {
+            button.add_css_class("tp-off");
+        }
+    }
+
+    /// Told about a shift or about the switch, however it was made.
+    pub fn connect_sync(&self, handler: impl Fn(&str, f64, bool) + 'static) {
+        *self.on_sync.borrow_mut() = Some(Box::new(handler));
+    }
+
+    /// Where each output's shift stands and whether it is being applied, so
+    /// the panel shows what the configuration holds when playback starts.
+    pub fn set_syncs(&self, offsets: &[(&str, f64, bool)]) {
+        for output in &self.outputs {
+            if let Some(&(_, ms, on)) = offsets.iter().find(|(role, ..)| *role == output.role) {
+                output.sync.set_value(ms);
+                output.sync_on.set(on);
+                Self::draw_sync(&output.sync_toggle, on);
+                output
+                    .sync_reading
+                    .set_text(&crate::app::offset_label(if on { ms } else { 0.0 }));
+            }
+        }
     }
 
     /// Turning an output up unmutes it: hearing nothing after asking for more
@@ -910,6 +1206,9 @@ impl Controls {
         };
         let muted = output.muted.get() && level <= 0.0;
         output.muted.set(muted);
+        output
+            .level_reading
+            .set_text(&crate::app::volume_label(level, muted));
         Self::draw_mute(&output.mute, level, muted);
         self.report(index, true);
         self.flash(false);
@@ -1031,9 +1330,14 @@ impl Controls {
                     button.emit_clicked();
                 }
             }
-            // In the panel it is the selected output that gets pressed, and
-            // silencing it is the only thing there to press.
-            Row::Volume => self.toggle_muted(self.output.get()),
+            // In the panel it is the button belonging to the selected row,
+            // and both are the same gesture: mute on a volume row, use the
+            // delay or not on a sync row. Neither loses what it is turning
+            // off - the level and the delay both stay where they were.
+            Row::Volume => match self.control.get() {
+                Control::Volume => self.toggle_muted(self.output.get()),
+                Control::Sync => self.toggle_sync(self.output.get()),
+            },
             _ => {}
         }
     }
@@ -1069,7 +1373,7 @@ impl Controls {
             Row::Volume => self
                 .outputs
                 .get(self.output.get())
-                .map(|output| output.row.clone().upcast()),
+                .map(|output| output.row_for(self.control.get()).clone().upcast()),
         };
 
         name_it(
@@ -1400,7 +1704,13 @@ impl Controls {
 
         let expected = self.generation.get().wrapping_add(1);
         self.generation.set(expected);
-        if paused {
+        // Paused, or with the audio panel open. Lining an output up against
+        // the picture means listening for a while and changing nothing, which
+        // is exactly what the hide timer reads as having wandered off - and
+        // having the strip vanish mid-adjustment loses the row you were on.
+        // Closing the panel comes back through here and starts the countdown
+        // again.
+        if paused || self.row.get() == Row::Volume {
             return;
         }
 

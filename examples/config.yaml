@@ -89,6 +89,34 @@ secondary_volume: 1.0
 primary_muted: false
 secondary_muted: false
 
+# --- Audio sync --------------------------------------------------------------
+#
+# Bluetooth headphones or other speaker setups may add noticeable delay, and not
+# all systems compensate for it. Or perhaps the audio track is just not in sync
+# with the video to begin with. This setting nudges the audio forward or
+# backwards to line it up by ear.
+#
+# In milliseconds, from -1000 to 1000. A positive value holds that output back,
+# for sound arriving before the picture. A negative one moves it earlier, for
+# sound arriving after it.
+#
+# Each output is corrected separately, so wireless headphones can be lined up
+# without touching what's playing on speakers. Easiest to adjust live during
+# playback from the volume button, where the change is heard as it is made.
+
+primary_offset_ms: 0
+secondary_offset_ms: 0
+
+# Whether each delay is applied. Off keeps the value and stops using it, which
+# is how you check whether a delay is helping without losing the figure you
+# found by ear.
+#
+# Missing means off, since nobody starts out needing a delay - so a delay set
+# here by hand does nothing until the matching switch below is true as well.
+
+primary_offset_on: false
+secondary_offset_on: false
+
 # How a subtitle is chosen for a video you have not picked one for. Either one
 # of the automatic modes, or a language code to always prefer that language:
 #

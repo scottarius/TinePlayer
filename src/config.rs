@@ -115,6 +115,40 @@ pub struct Config {
     pub primary_muted: bool,
     #[serde(default)]
     pub secondary_muted: bool,
+    /// How far to shift this output in time, in milliseconds, so it lines up
+    /// with the picture and with the other output.
+    ///
+    /// Kept per output rather than per video for the same reason the level is:
+    /// how late a set of headphones runs is a property of the headphones. A
+    /// Bluetooth pair costs 100-200ms of encode, transmission and buffering,
+    /// and no platform reports that to GStreamer - every sink reports its own
+    /// buffer size instead, identically for a Bluetooth headset and an HDMI
+    /// socket. So nothing can work it out on our behalf, and the only figure
+    /// available is the one somebody sets by ear.
+    ///
+    /// Either direction. Positive holds this output back; negative pulls it
+    /// forward, which is bounded by how much audio the pipeline has already
+    /// buffered - measured working to at least 600ms on a Pi. Forward matters
+    /// because the picture cannot be delayed: `gtk4paintablesink` has no
+    /// offset, so audio that lags the video can only be fixed by hurrying the
+    /// audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_offset_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_offset_ms: Option<f64>,
+    /// Whether that output's delay is applied. Off keeps the value and stops
+    /// using it, which is what somebody wants when checking whether a delay
+    /// is helping: the alternative is winding it to zero and having to find
+    /// the setting again afterwards.
+    ///
+    /// Absent means off. Nobody starts out needing a delay, so the switch
+    /// starts off and is turned on by whoever finds they need one. The cost
+    /// is that a delay written into the file by hand does nothing until this
+    /// is set alongside it, which the documentation says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_offset_on: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_offset_on: Option<bool>,
     #[serde(default)]
     pub primary_audio_description: bool,
     #[serde(default)]
@@ -175,6 +209,10 @@ impl Default for Config {
             secondary_volume: None,
             primary_muted: false,
             secondary_muted: false,
+            primary_offset_ms: None,
+            secondary_offset_ms: None,
+            primary_offset_on: None,
+            secondary_offset_on: None,
             primary_audio_description: false,
             secondary_audio_description: false,
             subtitle_language: None,
@@ -288,6 +326,53 @@ impl Config {
         }
     }
 
+    /// Clamped, because a delay outside the offered range is either no delay
+    /// at all or long enough to look like playback has stopped.
+    pub fn offset_ms(&self, role: &str) -> f64 {
+        let stored = match role {
+            "primary" => self.primary_offset_ms,
+            _ => self.secondary_offset_ms,
+        };
+        stored.unwrap_or(0.0).clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS)
+    }
+
+    /// Rounded to the millisecond: finer than that is below what anyone can
+    /// place by ear against a picture, and it keeps the file readable.
+    pub fn set_offset_ms(&mut self, role: &str, ms: f64) {
+        let ms = ms.clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS).round();
+        match role {
+            "primary" => self.primary_offset_ms = Some(ms),
+            _ => self.secondary_offset_ms = Some(ms),
+        }
+    }
+
+    /// Whether that output's delay is being applied. Unset means off.
+    pub fn offset_on(&self, role: &str) -> bool {
+        match role {
+            "primary" => self.primary_offset_on,
+            _ => self.secondary_offset_on,
+        }
+        .unwrap_or(false)
+    }
+
+    pub fn set_offset_on(&mut self, role: &str, on: bool) {
+        match role {
+            "primary" => self.primary_offset_on = Some(on),
+            _ => self.secondary_offset_on = Some(on),
+        }
+    }
+
+    /// What the pipeline should actually use: the stored delay while it is
+    /// on, and nothing while it is off. The stored value is left alone either
+    /// way, so turning it back on restores what was set rather than zero.
+    pub fn applied_offset_ms(&self, role: &str) -> f64 {
+        if self.offset_on(role) {
+            self.offset_ms(role)
+        } else {
+            0.0
+        }
+    }
+
     pub fn watched_percent(&self) -> f64 {
         self.watched_percent
             .unwrap_or(DEFAULT_WATCHED_PERCENT)
@@ -351,6 +436,23 @@ pub fn updates_path() -> PathBuf {
 /// false start rather than progress. Jellyfin uses 5%, which is what this
 /// matches; Kodi uses a flat 180 seconds, which is harsh on anything short.
 pub const DEFAULT_RESUME_MIN_PERCENT: f64 = 5.0;
+
+/// The furthest an output can be shifted, in milliseconds, in either
+/// direction.
+///
+/// Bluetooth costs 100-200ms and the platform already absorbs some of it - on
+/// Linux about 150ms, on macOS about 240ms, on Windows only 60ms - so the
+/// correction anyone actually dials in is well under half a second. A second
+/// is generous enough to cover a badly muxed file too, and short enough that
+/// holding the key never strands somebody a long way from where they meant to
+/// be.
+///
+/// The same figure serves both directions, though they are not symmetrical in
+/// what they cost. Holding a sink back is free. Pulling one forward spends
+/// buffered audio, and past what the pipeline holds it would arrive late and
+/// be dropped - measured working to at least 600ms on a Pi, which is where
+/// the limit was left rather than tuned to the edge.
+pub const MAX_OFFSET_MS: f64 = 1000.0;
 
 /// The floor under that share, for videos short enough that 5% is seconds.
 /// Also the whole rule for an entry saved before durations were recorded.
@@ -522,4 +624,109 @@ pub fn save_tracks(
             subtitle,
         });
     });
+}
+
+#[cfg(test)]
+mod offsets {
+    use super::{Config, MAX_OFFSET_MS};
+
+    /// Either role, since they are stored in separate fields and a match arm
+    /// that writes the wrong one silently moves the other output.
+    #[test]
+    fn each_role_keeps_its_own_offset() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 120.0);
+        config.set_offset_ms("secondary", -80.0);
+        assert_eq!(config.offset_ms("primary"), 120.0);
+        assert_eq!(config.offset_ms("secondary"), -80.0);
+    }
+
+    /// An output nothing has shifted is not shifted, rather than carrying
+    /// whatever a missing field decoded to.
+    #[test]
+    fn an_unset_offset_is_no_offset() {
+        let config = Config::default();
+        assert_eq!(config.offset_ms("primary"), 0.0);
+        assert_eq!(config.offset_ms("secondary"), 0.0);
+    }
+
+    /// Both directions, and on the way in as well as the way out: the file is
+    /// editable by hand, so a value past the limit can arrive without ever
+    /// having been through a slider.
+    #[test]
+    fn an_offset_past_the_limit_is_brought_back_to_it() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 5_000.0);
+        assert_eq!(config.offset_ms("primary"), MAX_OFFSET_MS);
+        config.set_offset_ms("primary", -5_000.0);
+        assert_eq!(config.offset_ms("primary"), -MAX_OFFSET_MS);
+
+        let hand_edited = Config {
+            primary_offset_ms: Some(9_000.0),
+            secondary_offset_ms: Some(-9_000.0),
+            ..Default::default()
+        };
+        assert_eq!(hand_edited.offset_ms("primary"), MAX_OFFSET_MS);
+        assert_eq!(hand_edited.offset_ms("secondary"), -MAX_OFFSET_MS);
+    }
+
+    /// Off until somebody turns it on, since nobody starts out needing a
+    /// delay - including when a value is present without the switch, which is
+    /// what a config edited by hand looks like.
+    #[test]
+    fn an_offset_does_nothing_until_it_is_turned_on() {
+        let mut config = Config::default();
+        assert!(!config.offset_on("primary"));
+
+        config.set_offset_ms("primary", 120.0);
+        assert!(!config.offset_on("primary"));
+        assert_eq!(config.applied_offset_ms("primary"), 0.0);
+
+        config.set_offset_on("primary", true);
+        assert_eq!(config.applied_offset_ms("primary"), 120.0);
+    }
+
+    /// The whole point of the switch: turning it off stops the delay being
+    /// used without losing the value, which somebody spent time finding by
+    /// ear and would otherwise have to find again.
+    #[test]
+    fn an_offset_turned_off_is_kept_but_not_applied() {
+        let mut config = Config::default();
+        config.set_offset_ms("secondary", -150.0);
+        config.set_offset_on("secondary", true);
+        config.set_offset_on("secondary", false);
+
+        assert_eq!(config.applied_offset_ms("secondary"), 0.0);
+        assert_eq!(config.offset_ms("secondary"), -150.0);
+
+        config.set_offset_on("secondary", true);
+        assert_eq!(config.applied_offset_ms("secondary"), -150.0);
+    }
+
+    /// Each output's switch is its own, like its delay.
+    #[test]
+    fn turning_one_output_off_leaves_the_other_alone() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 100.0);
+        config.set_offset_ms("secondary", 200.0);
+        config.set_offset_on("primary", true);
+        config.set_offset_on("secondary", true);
+        config.set_offset_on("primary", false);
+
+        assert_eq!(config.applied_offset_ms("primary"), 0.0);
+        assert_eq!(config.applied_offset_ms("secondary"), 200.0);
+        assert!(!config.offset_on("primary"));
+        assert!(config.offset_on("secondary"));
+    }
+
+    /// Stored to the millisecond, which is finer than anyone can place by ear
+    /// and keeps the file readable.
+    #[test]
+    fn an_offset_is_stored_rounded() {
+        let mut config = Config::default();
+        config.set_offset_ms("primary", 12.6);
+        assert_eq!(config.offset_ms("primary"), 13.0);
+        config.set_offset_ms("secondary", -12.6);
+        assert_eq!(config.offset_ms("secondary"), -13.0);
+    }
 }
