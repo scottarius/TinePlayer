@@ -3013,23 +3013,26 @@ impl App {
         // One modal replacing another hands back the page *behind* it instead
         // of the modal itself, or the dimming would stack up a layer deeper
         // every time.
-        let existing = self.window.child();
-        let backdrop: gtk::Widget = match existing {
+        //
+        // Nothing behind it is drawn as nothing. A menu built to stand in for
+        // the screen behind was what this did before there was a real one to
+        // use, and a rebuilt menu is not the screen it claims to be: it shows
+        // the main menu behind a dialog opened from somewhere else entirely.
+        // The window has a child from the first screen onwards, so what is
+        // left here is the moment before that.
+        let backdrop: gtk::Widget = match self.window.child() {
             Some(child) => match child.downcast::<gtk::Overlay>() {
                 Ok(overlay) => {
                     let under = overlay.child();
                     overlay.set_child(None::<&gtk::Widget>);
-                    match under {
-                        Some(under) => under,
-                        None => self.build_menu_page().0.upcast(),
-                    }
+                    under.unwrap_or_else(|| empty_backdrop().upcast())
                 }
                 Err(child) => {
                     self.window.set_child(None::<&gtk::Widget>);
                     child
                 }
             },
-            None => self.build_menu_page().0.upcast(),
+            None => empty_backdrop().upcast(),
         };
         // Not just visually behind: an insensitive page cannot take focus, so
         // neither tab nor the gamepad can reach what is underneath.
@@ -7047,6 +7050,15 @@ struct BrowserEntry {
     /// Something to read rather than somewhere to go: the line saying a
     /// folder holds nothing worth listing.
     notice: bool,
+}
+
+/// What sits behind a modal opened before there is a screen to sit behind it.
+///
+/// Blank on purpose. The alternative - building a menu page to stand in for
+/// the real one - draws a screen nobody navigated to, which is worse than an
+/// empty background because it looks like somewhere you could go back to.
+fn empty_backdrop() -> gtk::Box {
+    gtk::Box::new(gtk::Orientation::Vertical, 0)
 }
 
 /// Fills a listing, and leaves the notice as a line of text.
