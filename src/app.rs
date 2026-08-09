@@ -385,6 +385,12 @@ pub struct App {
     tracks: RefCell<Vec<AudioTrack>>,
     primary_track: RefCell<Option<u32>>,
     secondary_track: RefCell<Option<u32>>,
+    /// A separate audio file feeding an output, in place of any track inside
+    /// the video. Set from the command line only, until the picker that
+    /// chooses one exists. Takes precedence over that output's track, which
+    /// is left alone so it comes back if the file is cleared.
+    primary_file: RefCell<Option<Source>>,
+    secondary_file: RefCell<Option<Source>>,
     /// Everything on offer for the current file: streams inside it, then
     /// subtitle files sitting beside it.
     subtitle_options: RefCell<Vec<Subtitle>>,
@@ -590,6 +596,8 @@ impl App {
             update_badges: RefCell::new(Vec::new()),
             file: RefCell::new(None),
             tracks: RefCell::new(Vec::new()),
+            primary_file: RefCell::new(None),
+            secondary_file: RefCell::new(None),
             primary_track: RefCell::new(None),
             secondary_track: RefCell::new(None),
             subtitle_options: RefCell::new(Vec::new()),
@@ -746,11 +754,26 @@ impl App {
                     }
                 }
             };
+            // A spec naming a file that exists is an audio file to play on
+            // that output, rather than anything to look for inside the video.
+            // Checked before the track specs because none of them can be a
+            // path: a number, a language code and `ad` are all short words,
+            // and a file has to be there on disk to be taken for one.
+            let as_file = |spec: &str| {
+                let source = Source::parse(spec);
+                source.is_available().then_some(source)
+            };
             if let Some(spec) = preset.primary.as_deref() {
-                *app.primary_track.borrow_mut() = resolve(spec);
+                match as_file(spec) {
+                    Some(file) => *app.primary_file.borrow_mut() = Some(file),
+                    None => *app.primary_track.borrow_mut() = resolve(spec),
+                }
             }
             if let Some(spec) = preset.secondary.as_deref() {
-                *app.secondary_track.borrow_mut() = resolve(spec);
+                match as_file(spec) {
+                    Some(file) => *app.secondary_file.borrow_mut() = Some(file),
+                    None => *app.secondary_track.borrow_mut() = resolve(spec),
+                }
             }
 
             // Only touched when asked for, so a video's remembered
@@ -6052,6 +6075,15 @@ impl App {
         } else {
             None
         };
+        // A separate audio file wins for that output. The track it displaces
+        // is still remembered below, so clearing the file falls back to it.
+        let audio_for = |file: Option<Source>, track: Option<u32>| match file {
+            Some(file) => Some(crate::pipeline::AudioSource::File(file)),
+            None => track.map(crate::pipeline::AudioSource::Track),
+        };
+        let primary_audio = audio_for(self.primary_file.borrow().clone(), primary);
+        let secondary_audio = audio_for(self.secondary_file.borrow().clone(), secondary);
+
         let subtitle = self.subtitle.borrow().clone();
         if let Some(key) = self.storage_key() {
             crate::config::save_tracks(&key, primary, secondary, subtitle.clone());
@@ -6079,8 +6111,8 @@ impl App {
 
         let result = Playback::start(
             &path,
-            primary,
-            secondary,
+            primary_audio.as_ref(),
+            secondary_audio.as_ref(),
             subtitle.as_ref(),
             &self.config.borrow(),
             resume,

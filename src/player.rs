@@ -124,8 +124,8 @@ impl Playback {
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         source: &Source,
-        primary_track: Option<u32>,
-        secondary_track: Option<u32>,
+        primary_audio: Option<&crate::pipeline::AudioSource>,
+        secondary_audio: Option<&crate::pipeline::AudioSource>,
         subtitle: Option<&crate::subtitles::SubtitleChoice>,
         config: &Config,
         resume_ns: Option<u64>,
@@ -133,7 +133,7 @@ impl Playback {
         kodi_file: String,
         on_ended: impl Fn(Ended) + 'static,
     ) -> Result<Rc<Self>, String> {
-        let pipeline = build_pipeline(source, primary_track, secondary_track, subtitle, config)?;
+        let pipeline = build_pipeline(source, primary_audio, secondary_audio, subtitle, config)?;
 
         // gtk4paintablesink renders into a GdkPaintable rather than creating
         // its own window; handing that to a gtk::Picture is what embeds the

@@ -43,6 +43,20 @@ struct Targets {
     subtitle: Option<gst::Element>,
 }
 
+/// Where one output's audio comes from.
+///
+/// A track inside the video, or a whole separate file. The second is what
+/// makes TinePlayer usable on the films most people actually have: a download
+/// carries one language, and the other language - or the described version -
+/// arrives as an audio file of its own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AudioSource {
+    /// A stream inside the video, by the index `--list-tracks` prints.
+    Track(u32),
+    /// A separate audio file, local or remote.
+    File(Source),
+}
+
 /// Builds the playback pipeline for `source`.
 ///
 /// The source may be a local file or a remote URL - everything below treats
@@ -80,8 +94,8 @@ struct Targets {
 /// window. Caller reads the sink's `paintable` property to attach it.
 pub fn build_pipeline(
     source: &Source,
-    primary_track: Option<u32>,
-    secondary_track: Option<u32>,
+    primary_audio: Option<&AudioSource>,
+    secondary_audio: Option<&AudioSource>,
     subtitle: Option<&SubtitleChoice>,
     config: &Config,
 ) -> Result<gst::Pipeline, String> {
@@ -143,19 +157,34 @@ pub fn build_pipeline(
         attach_external_subtitle(&pipeline, overlay, &beside)?;
     }
 
-    // Grouped by track so that one decoded stream can feed two outputs
-    // instead of being decoded twice.
+    // Grouped by where the audio comes from, so that one decoded stream can
+    // feed two outputs instead of being decoded twice. Tracks are keyed by
+    // index and files by URI, which is what makes "both outputs on the same
+    // external file" cost one decode as well.
     let mut roles_by_track: HashMap<u32, Vec<&str>> = HashMap::new();
-    if let Some(track) = primary_track {
-        roles_by_track.entry(track).or_default().push("primary");
-    }
-    if let Some(track) = secondary_track {
-        roles_by_track.entry(track).or_default().push("secondary");
+    let mut roles_by_file: HashMap<String, Vec<&str>> = HashMap::new();
+    for (role, audio) in [("primary", primary_audio), ("secondary", secondary_audio)] {
+        match audio {
+            Some(AudioSource::Track(track)) => roles_by_track.entry(*track).or_default().push(role),
+            Some(AudioSource::File(file)) => {
+                roles_by_file.entry(file.uri()).or_default().push(role)
+            }
+            None => {}
+        }
     }
 
     let mut audio_heads = HashMap::new();
     for (track, roles) in &roles_by_track {
         audio_heads.insert(*track, build_audio_branch(&pipeline, roles, config)?);
+    }
+
+    // A separate audio file is its own source chain feeding the same kind of
+    // branch an embedded track gets, inside the one pipeline - so both run off
+    // the same clock and stay in step by construction rather than by being
+    // nudged back into line.
+    for (uri, roles) in &roles_by_file {
+        let head = build_audio_branch(&pipeline, roles, config)?;
+        attach_external_audio(&pipeline, &head, uri)?;
     }
 
     let wanted: Vec<u32> = roles_by_track.keys().copied().collect();
@@ -252,6 +281,84 @@ fn build_video_branch(
 /// `filesrc ! subparse` rather than handing the file straight to the overlay:
 /// established by experiment that the overlay cannot preroll from an unparsed
 /// file, having no way to tell what format it has been given.
+/// Feeds an audio branch from a separate audio file rather than from a stream
+/// inside the video.
+///
+/// The same two elements the video itself goes through, for the same reason:
+/// `urisourcebin` so a path and a URL are alike, and `decodebin3` so the
+/// container and codec are its problem rather than ours. It lives in the same
+/// pipeline as everything else, which is what keeps it on the same clock.
+///
+/// Both pad-added handlers wait for pads that do not exist yet - the source's
+/// appear as the file is opened, the decoder's once it has been parsed.
+fn attach_external_audio(
+    pipeline: &gst::Pipeline,
+    head: &gst::Element,
+    uri: &str,
+) -> Result<(), String> {
+    let src = make("urisourcebin")?;
+    src.set_property("uri", uri);
+    let decode = make("decodebin3")?;
+    pipeline
+        .add_many([&src, &decode])
+        .map_err(|e| e.to_string())?;
+
+    {
+        let decode = decode.clone();
+        src.connect_pad_added(move |_, pad| {
+            let Some(sink) = decode
+                .request_pad_simple("sink_%u")
+                .or_else(|| decode.static_pad("sink"))
+            else {
+                eprintln!("Failed to get a decoder sink pad for the audio file");
+                return;
+            };
+            if let Err(e) = pad.link(&sink) {
+                eprintln!("Failed to link the audio file to its decoder: {e}");
+            }
+        });
+    }
+
+    {
+        let head = head.clone();
+        decode.connect_pad_added(move |_, pad| {
+            // `pad-added` fires for request sink pads as well, so the direction
+            // has to be checked before anything is linked to them.
+            if pad.direction() != gst::PadDirection::Src {
+                return;
+            }
+            // A file offered as audio can still hold a picture - cover art in
+            // an MP3 is the common one - and that is not ours to render.
+            //
+            // Written as "anything but a picture" rather than "audio only" on
+            // purpose. A decodebin3 pad usually has no negotiated caps yet
+            // when it appears, so testing for `audio/` rejects the very pad we
+            // are waiting for and the file plays nothing at all: the parser
+            // stops with `not-linked` and the pipeline reports an internal
+            // data stream error, which says nothing about the real cause.
+            let media = pad
+                .current_caps()
+                .unwrap_or_else(|| pad.query_caps(None))
+                .structure(0)
+                .map(|structure| structure.name().to_string())
+                .unwrap_or_default();
+            if media.starts_with("video/") || media.starts_with("image/") {
+                return;
+            }
+            let Some(sink) = head.static_pad("sink") else {
+                return;
+            };
+            if sink.is_linked() {
+                return;
+            }
+            if let Err(e) = pad.link(&sink) {
+                eprintln!("Failed to link the audio file to its output: {e}");
+            }
+        });
+    }
+    Ok(())
+}
+
 fn attach_external_subtitle(
     pipeline: &gst::Pipeline,
     overlay: &gst::Element,
