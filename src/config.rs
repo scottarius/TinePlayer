@@ -487,6 +487,15 @@ pub struct Resume {
     /// recorded, or a source that could not say how long it was.
     #[serde(default)]
     pub duration_ns: u64,
+    /// What aligning this video against a separate audio file worked out, in
+    /// milliseconds, keyed by that file's path.
+    ///
+    /// Kept per pairing rather than per video, because it describes the two
+    /// files together: the same film aligns differently against a different
+    /// description track. Measuring costs seconds of decoding, so it is
+    /// measured once and remembered, and the viewer can ask for it again.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub alignments: std::collections::BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -619,6 +628,31 @@ pub fn clear_all_resume() -> Result<(), String> {
         return Ok(());
     }
     std::fs::remove_file(&path).map_err(|e| format!("Failed to clear {}: {e}", path.display()))
+}
+
+/// What was worked out about this video and that audio file, if anything.
+pub fn load_alignment(key: &str, audio: &Path) -> Option<f64> {
+    load_resume(key)?
+        .alignments
+        .get(&audio.to_string_lossy().to_string())
+        .copied()
+}
+
+/// Remembers an alignment, or forgets it when asked to align again.
+// Nothing writes one yet: measuring is asked for by a button that is not
+// built. Reading and applying are both wired, so that button is the whole of
+// what is left.
+#[allow(dead_code)]
+pub fn save_alignment(key: &str, audio: &Path, millis: Option<f64>) {
+    let audio = audio.to_string_lossy().to_string();
+    update(key, |entry| match millis {
+        Some(millis) => {
+            entry.alignments.insert(audio.clone(), millis);
+        }
+        None => {
+            entry.alignments.remove(&audio);
+        }
+    });
 }
 
 pub fn save_tracks(

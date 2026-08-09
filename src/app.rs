@@ -401,6 +401,14 @@ pub struct App {
     /// is picking a video. Held here because stepping into a folder re-enters
     /// the browser and would otherwise lose the errand it was opened on.
     browse_audio_for: Cell<Option<Role>>,
+    /// What alignment worked out for each output, in milliseconds, ready to
+    /// add to whatever the viewer has set. Already negated: alignment reports
+    /// how late the audio runs, and a sink is held back by a negative offset.
+    ///
+    /// Zero when nothing has been measured, which is most of the time - so the
+    /// arithmetic below is the same whether there is a baseline or not.
+    primary_baseline: Cell<f64>,
+    secondary_baseline: Cell<f64>,
     /// Everything on offer for the current file: streams inside it, then
     /// subtitle files sitting beside it.
     subtitle_options: RefCell<Vec<Subtitle>>,
@@ -609,6 +617,8 @@ impl App {
             primary_file: RefCell::new(None),
             secondary_file: RefCell::new(None),
             browse_audio_for: Cell::new(None),
+            primary_baseline: Cell::new(0.0),
+            secondary_baseline: Cell::new(0.0),
             primary_track: RefCell::new(None),
             secondary_track: RefCell::new(None),
             subtitle_options: RefCell::new(Vec::new()),
@@ -2036,7 +2046,7 @@ impl App {
         // Heard straight away, like the delay itself: the point of the switch
         // is comparing with and without while something is playing.
         if let Some(playback) = self.playback.borrow().as_ref() {
-            playback.set_offset_ms(role, self.config.borrow().applied_offset_ms(role));
+            playback.set_offset_ms(role, self.offset_for(role));
         }
         scale.set_sensitive(on);
         value.set_text(&offset_label(self.config.borrow().applied_offset_ms(role)));
@@ -2122,7 +2132,7 @@ impl App {
         if let Slider::Offset(role) = kind
             && let Some(playback) = self.playback.borrow().as_ref()
         {
-            playback.set_offset_ms(role, moved);
+            playback.set_offset_ms(role, moved + self.baseline_ms(role));
         }
         value.set_text(&match kind {
             Slider::Volume(_) => volume_label(moved / 100.0, false),
@@ -3340,6 +3350,9 @@ impl App {
         *self.subtitle_options.borrow_mut() = options;
         *self.tracks.borrow_mut() = tracks;
         *self.file.borrow_mut() = Some(source.clone());
+        // Now that the video and its audio files are both settled, whatever
+        // was measured about that pairing applies again.
+        self.load_baselines();
 
         // Only a local file is worth reopening: a remote URL can carry an
         // access token that expires, and whatever launched us will hand it over
@@ -4079,6 +4092,45 @@ impl App {
         }
     }
 
+    /// Reads back what alignment worked out for whatever each output is
+    /// playing, so the baseline is in force before the pipeline is built.
+    ///
+    /// Zero for a track inside the video: alignment is about a pairing of two
+    /// files and there is nothing to pair a track with.
+    fn load_baselines(&self) {
+        let key = self.storage_key();
+        for role in [Role::Primary, Role::Secondary] {
+            let stored = key.as_deref().and_then(|key| {
+                let file = self.file_for(role).borrow();
+                let path = file.as_ref()?.local()?;
+                crate::config::load_alignment(key, path)
+            });
+            // Negated on the way in: alignment says how late the audio runs,
+            // and a sink is held back by a negative offset.
+            let cell = match role {
+                Role::Primary => &self.primary_baseline,
+                Role::Secondary => &self.secondary_baseline,
+            };
+            cell.set(-stored.unwrap_or(0.0));
+        }
+    }
+
+    /// The alignment baseline for one output.
+    fn baseline_ms(&self, role: &str) -> f64 {
+        match role {
+            "primary" => self.primary_baseline.get(),
+            _ => self.secondary_baseline.get(),
+        }
+    }
+
+    /// What the sink should actually be held back by: what the viewer asked
+    /// for, plus what alignment worked out. The two are separate quantities -
+    /// one describes the headphones, the other describes the pair of files -
+    /// and only the first is ever shown on the slider.
+    fn offset_for(&self, role: &str) -> f64 {
+        self.config.borrow().applied_offset_ms(role) + self.baseline_ms(role)
+    }
+
     /// The track chosen for one output, and the file chosen for it, where the
     /// two outputs are otherwise handled by the same code.
     fn track_for(&self, role: Role) -> &RefCell<Option<u32>> {
@@ -4110,6 +4162,8 @@ impl App {
         // soundtrack and then quitting without pressing play is choosing it,
         // and every other chooser on this screen remembers itself the same way.
         self.remember_tracks();
+        // A pairing measured before comes back already lined up.
+        self.load_baselines();
     }
 
     // --- Settings ------------------------------------------------------
@@ -6328,6 +6382,14 @@ impl App {
 
         match result {
             Ok(playback) => {
+                // The pipeline set each sink from the configuration alone,
+                // which is all it knows about. Any alignment baseline is added
+                // here, once, before a frame has played.
+                for role in ["primary", "secondary"] {
+                    if self.baseline_ms(role) != 0.0 {
+                        playback.set_offset_ms(role, self.offset_for(role));
+                    }
+                }
                 // Named by device rather than by role: "primary" and
                 // "secondary" mean something to the configuration and nothing
                 // to somebody trying to turn the headphones down.
