@@ -823,6 +823,19 @@ impl App {
         }
 
         window.present();
+
+        // After the window is on screen, which is when it first has anything
+        // for Windows to attach to. Windows sends the media keys as window
+        // messages rather than as keys, so there they arrive through here
+        // instead of the key handler; everywhere else this installs nothing,
+        // because Linux reports them as ordinary keysyms. Both routes end at
+        // `handle_media`, so the two can never disagree.
+        {
+            let weak = Rc::downgrade(&app);
+            crate::media_keys::install(&window, move |command| {
+                weak.upgrade().is_some_and(|app| app.handle_media(command))
+            });
+        }
     }
 
     /// The commands that belong to the application rather than to a screen,
@@ -923,12 +936,13 @@ impl App {
                 // here. Matched by name anyway for the platforms whose keysyms
                 // are real, and worth knowing before anyone tries to debug the
                 // Windows half of it.
-                gdk::Key::space | gdk::Key::AudioPlay | gdk::Key::AudioPause if playing => {
-                    if let Some(playback) = app.playback.borrow().as_ref() {
-                        playback.toggle_pause();
-                        app.awake.set(playback.is_playing());
-                    }
+                gdk::Key::space if playing => {
+                    app.toggle_pause();
                     app.wake_controls();
+                    glib::Propagation::Stop
+                }
+                gdk::Key::AudioPlay | gdk::Key::AudioPause if playing => {
+                    app.handle_media(crate::media_keys::Command::PlayPause);
                     glib::Propagation::Stop
                 }
                 // Deliberately what Escape does rather than what the stop
@@ -936,7 +950,7 @@ impl App {
                 // instead of returning to the menu. Two meanings for "stop"
                 // are enough without a third.
                 gdk::Key::AudioStop if playing => {
-                    app.go_back();
+                    app.handle_media(crate::media_keys::Command::Stop);
                     glib::Propagation::Stop
                 }
                 // The skip keys move by the same ten seconds the arrows and
@@ -954,14 +968,13 @@ impl App {
                 | gdk::Key::AudioRewind
                     if playing =>
                 {
-                    let forwards = matches!(key, gdk::Key::AudioNext | gdk::Key::AudioForward);
-                    app.scrub(if forwards {
-                        crate::player::STEP_SECONDS
-                    } else {
-                        -crate::player::STEP_SECONDS
-                    });
-                    app.end_scrub();
-                    app.wake_controls();
+                    app.handle_media(
+                        if matches!(key, gdk::Key::AudioNext | gdk::Key::AudioForward) {
+                            crate::media_keys::Command::Next
+                        } else {
+                            crate::media_keys::Command::Previous
+                        },
+                    );
                     glib::Propagation::Stop
                 }
                 // Only during playback: elsewhere the arrows belong to the
@@ -1200,6 +1213,63 @@ impl App {
             }
         });
         self.window.add_controller(capture);
+    }
+
+    /// Pause or resume, keeping the display-awake hold in step with it.
+    fn toggle_pause(&self) {
+        if let Some(playback) = self.playback.borrow().as_ref() {
+            playback.toggle_pause();
+            self.awake.set(playback.is_playing());
+        }
+    }
+
+    /// What a media key means, wherever the platform reported it from: a
+    /// keysym on Linux, a `WM_APPCOMMAND` on Windows. Says whether it was
+    /// used, which Windows needs in order to decide whether to pass the key
+    /// on to whatever else would have played.
+    ///
+    /// Nothing here means anything without a film, and there is no menu
+    /// action a transport key would obviously map to, so the menus leave
+    /// these alone entirely.
+    fn handle_media(self: &Rc<Self>, command: crate::media_keys::Command) -> bool {
+        use crate::media_keys::Command;
+
+        // Read and released before anything below can borrow it again.
+        let Some(is_playing) = self
+            .playback
+            .borrow()
+            .as_ref()
+            .map(|playback| playback.is_playing())
+        else {
+            return false;
+        };
+
+        let flip = || {
+            self.toggle_pause();
+            self.wake_controls();
+        };
+
+        match command {
+            Command::PlayPause => flip(),
+            // A keyboard with separate play and pause keys means them
+            // literally, so neither flips what it asked for. Both are claimed
+            // even when there is nothing to do: what was asked for is already
+            // true, which is not the same as the key going unused.
+            Command::Play if !is_playing => flip(),
+            Command::Pause if is_playing => flip(),
+            Command::Play | Command::Pause => {}
+            Command::Stop => self.go_back(),
+            Command::Next | Command::Previous => {
+                self.scrub(if command == Command::Next {
+                    crate::player::STEP_SECONDS
+                } else {
+                    -crate::player::STEP_SECONDS
+                });
+                self.end_scrub();
+                self.wake_controls();
+            }
+        }
+        true
     }
 
     /// One level up: out of playback, out of a chooser, or out of the

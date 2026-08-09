@@ -113,7 +113,12 @@ On macOS the shortcuts below work with either <kbd>Cmd</kbd> or <kbd>Ctrl</kbd>.
 | <kbd>C</kbd> | <kbd>X</kbd> / <kbd>Square</kbd>                           | Show or hide subtitles                                                                            |
 | <kbd>M</kbd> | Hold <kbd>X</kbd> / <kbd>Square</kbd>                      | Mute or restore both outputs at once. Or long-press the volume button                             |
 | <kbd>T</kbd> | Click <kbd>Right stick</kbd>                               | Swap the right-hand readout between the video length and the time remaining                       |
+| Media keys | - | Play/pause, stop, and skip back or forward, from a keyboard, a headset or a remote |
 
+
+The media keys work on Windows and Linux. macOS sends them to whatever it
+considers the current media player rather than to the window in front, so they
+reach whatever else is open there instead of TinePlayer.
 
 The playback controls hide themselves after a few seconds of stillness, and
 come back on any interaction.
