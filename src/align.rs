@@ -19,13 +19,6 @@
 //! problem and is GPL-3.0, so none of it is read or transliterated here:
 //! TinePlayer is MIT and the packaging keeps it that way deliberately.
 
-// Nothing calls this yet: the measuring is finished and tested, and applying
-// the answer is the next piece. It wants a baseline held per output, combined
-// with the viewer's own sync setting at the three places that set an offset -
-// see the plan. Kept whole rather than wired in halfway, since a half-applied
-// offset is worse than none.
-#![allow(dead_code)]
-
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex};
@@ -44,31 +37,110 @@ pub const FRAME_MS: u32 = 10;
 /// the time goes.
 const RATE: u32 = 8_000;
 
-/// Decodes one stretch of a source down to mono samples.
+/// Decodes one stretch of one audio track of a source down to mono samples.
 ///
-/// Any container, any codec, local or remote: `uridecodebin` and the converters
+/// Any container, any codec, local or remote: `decodebin3` and the converters
 /// after it make that somebody else's problem, and the caps make the result
 /// exactly one shape so the arithmetic afterwards has no cases in it.
 ///
+/// `track` counts the source's audio streams in container order, the same
+/// numbering the menu and `--list-tracks` use. `decodebin3` rather than
+/// `uridecodebin` is what makes that a real choice: `select-stream` decides
+/// which streams are decoded at all, so the answer comes from the track that
+/// was asked for rather than from whichever one happens to come first - and
+/// the picture is never decoded, which is most of the file.
+///
 /// Returns fewer samples than asked for at the end of a file, and an error only
 /// when the file cannot be read at all.
-pub fn decode_window(uri: &str, start_s: f64, length_s: f64) -> Result<Vec<f32>, String> {
+pub fn decode_window(
+    uri: &str,
+    start_s: f64,
+    length_s: f64,
+    track: u32,
+) -> Result<Vec<f32>, String> {
     use gstreamer_app::AppSink;
 
-    let description = format!(
-        "uridecodebin uri=\"{uri}\" ! audioconvert ! audioresample ! \
-         audio/x-raw,format=F32LE,channels=1,rate={RATE},layout=interleaved ! \
-         appsink name=out sync=false max-buffers=64"
-    );
-    let pipeline = gst::parse::launch(&description)
-        .map_err(|e| format!("Could not build the analysis pipeline: {e}"))?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| "Analysis pipeline was not a pipeline".to_string())?;
+    let make = |name: &str| {
+        gst::ElementFactory::make(name)
+            .build()
+            .map_err(|_| format!("Could not build the analysis pipeline: {name} is missing"))
+    };
+    let pipeline = gst::Pipeline::new();
+    let source = make("urisourcebin")?;
+    source.set_property("uri", uri);
+    let decode = make("decodebin3")?;
+    let convert = make("audioconvert")?;
+    let resample = make("audioresample")?;
+    let sink = AppSink::builder()
+        .caps(
+            &gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .field("channels", 1i32)
+                .field("rate", RATE as i32)
+                .field("layout", "interleaved")
+                .build(),
+        )
+        // Never against the clock: this is measuring rather than playing, and
+        // waiting for each buffer's turn would make a minute of audio take a
+        // minute to read.
+        .sync(false)
+        .max_buffers(64)
+        .build();
 
-    let sink = pipeline
-        .by_name("out")
-        .and_then(|element| element.downcast::<AppSink>().ok())
-        .ok_or("Analysis pipeline has no appsink")?;
+    pipeline
+        .add_many([&source, &decode, &convert, &resample, sink.upcast_ref()])
+        .map_err(|e| e.to_string())?;
+    gst::Element::link_many([&convert, &resample, sink.upcast_ref()]).map_err(|e| e.to_string())?;
+
+    // Both source and decoder gain their pads as the file is opened and
+    // parsed, so neither link can be made now.
+    {
+        let decode = decode.clone();
+        source.connect_pad_added(move |_, pad| {
+            let Some(target) = decode
+                .request_pad_simple("sink_%u")
+                .or_else(|| decode.static_pad("sink"))
+            else {
+                return;
+            };
+            if let Err(e) = pad.link(&target) {
+                eprintln!("Failed to open {} for analysis: {e}", pad.name());
+            }
+        });
+    }
+    {
+        let convert = convert.clone();
+        decode.connect_pad_added(move |_, pad| {
+            // `pad-added` fires for request sink pads as well, so the direction
+            // has to be checked before anything is linked to them.
+            if pad.direction() != gst::PadDirection::Src {
+                return;
+            }
+            let Some(target) = convert.static_pad("sink") else {
+                return;
+            };
+            // Only one stream was selected, so a second pad here would be one
+            // decodebin3 exposed unasked. Leaving it unlinked is correct.
+            if target.is_linked() {
+                return;
+            }
+            if let Err(e) = pad.link(&target) {
+                eprintln!("Failed to read a stream for analysis: {e}");
+            }
+        });
+    }
+    decode.connect("select-stream", false, move |values| {
+        let collection = values[1].get::<gst::StreamCollection>().ok();
+        let stream = values[2].get::<gst::Stream>().ok();
+        let (Some(collection), Some(stream)) = (collection, stream) else {
+            return Some(0i32.to_value());
+        };
+        let wanted = stream.stream_type().contains(gst::StreamType::AUDIO)
+            && stream.stream_id().is_some_and(|id| {
+                crate::pipeline::ordinal(&collection, &id, gst::StreamType::AUDIO) == Some(track)
+            });
+        Some(i32::from(wanted).to_value())
+    });
 
     // Paused first, so the file is open and seekable before asking for a
     // position in it. Seeking a pipeline that has not prerolled is ignored,
@@ -252,6 +324,16 @@ const WINDOW_S: f64 = 60.0;
 /// is drifting until it is badly wrong.
 const CONFIDENT: f32 = 0.35;
 
+/// Where along the running time the windows are taken from.
+///
+/// Three rather than one, because a single agreement can be luck. Away from
+/// both ends: the first minute is titles and the last is credits, and both are
+/// where two releases differ most.
+const PLACES: [f64; 3] = [0.15, 0.5, 0.8];
+
+/// How many stretches are measured, which is what progress is counted in.
+pub const WINDOWS: usize = PLACES.len();
+
 /// How far the three windows may disagree and still count as one answer.
 /// Beyond a fifth of a second the two are not simply shifted.
 const AGREEMENT_MS: f64 = 200.0;
@@ -279,23 +361,39 @@ pub enum Verdict {
 /// and scatter means there is no answer here to give.
 ///
 /// `duration_s` is the video's running time, used only to place the windows.
-pub fn align(video_uri: &str, audio_uri: &str, duration_s: f64) -> Verdict {
-    // Away from both ends: the first minute is titles and the last is credits,
-    // and both are where two releases differ most.
+/// `reference` names the audio track inside the video to measure against, by
+/// its position among that file's audio streams. Every track in one container
+/// shares a timeline, so the choice moves the confidence rather than the
+/// answer: a description track is usually the original mix with narration over
+/// it, and correlates less well against a dub, where only the music and effects
+/// bed is shared.
+///
+/// `finished` is called with the number of windows done, one to three, so a
+/// caller can show progress. Nothing finer is honest: a window is one decode
+/// and cannot report its own progress.
+pub fn align(
+    video_uri: &str,
+    audio_uri: &str,
+    duration_s: f64,
+    reference: u32,
+    mut finished: impl FnMut(usize),
+) -> Verdict {
     let usable = (duration_s - WINDOW_S).max(0.0);
-    let starts = [0.15, 0.5, 0.8].map(|fraction| usable * fraction);
+    let starts = PLACES.map(|fraction| usable * fraction);
 
     let mut matches = Vec::new();
-    for start in starts {
-        let Ok(video) = decode_window(video_uri, start, WINDOW_S) else {
-            continue;
-        };
-        let Ok(audio) = decode_window(audio_uri, start, WINDOW_S) else {
-            continue;
-        };
-        if let Some(found) = best_lag(&envelope(&video, RATE), &envelope(&audio, RATE)) {
+    for (window, start) in starts.into_iter().enumerate() {
+        // The first audio stream on the file side, which is the one playback
+        // takes. Nothing chooses within an external file yet, and the two must
+        // not be allowed to disagree about which stream is being lined up.
+        if let (Ok(video), Ok(audio)) = (
+            decode_window(video_uri, start, WINDOW_S, reference),
+            decode_window(audio_uri, start, WINDOW_S, 0),
+        ) && let Some(found) = best_lag(&envelope(&video, RATE), &envelope(&audio, RATE))
+        {
             matches.push((start, found));
         }
+        finished(window + 1);
     }
 
     let confident: Vec<(f64, Match)> = matches

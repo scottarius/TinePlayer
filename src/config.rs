@@ -639,10 +639,6 @@ pub fn load_alignment(key: &str, audio: &Path) -> Option<f64> {
 }
 
 /// Remembers an alignment, or forgets it when asked to align again.
-// Nothing writes one yet: measuring is asked for by a button that is not
-// built. Reading and applying are both wired, so that button is the whole of
-// what is left.
-#[allow(dead_code)]
 pub fn save_alignment(key: &str, audio: &Path, millis: Option<f64>) {
     let audio = audio.to_string_lossy().to_string();
     update(key, |entry| match millis {

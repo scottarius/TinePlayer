@@ -601,7 +601,11 @@ fn connect_pad_added(
 
 /// Position of `id` among the collection's streams of the given type, which
 /// is the numbering `--list-tracks` prints and the menu offers.
-fn ordinal(collection: &gst::StreamCollection, id: &str, kind: gst::StreamType) -> Option<u32> {
+///
+/// Shared with alignment, so that the track it measures and the track playback
+/// selects are counted the same way. A second counting would be a silent way
+/// for the two to disagree.
+pub fn ordinal(collection: &gst::StreamCollection, id: &str, kind: gst::StreamType) -> Option<u32> {
     let mut position = 0;
     for index in 0..collection.len() {
         let Some(stream) = collection.stream(index as u32) else {
