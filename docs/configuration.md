@@ -175,7 +175,7 @@ alongside the embedded tracks, see [Subtitles](usage.md#subtitles).
 | `primary`                   | Full subtitles in the primary output's language                 |
 | `secondary_forced`          | Forced only, preferring the secondary output's language         |
 | `secondary`                 | Full subtitles in the secondary output's language               |
-| [language code](#languages) | Full subtitiles in a specific language                          |
+| [language code](#languages) | Full subtitles in a specific language                          |
 
 The language followed is the one actually playing on that output, not the
 Primary or Secondary Language Preference, so it stays right even when a

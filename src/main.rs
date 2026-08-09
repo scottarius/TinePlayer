@@ -17,6 +17,7 @@ mod gamepad;
 mod kodi;
 mod kodi_setup;
 mod languages;
+mod media_keys;
 mod pipeline;
 mod player;
 mod probe;
