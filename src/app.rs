@@ -4287,26 +4287,31 @@ impl App {
     fn align_page(&self, hint: &str) -> gtk::Box {
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(24)
-            .margin_top(40)
-            .margin_bottom(40)
-            .margin_start(56)
-            .margin_end(56)
+            .spacing(20)
+            // Centered and no taller than its contents, so the panel is the
+            // size of the question rather than the size of the window.
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .margin_top(32)
+            .margin_bottom(32)
+            .margin_start(44)
+            .margin_end(44)
             .build();
         // A floor rather than a fixed size, so the panel keeps roughly the
         // same width from step to step instead of shrinking around whatever
         // the shortest one has on it.
-        page.set_size_request((640.0 * self.scale.get()).round() as i32, -1);
+        page.set_size_request((520.0 * self.scale.get()).round() as i32, -1);
 
         let heading = heading_label("Auto-Align");
-        heading.set_xalign(0.0);
+        heading.set_halign(gtk::Align::Center);
         page.append(&heading);
 
         let hint = gtk::Label::builder()
             .label(hint)
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .xalign(0.0)
+            .justify(gtk::Justification::Center)
+            .halign(gtk::Align::Center)
             .css_classes(["tp-hint"])
             .build();
         page.append(&hint);
@@ -4321,34 +4326,38 @@ impl App {
     /// with a sensible one already selected, so the common answer is a single
     /// press of Next.
     fn show_align(self: &Rc<Self>, role: Role) {
-        let Some(file) = self.file_for(role).borrow().clone() else {
-            return;
-        };
+        // Nothing to align without both halves of the pairing.
         let tracks = self.tracks.borrow().clone();
-        if tracks.is_empty() {
+        if self.file_for(role).borrow().is_none() || tracks.is_empty() {
             return;
         }
 
-        let page = self.align_page(&format!(
-            "Choose a track inside the video to measure {} against. \
-             Every track in one file shares its timeline, so any of them gives \
-             the same answer - but the one the separate recording was made from \
-             gives the clearest one, which is usually the original soundtrack.",
-            file.label()
-        ));
+        let page = self.align_page(
+            "Choose a reference audio track to align the external audio file with. \
+             Usually the original language, or a language that matches the audio \
+             description.",
+        );
 
         let (scroller, list) = scrolling_list();
         name_it(&list, "Reference track");
+        // Only as tall as the tracks need, up to a few rows. A list left to
+        // expand makes the panel the height of the window whether it holds one
+        // track or twelve, which is the opposite of what a short question wants.
+        scroller.set_vexpand(false);
+        scroller.set_propagate_natural_height(true);
+        scroller.set_max_content_height((240.0 * self.scale.get()).round() as i32);
         page.append(&scroller);
         for track in &tracks {
             let text = describe_audio_track(track);
-            append_named(&list, &chooser_row(&text), &text);
+            let row = chooser_row(&text);
+            row.set_xalign(0.5);
+            append_named(&list, &row, &text);
         }
 
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(24)
-            .halign(gtk::Align::End)
+            .halign(gtk::Align::Center)
             .build();
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
@@ -4421,12 +4430,8 @@ impl App {
             }
         };
 
-        let page = self.align_page(&format!(
-            "Measuring {} against the film at three points, to see how far \
-             apart they run. This takes a few moments, and longer on a small \
-             machine.",
-            audio.label()
-        ));
+        let page =
+            self.align_page("Analyzing audio to align the tracks. This may take a few moments.");
 
         let bar = gtk::ProgressBar::new();
         bar.add_css_class("tp-progress");
@@ -4434,15 +4439,15 @@ impl App {
         page.append(&bar);
 
         let status = gtk::Label::builder()
-            .label("Starting")
-            .xalign(0.0)
+            .label("0%")
+            .halign(gtk::Align::Center)
             .css_classes(["tp-hint"])
             .build();
         page.append(&status);
 
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.set_halign(gtk::Align::End);
+        cancel.set_halign(gtk::Align::Center);
         page.append(&cancel);
         {
             let app = self.clone();
@@ -4486,11 +4491,12 @@ impl App {
             loop {
                 match receiver.try_recv() {
                     Ok(Step::Window(done)) => {
-                        // Nothing finer is honest: a window is one decode and
-                        // cannot report its own progress.
-                        let windows = crate::align::WINDOWS;
-                        bar.set_fraction(done as f64 / windows as f64);
-                        status.set_label(&format!("{done} of {windows} done"));
+                        // Three steps rather than a smooth climb: a window is
+                        // one decode and cannot report its own progress, so
+                        // anything finer would be invented.
+                        let fraction = done as f64 / crate::align::WINDOWS as f64;
+                        bar.set_fraction(fraction);
+                        status.set_label(&format!("{:.0}%", fraction * 100.0));
                     }
                     Ok(Step::Done(verdict)) => {
                         app.show_align_result(role, verdict);
@@ -4519,35 +4525,32 @@ impl App {
     fn show_align_result(self: &Rc<Self>, role: Role, verdict: crate::align::Verdict) {
         use crate::align::Verdict;
 
-        let output = match role {
-            Role::Primary => "primary",
-            Role::Secondary => "secondary",
-        };
+        // Never named by output, because the answer is not one: it belongs to
+        // this video and this audio file, and applies wherever that file is
+        // played.
         let (hint, retry) = match verdict {
             Verdict::Offset { millis, confidence } => {
                 self.apply_alignment(role, millis);
                 let rounded = millis.round();
                 let shift = if rounded > 0.0 {
                     format!(
-                        "The audio runs {rounded:.0}ms late, so the {output} output is now \
-                         pulled forward by the same amount."
+                        "The audio file runs {rounded:.0}ms late, and is now pulled forward \
+                         to match."
                     )
                 } else if rounded < 0.0 {
                     format!(
-                        "The audio runs {:.0}ms early, so the {output} output is now held \
-                         back by the same amount.",
+                        "The audio file runs {:.0}ms early, and is now held back to match.",
                         -rounded
                     )
                 } else {
-                    format!(
-                        "The audio is already in step with the film, so the {output} output \
-                         has been left where it was."
-                    )
+                    "The audio file is already in step with the video, so nothing needed \
+                     changing."
+                        .to_string()
                 };
                 (
                     format!(
-                        "{shift} Confidence {:.0}%. Audio Sync still adds to this, so a \
-                         correction by ear starts from here rather than from nothing.",
+                        "{shift}\n\nConfidence {:.0}%. Audio Sync adds to this, so a \
+                         correction by ear now starts from here.",
                         confidence * 100.0
                     ),
                     false,
@@ -4557,19 +4560,18 @@ impl App {
             // offset fixes it and averaging one would be a guess that drifts.
             Verdict::RateMismatch { drift_ms_per_hour } => (
                 format!(
-                    "The two run at slightly different speeds, drifting about {:.0}ms an hour \
-                     apart. That is a stretch rather than a shift, so no single offset lines \
-                     them up and nothing has been changed. Audio Sync under Settings will \
-                     correct whichever part of the film you are watching.",
+                    "The two run at slightly different speeds, drifting about {:.0}ms an \
+                     hour apart. No single offset can line them up, so nothing has been \
+                     changed.\n\nAudio Sync will correct whichever part you are watching.",
                     drift_ms_per_hour.abs()
                 ),
                 true,
             ),
             Verdict::Unsure => (
                 "The two could not be matched with any confidence, so nothing has been \
-                 changed. They may be different edits of the film, or the recording may be \
-                 too quiet to match on. Another track inside the video is worth trying, and \
-                 Audio Sync under Settings lines them up by ear."
+                 changed. They may be different edits, or the recording may be too quiet \
+                 to match on.\n\nTry another reference track, or line them up by ear with \
+                 Audio Sync."
                     .to_string(),
                 true,
             ),
@@ -4579,7 +4581,7 @@ impl App {
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(24)
-            .halign(gtk::Align::End)
+            .halign(gtk::Align::Center)
             .build();
         // Offered only where it could help. Trying another reference track is
         // the answer when the one measured against was a dub and the separate
