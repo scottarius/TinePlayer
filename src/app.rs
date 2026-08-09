@@ -939,6 +939,31 @@ impl App {
                     app.go_back();
                     glib::Propagation::Stop
                 }
+                // The skip keys move by the same ten seconds the arrows and
+                // the control bar's own buttons do, through the same path.
+                //
+                // Not "next track", which is what they mean on a music player:
+                // there is no playlist here to step through, and a key marked
+                // with a bar and a triangle is exactly the shape of the two
+                // buttons sitting either side of pause on the control bar.
+                // Rewind and fast-forward, which some keyboards have instead,
+                // land on the same thing.
+                gdk::Key::AudioNext
+                | gdk::Key::AudioForward
+                | gdk::Key::AudioPrev
+                | gdk::Key::AudioRewind
+                    if playing =>
+                {
+                    let forwards = matches!(key, gdk::Key::AudioNext | gdk::Key::AudioForward);
+                    app.scrub(if forwards {
+                        crate::player::STEP_SECONDS
+                    } else {
+                        -crate::player::STEP_SECONDS
+                    });
+                    app.end_scrub();
+                    app.wake_controls();
+                    glib::Propagation::Stop
+                }
                 // Only during playback: elsewhere the arrows belong to the
                 // menus, where left and right mean nothing.
                 gdk::Key::Left if playing => {
