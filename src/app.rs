@@ -4557,7 +4557,7 @@ impl App {
         // this video and this audio file, and applies wherever that file is
         // played.
         let (hint, retry) = match verdict {
-            Verdict::Offset { millis, confidence } => {
+            Verdict::Offset { millis, .. } => {
                 self.apply_alignment(role, millis);
                 let rounded = millis.round();
                 let shift = if rounded > 0.0 {
@@ -4575,28 +4575,18 @@ impl App {
                     "The audio file is already in sync with the video, no adjustment needed."
                         .to_string()
                 };
-                // Confidence is said out loud on purpose. The correction is
-                // hidden, so someone who cannot see the picture has no way to
-                // judge it for themselves - a hidden baseline must never hide
-                // a wrong answer.
-                (
-                    format!("{shift}\n\nConfidence {:.0}%.", confidence * 100.0),
-                    false,
-                )
+                (shift, false)
             }
             // A rate difference is a slope rather than a shift, so no single
             // offset fixes it and averaging one would be a guess that drifts.
             Verdict::RateMismatch { .. } => (
                 "The audio file runs at a different speed than the video and cannot be \
-                 automatically adjusted.\n\nUse Audio Sync to line up the part you are \
-                 watching."
+                 automatically adjusted."
                     .to_string(),
                 true,
             ),
             Verdict::Unsure => (
-                "The audio file could not be matched with the video.\n\nTry another \
-                 reference track, or line them up by ear with Audio Sync."
-                    .to_string(),
+                "The audio file could not be matched with the video.".to_string(),
                 true,
             ),
         };
