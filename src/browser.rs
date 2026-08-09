@@ -31,16 +31,54 @@ pub struct Entry {
     pub is_dir: bool,
 }
 
+/// Audio containers worth offering as a separate soundtrack for a video.
+///
+/// Deliberately not everything GStreamer can decode: this is the list someone
+/// is choosing a described or dubbed track from, and it is what an audio
+/// description download actually arrives as.
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    // Everyday lossy
+    "mp3", "m4a", "m4b", "aac", "ogg", "oga", "opus", "wma", // Lossless and uncompressed
+    "flac", "wav", "aiff", "aif", "alac", "ape", "wv",
+    // Cinema tracks, which is what a second language often ships as
+    "ac3", "eac3", "dts", "dtshd", "thd", "mka",
+];
+
 pub fn is_video(path: &Path) -> bool {
+    has_extension(path, &VIDEO_EXTENSIONS)
+}
+
+pub fn is_audio(path: &Path) -> bool {
+    has_extension(path, AUDIO_EXTENSIONS)
+}
+
+fn has_extension(path: &Path, known: &[&str]) -> bool {
     path.extension()
         .map(|e| e.to_string_lossy().to_lowercase())
-        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.as_str()))
+        .is_some_and(|e| known.contains(&e.as_str()))
+}
+
+/// What a browsing screen is looking for, which is all that differs between
+/// choosing a video and choosing a separate soundtrack for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Video,
+    Audio,
+}
+
+impl Kind {
+    fn matches(self, path: &Path) -> bool {
+        match self {
+            Kind::Video => is_video(path),
+            Kind::Audio => is_audio(path),
+        }
+    }
 }
 
 /// Folders first, then videos, each sorted the way a person reads them:
 /// case-insensitively, so `avatar` and `Avatar` sit together rather than in
 /// separate blocks.
-pub fn read(directory: &Path) -> Vec<Entry> {
+pub fn read(directory: &Path, wanted: Kind) -> Vec<Entry> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
@@ -65,7 +103,7 @@ pub fn read(directory: &Path) -> Vec<Entry> {
                 label: name,
                 is_dir: true,
             });
-        } else if is_video(&path) {
+        } else if wanted.matches(&path) {
             videos.push(Entry {
                 path,
                 label: name,

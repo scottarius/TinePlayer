@@ -497,6 +497,16 @@ pub struct TrackChoice {
     /// again, or the same as one of them.
     #[serde(default)]
     pub subtitle: Option<crate::subtitles::SubtitleChoice>,
+    /// A separate audio file chosen for an output, which stands in place of
+    /// any track inside the video.
+    ///
+    /// Stored beside the track rather than instead of it, so clearing the file
+    /// falls back to whatever was chosen before it. Absent in every entry
+    /// written before this existed, which `serde(default)` reads as none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_file: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_file: Option<std::path::PathBuf>,
 }
 
 impl Resume {
@@ -616,12 +626,16 @@ pub fn save_tracks(
     primary: Option<u32>,
     secondary: Option<u32>,
     subtitle: Option<crate::subtitles::SubtitleChoice>,
+    primary_file: Option<std::path::PathBuf>,
+    secondary_file: Option<std::path::PathBuf>,
 ) {
     update(key, |entry| {
         entry.tracks = Some(TrackChoice {
             primary,
             secondary,
             subtitle,
+            primary_file,
+            secondary_file,
         });
     });
 }

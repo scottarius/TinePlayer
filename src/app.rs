@@ -326,6 +326,13 @@ enum Screen {
     Playing,
 }
 
+/// Which output a choice is about, where the two are otherwise handled alike.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Primary,
+    Secondary,
+}
+
 /// Choices given on the command line, which skip the menu entirely.
 #[derive(Clone)]
 pub struct Preset {
@@ -386,11 +393,14 @@ pub struct App {
     primary_track: RefCell<Option<u32>>,
     secondary_track: RefCell<Option<u32>>,
     /// A separate audio file feeding an output, in place of any track inside
-    /// the video. Set from the command line only, until the picker that
-    /// chooses one exists. Takes precedence over that output's track, which
-    /// is left alone so it comes back if the file is cleared.
+    /// the video. Takes precedence over that output's track, which is left
+    /// alone so it comes back if the file is cleared.
     primary_file: RefCell<Option<Source>>,
     secondary_file: RefCell<Option<Source>>,
+    /// Which output the browser is picking a soundtrack for, or `None` when it
+    /// is picking a video. Held here because stepping into a folder re-enters
+    /// the browser and would otherwise lose the errand it was opened on.
+    browse_audio_for: Cell<Option<Role>>,
     /// Everything on offer for the current file: streams inside it, then
     /// subtitle files sitting beside it.
     subtitle_options: RefCell<Vec<Subtitle>>,
@@ -598,6 +608,7 @@ impl App {
             tracks: RefCell::new(Vec::new()),
             primary_file: RefCell::new(None),
             secondary_file: RefCell::new(None),
+            browse_audio_for: Cell::new(None),
             primary_track: RefCell::new(None),
             secondary_track: RefCell::new(None),
             subtitle_options: RefCell::new(Vec::new()),
@@ -2261,17 +2272,6 @@ impl App {
         let config = self.config.borrow();
         let tracks = self.tracks.borrow();
 
-        let describe_track = |chosen: &Option<u32>| -> String {
-            match chosen {
-                None => "None".to_string(),
-                Some(index) => tracks
-                    .iter()
-                    .find(|t| t.index == *index)
-                    .map(describe_audio_track)
-                    .unwrap_or_else(|| "None".to_string()),
-            }
-        };
-
         // Asked before the rows are built, not after: this is what fetches
         // Kodi's title as well as its resume point, and a row built ahead of
         // it would show the file name until something rebuilt the screen.
@@ -2299,7 +2299,7 @@ impl App {
             (
                 "Primary Audio Track".to_string(),
                 if has_file {
-                    describe_track(&self.primary_track.borrow())
+                    self.describe_audio(Role::Primary)
                 } else {
                     "—".to_string()
                 },
@@ -2316,7 +2316,7 @@ impl App {
             (
                 "Secondary Audio Track".to_string(),
                 if has_file && has_secondary {
-                    describe_track(&self.secondary_track.borrow())
+                    self.describe_audio(Role::Secondary)
                 } else {
                     "—".to_string()
                 },
@@ -2584,16 +2584,29 @@ impl App {
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
                 entries.push(("None".to_string(), None));
-                let chosen = if setting == Setting::PrimaryTrack {
-                    *self.primary_track.borrow()
+                let role = if setting == Setting::PrimaryTrack {
+                    Role::Primary
                 } else {
-                    *self.secondary_track.borrow()
+                    Role::Secondary
                 };
+                let chosen = *self.track_for(role).borrow();
+                let file = self.file_for(role).borrow().clone();
                 for (position, track) in self.tracks.borrow().iter().enumerate() {
-                    if chosen == Some(track.index) {
+                    if file.is_none() && chosen == Some(track.index) {
                         current = Some(position);
                     }
                     entries.push((describe_audio_track(track), Some(position)));
+                }
+                // Last, after everything inside the video: a separate file is
+                // the answer when what you want is not in there at all, which
+                // is most films with one soundtrack and a description track
+                // downloaded beside them.
+                let audio_file = entries.len() - 1;
+                if let Some(file) = file.as_ref() {
+                    current = Some(audio_file);
+                    entries.push((format!("Audio File: {}", file.label()), Some(audio_file)));
+                } else {
+                    entries.push(("Audio File...".to_string(), Some(audio_file)));
                 }
             }
             Setting::Theme => {
@@ -2789,7 +2802,21 @@ impl App {
             *self.primary_track.borrow(),
             *self.secondary_track.borrow(),
             self.subtitle.borrow().clone(),
+            self.saved_path(Role::Primary),
+            self.saved_path(Role::Secondary),
         );
+    }
+
+    /// The audio file chosen for an output, as something worth writing down.
+    ///
+    /// Only a local path: a file reached by URL is not ours to promise will
+    /// still be there, and rebuilding one from a saved string is a different
+    /// question from finding a file again.
+    fn saved_path(&self, role: Role) -> Option<std::path::PathBuf> {
+        self.file_for(role)
+            .borrow()
+            .as_ref()
+            .and_then(|file| file.local().map(|path| path.to_path_buf()))
     }
 
     /// Returns to whichever screen the chooser was opened from.
@@ -2942,14 +2969,26 @@ impl App {
                 self.remember_tracks();
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
+                let role = if setting == Setting::PrimaryTrack {
+                    Role::Primary
+                } else {
+                    Role::Secondary
+                };
+                let count = self.tracks.borrow().len();
+                // The row after the last track is the audio file one, which
+                // opens the browser instead of settling anything here.
+                if choice == Some(count) {
+                    self.browse_for_audio(role);
+                    return true;
+                }
+
                 let tracks = self.tracks.borrow();
                 let picked = choice.and_then(|index| tracks.get(index)).map(|t| t.index);
                 drop(tracks);
-                if setting == Setting::PrimaryTrack {
-                    *self.primary_track.borrow_mut() = picked;
-                } else {
-                    *self.secondary_track.borrow_mut() = picked;
-                }
+                *self.track_for(role).borrow_mut() = picked;
+                // Choosing anything inside the video, including None, is
+                // choosing not to use a separate file on that output.
+                *self.file_for(role).borrow_mut() = None;
                 self.remember_tracks();
             }
         }
@@ -2981,8 +3020,15 @@ impl App {
         // FileChooserNative rather than FileDialog: the latter needs GTK
         // 4.10, above this project's 4.6 baseline. It also gives the real
         // system file dialog on each platform.
+        // Which errand this is on, decided the same way the built-in browser
+        // decides it, so the two always agree about what is being chosen.
+        let for_audio = self.browse_audio_for.get().is_some();
         let chooser = gtk::FileChooserNative::new(
-            Some("Choose a video"),
+            Some(if for_audio {
+                "Choose an audio file"
+            } else {
+                "Choose a video"
+            }),
             Some(&self.window),
             gtk::FileChooserAction::Open,
             Some("Open"),
@@ -2994,8 +3040,13 @@ impl App {
         // about what will actually play. Anything GStreamer can demux works,
         // which is why "All files" stays available below.
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Video files"));
-        for extension in crate::browser::VIDEO_EXTENSIONS {
+        let (name, extensions) = if for_audio {
+            ("Audio files", crate::browser::AUDIO_EXTENSIONS)
+        } else {
+            ("Video files", &crate::browser::VIDEO_EXTENSIONS[..])
+        };
+        filter.set_name(Some(name));
+        for extension in extensions {
             // Case-insensitive by hand: GTK's pattern matching is not, and
             // ".MKV" off a camera or an old disc is common enough to matter.
             filter.add_pattern(&format!("*.{extension}"));
@@ -3026,6 +3077,12 @@ impl App {
             held.borrow_mut().take();
 
             match chosen {
+                // A soundtrack for the video already loaded, rather than a
+                // video to load.
+                Some(path) if for_audio => {
+                    app.set_audio_file(&path);
+                    app.show_menu();
+                }
                 // A file was picked, so the menu is where to go next either
                 // way.
                 Some(path) => {
@@ -3212,6 +3269,29 @@ impl App {
             // produces a pipeline that fails to build.
             None
         };
+        // A separate audio file, kept only if it is still where it was. One
+        // that has been deleted, renamed, or is on a drive not mounted today
+        // falls back to the track underneath it rather than failing when play
+        // is pressed - the same rule the subtitle below follows.
+        let still_there = |path: Option<&std::path::PathBuf>| {
+            path.filter(|path| path.exists())
+                .map(|path| Source::File(path.clone()))
+        };
+        *self.primary_file.borrow_mut() = still_there(
+            saved
+                .as_ref()
+                .and_then(|choice| choice.primary_file.as_ref()),
+        );
+        *self.secondary_file.borrow_mut() = if self.config.borrow().secondary_sink.is_some() {
+            still_there(
+                saved
+                    .as_ref()
+                    .and_then(|choice| choice.secondary_file.as_ref()),
+            )
+        } else {
+            None
+        };
+
         // Only kept if it still resolves: an embedded stream the file no
         // longer has, or a subtitle file since deleted, quietly reverts to
         // none rather than failing when play is pressed.
@@ -3616,9 +3696,18 @@ impl App {
         directory: &std::path::Path,
         select: Option<&std::path::Path>,
     ) {
+        // The same screen chooses a video and a separate soundtrack for one,
+        // differing only in what it lists and what activating a row does.
+        // Which of the two is in hand is held on the application rather than
+        // passed down, because stepping into a folder re-enters here and would
+        // otherwise forget what was being looked for.
+        let mode = match self.browse_audio_for.get() {
+            Some(_) => Browse::Audio,
+            None => Browse::Videos,
+        };
         let directory = crate::browser::rooted(directory);
-        let page = self.browser_page(&directory, Browse::Videos);
-        let entries = browser_entries(&directory, Browse::Videos);
+        let page = self.browser_page(&directory, mode);
+        let entries = browser_entries(&directory, mode);
 
         // The way out alone in the middle. Choosing here is opening a video,
         // which the rows themselves do.
@@ -3640,6 +3729,14 @@ impl App {
                 };
                 match &entry.path {
                     Some(path) if path.is_dir() => app.show_browser(path, None),
+                    // A soundtrack for the video already chosen, rather than a
+                    // video: it replaces whatever track that output was on and
+                    // hands straight back to the menu, where the row now names
+                    // the file.
+                    Some(path) if app.browse_audio_for.get().is_some() => {
+                        app.set_audio_file(path);
+                        app.show_menu();
+                    }
                     Some(path) => {
                         let source = Source::File(path.to_path_buf());
                         match app.set_file(&source) {
@@ -3741,6 +3838,9 @@ impl App {
             browse.connect_clicked(move |_| match mode {
                 Browse::Videos => app.open_file_chooser(&here),
                 Browse::Folders => app.choose_kodi_folder_natively(&here),
+                // The same dialog, filtered to audio: it reads which errand it
+                // is on for itself.
+                Browse::Audio => app.open_file_chooser(&here),
             });
         }
 
@@ -3913,12 +4013,89 @@ impl App {
     /// what you had touched. The system dialog is still reachable, from a
     /// pointer-only button in the footer.
     fn browse_for_file(self: &Rc<Self>) {
+        // Whatever errand the browser was last on, this one is a video.
+        self.browse_audio_for.set(None);
+        self.open_browser();
+    }
+
+    /// The same browser, looking for a soundtrack to put on one output.
+    ///
+    /// Starts where the video is rather than where browsing left off: a
+    /// separate audio track is usually downloaded to sit beside the film, and
+    /// when it is not, the film's folder is still a better place to start from
+    /// than wherever a video was last chosen.
+    fn browse_for_audio(self: &Rc<Self>, role: Role) {
+        self.browse_audio_for.set(Some(role));
+        let beside = self
+            .file
+            .borrow()
+            .as_ref()
+            .and_then(|file| file.local().and_then(|path| path.parent()))
+            .map(|folder| folder.to_path_buf());
+        match beside {
+            Some(folder) => self.show_browser(&folder, None),
+            None => self.open_browser(),
+        }
+    }
+
+    fn open_browser(self: &Rc<Self>) {
         let (remembered, last_video) = {
             let config = self.config.borrow();
             (config.last_folder.clone(), config.last_video.clone())
         };
         let start = crate::browser::start_location(remembered.as_deref(), last_video.as_deref());
         self.show_browser(&start, None);
+    }
+
+    /// What an output is playing, for its row on the menu: the name of a
+    /// separate audio file when one is chosen, and otherwise the track.
+    fn describe_audio(&self, role: Role) -> String {
+        if let Some(file) = self.file_for(role).borrow().as_ref() {
+            return file.label();
+        }
+        let chosen = *self.track_for(role).borrow();
+        let tracks = self.tracks.borrow();
+        match chosen {
+            Some(index) => tracks
+                .iter()
+                .find(|track| track.index == index)
+                .map(describe_audio_track)
+                .unwrap_or_else(|| "None".to_string()),
+            None => "None".to_string(),
+        }
+    }
+
+    /// The track chosen for one output, and the file chosen for it, where the
+    /// two outputs are otherwise handled by the same code.
+    fn track_for(&self, role: Role) -> &RefCell<Option<u32>> {
+        match role {
+            Role::Primary => &self.primary_track,
+            Role::Secondary => &self.secondary_track,
+        }
+    }
+
+    fn file_for(&self, role: Role) -> &RefCell<Option<Source>> {
+        match role {
+            Role::Primary => &self.primary_file,
+            Role::Secondary => &self.secondary_file,
+        }
+    }
+
+    /// Puts a chosen audio file on the output the browser was opened for.
+    fn set_audio_file(self: &Rc<Self>, path: &std::path::Path) {
+        let Some(role) = self.browse_audio_for.get() else {
+            return;
+        };
+        let source = Source::File(path.to_path_buf());
+        match role {
+            Role::Primary => *self.primary_file.borrow_mut() = Some(source),
+            Role::Secondary => *self.secondary_file.borrow_mut() = Some(source),
+        }
+        self.browse_audio_for.set(None);
+        // Written down here, not left to playback to save: choosing a
+        // soundtrack and then quitting without pressing play is choosing it,
+        // and every other chooser on this screen remembers itself the same way.
+        self.remember_tracks();
     }
 
     // --- Settings ------------------------------------------------------
@@ -6086,7 +6263,14 @@ impl App {
 
         let subtitle = self.subtitle.borrow().clone();
         if let Some(key) = self.storage_key() {
-            crate::config::save_tracks(&key, primary, secondary, subtitle.clone());
+            crate::config::save_tracks(
+                &key,
+                primary,
+                secondary,
+                subtitle.clone(),
+                self.saved_path(Role::Primary),
+                self.saved_path(Role::Secondary),
+            );
         }
 
         let app = self.clone();
@@ -7402,6 +7586,9 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Browse {
     Videos,
+    /// A separate soundtrack for the video already chosen: the same screen,
+    /// listing audio files instead.
+    Audio,
     Folders,
 }
 
@@ -7410,6 +7597,13 @@ impl Browse {
     /// so the files inside it would be a list of things that cannot be picked.
     fn folders_only(self) -> bool {
         self == Browse::Folders
+    }
+
+    fn wants(self) -> crate::browser::Kind {
+        match self {
+            Browse::Audio => crate::browser::Kind::Audio,
+            _ => crate::browser::Kind::Video,
+        }
     }
 }
 
@@ -7497,7 +7691,7 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
             notice: false,
         });
     }
-    for entry in crate::browser::read(directory) {
+    for entry in crate::browser::read(directory, mode.wants()) {
         if mode.folders_only() && !entry.is_dir {
             continue;
         }
