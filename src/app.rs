@@ -681,6 +681,7 @@ impl App {
         });
 
         app.install_key_handling();
+        app.install_accelerators(gtk_app);
 
         // Applied to the window itself rather than at playback, so the
         // menus are fullscreen too.
@@ -824,20 +825,118 @@ impl App {
         window.present();
     }
 
+    /// The commands that belong to the application rather than to a screen,
+    /// bound as actions with accelerators instead of keys matched by hand.
+    ///
+    /// `<Primary>` does not do what it is reputed to. It resolves to Control
+    /// on macOS exactly as it does on Windows and Linux, so binding it alone
+    /// left Command-Q dead - which is the bug this was meant to fix. Measured
+    /// 2026-08-08 on GTK 4.22.4 by printing what `gtk::accelerator_parse`
+    /// returns: `<Primary>q` came back `CONTROL_MASK`, and Command-Q did
+    /// nothing on a Mac until Command was named outright.
+    ///
+    /// So macOS names Command outright, as `<Meta>`. That is measured too:
+    /// a synthesised Command-G arrives at the key handler as `META_MASK` and
+    /// a Control-G as `CONTROL_MASK`, on the same build seconds apart.
+    /// Command raises no key event of its own, so there is nothing to learn
+    /// from watching the modifier alone - the letter beside it is what
+    /// carries the answer.
+    ///
+    /// Control stays bound on macOS as well: it is what the other two
+    /// platforms use, someone who presses it means the same thing by it, and
+    /// nothing else on a Mac wants Control-Q.
+    ///
+    /// Only commands with nothing focused behind them live here. An
+    /// accelerator claims its key ahead of the widget that has focus, so copy
+    /// and the rest stay in the key controller below, where a text field can
+    /// still take the key first. See `primary_mask`.
+    fn install_accelerators(self: &Rc<Self>, gtk_app: &gtk::Application) {
+        // Command-Q on a Mac, Control-Q elsewhere, with W beside it: there is
+        // one window, so closing it and quitting are the same act, and both
+        // keys get reached for.
+        //
+        // Straight out, without the "Close the Player?" question Escape asks
+        // from the top of the menu. That question guards against a keypress
+        // nobody meant, which Escape can be; this is not a combination anyone
+        // presses by accident. The resume position is still written, through
+        // the window's close handler.
+        let quit = gtk::gio::SimpleAction::new("quit", None);
+        {
+            let app = self.clone();
+            quit.connect_activate(move |_, _| {
+                // Waited on, unlike the window's own close handler: the
+                // process is about to end, and the last progress report to
+                // Kodi goes out on a detached thread that exiting would take
+                // with it. The stop button under a launcher waits for the same
+                // reason.
+                app.finish_playback(true);
+                app.window.close();
+            });
+        }
+        gtk_app.add_action(&quit);
+        bind_accels(gtk_app, "app.quit", &["q", "w"]);
+
+        // Where every desktop platform keeps its preferences.
+        //
+        // Gated to the same screens as Ctrl+O and Ctrl+L, and for a sharper
+        // reason: reaching Settings from playback means stopping the film,
+        // which is what the control bar's settings button does deliberately
+        // and what a shortcut must never do quietly. Leaving it off the wizard
+        // screens keeps it from jumping out of a half-finished Kodi setup.
+        let settings = gtk::gio::SimpleAction::new("settings", None);
+        {
+            let app = self.clone();
+            settings.connect_activate(move |_, _| {
+                // Copied out before `show_settings`, which takes the same cell
+                // mutably.
+                let screen = *app.screen.borrow();
+                if matches!(screen, Screen::Menu | Screen::VideoSource) {
+                    app.show_settings();
+                }
+            });
+        }
+        gtk_app.add_action(&settings);
+        bind_accels(gtk_app, "app.settings", &["comma"]);
+    }
+
     fn install_key_handling(self: &Rc<Self>) {
         let controller = gtk::EventControllerKey::new();
+        let primary = primary_mask();
         let app = self.clone();
         controller.connect_key_pressed(move |_, key, _, state| {
             let playing = app.playback.borrow().is_some();
             match key {
                 // Only claimed during playback - the menus need Space for
                 // activating whatever row has focus.
-                gdk::Key::space if playing => {
+                //
+                // The transport keys on a keyboard, a headset or a remote
+                // arrive as ordinary key events, so they cost nothing but a
+                // name here. Most hardware sends one key for play and pause
+                // together, which is what Space already is.
+                //
+                // Windows delivers none of them. Measured 2026-08-08 by
+                // synthesising the VK_MEDIA_* keys and tracing this handler:
+                // the events arrive, four for four, with a keyval of
+                // 0xffffff - `VoidSymbol`. GDK's Windows backend has no
+                // mapping from Windows' media keys to the XF86Audio keysyms,
+                // so there is nothing to match on and no way to match it from
+                // here. Matched by name anyway for the platforms whose keysyms
+                // are real, and worth knowing before anyone tries to debug the
+                // Windows half of it.
+                gdk::Key::space | gdk::Key::AudioPlay | gdk::Key::AudioPause if playing => {
                     if let Some(playback) = app.playback.borrow().as_ref() {
                         playback.toggle_pause();
                         app.awake.set(playback.is_playing());
                     }
                     app.wake_controls();
+                    glib::Propagation::Stop
+                }
+                // Deliberately what Escape does rather than what the stop
+                // button does, which under a launcher closes the application
+                // instead of returning to the menu. Two meanings for "stop"
+                // are enough without a third.
+                gdk::Key::AudioStop if playing => {
+                    app.go_back();
                     glib::Propagation::Stop
                 }
                 // Only during playback: elsewhere the arrows belong to the
@@ -921,7 +1020,29 @@ impl App {
                     app.move_selection(PAGE_ROWS);
                     glib::Propagation::Stop
                 }
-                gdk::Key::f | gdk::Key::F => {
+                // Home and End only ever reach this on the About page.
+                //
+                // GtkListBox binds them itself and lands exactly where a
+                // jump-to-first and jump-to-last should, so every screen with
+                // rows was already served and nothing here is needed for one.
+                // Measured 2026-08-08 rather than assumed: with a trace at the
+                // top of this handler, pressing either key on a list printed
+                // nothing at all, because the list consumes it in the focus
+                // chain long before a bubble-phase controller on the window
+                // sees it. The About page is the one screen with nothing to
+                // select, and its text scrolls once the interface is scaled up.
+                //
+                // Left unclaimed during playback: seeking to the start is
+                // plausible, seeking to the end is not, and the pair is worth
+                // less there than the decisions it would need.
+                gdk::Key::Home | gdk::Key::End
+                    if !playing && app.scroll_about_edge(key == gdk::Key::End) =>
+                {
+                    glib::Propagation::Stop
+                }
+                // F11 alongside F: it is what a browser, a file manager and
+                // every other video player use, and costs one name.
+                gdk::Key::f | gdk::Key::F | gdk::Key::F11 => {
                     app.toggle_fullscreen();
                     glib::Propagation::Stop
                 }
@@ -951,7 +1072,7 @@ impl App {
                 // a shortcut past that would let a keypress replace what a
                 // launcher is waiting on.
                 gdk::Key::l | gdk::Key::L
-                    if state.contains(gdk::ModifierType::CONTROL_MASK)
+                    if state.intersects(primary)
                         && !app.external
                         && matches!(*app.screen.borrow(), Screen::Menu | Screen::VideoSource) =>
                 {
@@ -961,15 +1082,19 @@ impl App {
                 // The shortcut for copying, which GTK would otherwise only
                 // deliver to whichever widget has focus - and the text on the
                 // About page deliberately never takes it.
-                gdk::Key::c | gdk::Key::C
-                    if state.contains(gdk::ModifierType::CONTROL_MASK) && app.copy_selection() =>
-                {
+                //
+                // Matched here rather than bound as an accelerator for exactly
+                // that reason in reverse: an accelerator would claim the key
+                // ahead of the focused widget, so a text field would lose its
+                // own copy. `copy_selection` saying no is what hands the key
+                // back.
+                gdk::Key::c | gdk::Key::C if state.intersects(primary) && app.copy_selection() => {
                     glib::Propagation::Stop
                 }
                 // The other half of the pair, and the shortcut every desktop
                 // application uses for opening a file.
                 gdk::Key::o | gdk::Key::O
-                    if state.contains(gdk::ModifierType::CONTROL_MASK)
+                    if state.intersects(primary)
                         && !app.external
                         && matches!(*app.screen.borrow(), Screen::Menu | Screen::VideoSource) =>
                 {
@@ -4606,10 +4731,23 @@ impl App {
         // enough to keep your place on the page.
         let step = adjustment.page_size() / 3.0;
         let moved = adjustment.value() + delta as f64 * step;
-        adjustment.set_value(moved.clamp(
-            adjustment.lower(),
-            (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
-        ));
+        adjustment.set_value(moved.clamp(adjustment.lower(), about_bottom(&adjustment)));
+        true
+    }
+
+    /// The same for Home and End, which the About page has no rows to give to.
+    fn scroll_about_edge(&self, end: bool) -> bool {
+        if *self.screen.borrow() != Screen::About {
+            return false;
+        }
+        let Some(adjustment) = self.about_scroll.borrow().clone() else {
+            return false;
+        };
+        adjustment.set_value(if end {
+            about_bottom(&adjustment)
+        } else {
+            adjustment.lower()
+        });
         true
     }
 
@@ -7032,6 +7170,48 @@ fn language_position(code: Option<&str>) -> Option<usize> {
     crate::languages::LANGUAGES
         .iter()
         .position(|(stored, _, _, _)| *stored == code)
+}
+
+/// As far down the About page as it goes, which is the top of the last
+/// screenful rather than the bottom of the text.
+fn about_bottom(adjustment: &gtk::Adjustment) -> f64 {
+    (adjustment.upper() - adjustment.page_size()).max(adjustment.lower())
+}
+
+/// Binds an action to each of `keys` under every modifier this platform
+/// answers a shortcut on.
+///
+/// `<Primary>` everywhere, which is Control on all three platforms, plus
+/// Command on macOS - where `<Primary>` is emphatically not it. See
+/// `install_accelerators` for how that was measured.
+fn bind_accels(gtk_app: &gtk::Application, action: &str, keys: &[&str]) {
+    let mut accels = Vec::new();
+    for key in keys {
+        accels.push(format!("<Primary>{key}"));
+        if cfg!(target_os = "macos") {
+            accels.push(format!("<Meta>{key}"));
+        }
+    }
+    let accels: Vec<&str> = accels.iter().map(String::as_str).collect();
+    gtk_app.set_accels_for_action(action, &accels);
+}
+
+/// The modifiers a shortcut may be pressed with here, as one mask to test a
+/// key event against.
+///
+/// `<Primary>` is asked of GTK rather than written out per platform, so the
+/// keys matched by hand cannot drift from the ones bound as accelerators.
+/// Command is added on macOS for the same reason it is bound there, and it is
+/// why this is tested with `intersects` rather than `contains`: the mask holds
+/// two modifiers on that platform and either one alone means yes.
+fn primary_mask() -> gdk::ModifierType {
+    let mut mask = gtk::accelerator_parse("<Primary>a")
+        .map(|(_, mask)| mask)
+        .unwrap_or(gdk::ModifierType::CONTROL_MASK);
+    if cfg!(target_os = "macos") {
+        mask |= gdk::ModifierType::META_MASK;
+    }
+    mask
 }
 
 fn last_row_index(list: &gtk::ListBox) -> i32 {

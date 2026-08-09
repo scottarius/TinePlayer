@@ -83,6 +83,8 @@ by direct path, not `http://` or `smb://`
 
 Everything is reachable with a keyboard or a gamepad. A mouse is not required, but can be used.
 
+On macOS the shortcuts below work with either <kbd>Cmd</kbd> or <kbd>Ctrl</kbd>.
+
 ### In the menus
 
 | Key | Gamepad | Action                                |
@@ -92,8 +94,11 @@ Everything is reachable with a keyboard or a gamepad. A mouse is not required, b
 | <kbd>Tab</kbd> <kbd>Shift</kbd>+<kbd>Tab</kbd> | <kbd>RB</kbd> <kbd>LB</kbd> / <kbd>R1</kbd> <kbd>L1</kbd> | Move to next / previous UI element    |
 | <kbd>Enter</kbd> | <kbd>A</kbd> / <kbd>Cross</kbd> | Select                                |
 | <kbd>Esc</kbd> | <kbd>B</kbd> / <kbd>Circle</kbd> | Cancel / Back                         |
+| <kbd>Home</kbd> <kbd>End</kbd> | - | Jump to the first or last item in a list |
 | <kbd>Ctrl</kbd>+<kbd>O</kbd> | - | Open the file browser, from main menu |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | - | Open a video by URL, from main menu   |
+| <kbd>Ctrl</kbd>+<kbd>,</kbd> | - | Open Settings, from main menu         |
+| <kbd>Ctrl</kbd>+<kbd>Q</kbd> or <kbd>Ctrl</kbd>+<kbd>W</kbd> | - | Close the player, from anywhere including playback |
 
 ### During playback
 
@@ -104,7 +109,7 @@ Everything is reachable with a keyboard or a gamepad. A mouse is not required, b
 | <kbd>←</kbd> <kbd>→</kbd> | Left or Right on <kbd>D-pad</kbd> or <kbd>Left stick</kbd> | Tap to skip 10 seconds, hold to scrub. Moves between the playback controls while they are showing |
 | <kbd>↑</kbd> | Up on <kbd>D-pad</kbd> or <kbd>Left stick</kbd>            | Show the playback controls, then move up through them                                             |
 | <kbd>↓</kbd> | Down on <kbd>D-pad</kbd> or <kbd>Left stick</kbd>          | Move down through the playback controls, then hide them                                           |
-| <kbd>F</kbd> | <kbd>Y</kbd> / <kbd>Triangle</kbd>                         | Toggle fullscreen                                                                                 |
+| <kbd>F</kbd> or <kbd>F11</kbd> | <kbd>Y</kbd> / <kbd>Triangle</kbd>                         | Toggle fullscreen                                                                                 |
 | <kbd>C</kbd> | <kbd>X</kbd> / <kbd>Square</kbd>                           | Show or hide subtitles                                                                            |
 | <kbd>M</kbd> | Hold <kbd>X</kbd> / <kbd>Square</kbd>                      | Mute or restore both outputs at once. Or long-press the volume button                             |
 | <kbd>T</kbd> | Click <kbd>Right stick</kbd>                               | Swap the right-hand readout between the video length and the time remaining                       |
