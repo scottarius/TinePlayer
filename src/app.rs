@@ -2243,6 +2243,20 @@ impl App {
         self.file.borrow().as_ref().map(Source::key)
     }
 
+    /// The same key for a video that is not the current one yet.
+    ///
+    /// `apply_media` needs this: it reads what was remembered about the file it
+    /// is loading, and `self.file` does not become that file until the end of
+    /// it. Asking `storage_key` there returns the *previous* video's key - or
+    /// none at all on the first file of a session, which is why remembered
+    /// choices were quietly ignored at startup.
+    fn storage_key_for(&self, source: &Source) -> String {
+        match self.kodi_item.borrow().as_ref() {
+            Some(item) => item.key(),
+            None => source.key(),
+        }
+    }
+
     /// What to call the current file on screen: Kodi's library title when it
     /// has one, otherwise the file name.
     fn file_label(&self) -> Option<String> {
@@ -3239,9 +3253,9 @@ impl App {
                 .map(|track| track.index)
         };
 
-        let saved = self
-            .storage_key()
-            .and_then(|key| crate::config::load_resume(&key))
+        // Keyed on the video being loaded rather than the one still current,
+        // which is not this one until the end of this function.
+        let saved = crate::config::load_resume(&self.storage_key_for(source))
             .and_then(|resume| resume.tracks);
         let (primary, secondary) = match saved.clone() {
             // A saved None is a real choice ("no audio on that output"), so a
