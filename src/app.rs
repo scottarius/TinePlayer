@@ -274,6 +274,22 @@ const SETTINGS_SUBROWS: [i32; 10] = [
     ROW_SUBTITLE_FONT,
 ];
 
+/// How wide the alignment panel is, measured in characters of its own body
+/// text.
+///
+/// Both the floor and the ceiling, so the three steps are one panel changing
+/// what it says rather than three differently sized windows. It has to sit on
+/// the text rather than on the container, because GTK offers no maximum width
+/// on a box - and the text and the track names are the only things in the
+/// panel that could push it wider anyway. Around 74 characters is also about
+/// as long a line as is comfortable to read.
+const ALIGN_PANEL_CHARS: i32 = 74;
+
+/// A floor in unscaled pixels as well, for the case the character measure
+/// cannot cover: a narrow font would otherwise draw a panel too cramped to
+/// read from across a room, which is the distance this is built for.
+const ALIGN_PANEL_MIN: f64 = 520.0;
+
 /// Font families offered in the menu. Generic names Pango always resolves
 /// rather than an enumeration of everything installed, which would run to
 /// hundreds of rows. `subtitle_font` in the config takes any description.
@@ -4297,10 +4313,10 @@ impl App {
             .margin_start(44)
             .margin_end(44)
             .build();
-        // A floor rather than a fixed size, so the panel keeps roughly the
-        // same width from step to step instead of shrinking around whatever
-        // the shortest one has on it.
-        page.set_size_request((520.0 * self.scale.get()).round() as i32, -1);
+        // The floor. Without it the panel shrinks around whatever the shortest
+        // step has on it, and the three read as three differently sized
+        // windows rather than one panel changing what it says.
+        page.set_size_request((ALIGN_PANEL_MIN * self.scale.get()).round() as i32, -1);
 
         let heading = heading_label("Auto-Align");
         heading.set_halign(gtk::Align::Center);
@@ -4312,6 +4328,15 @@ impl App {
             .wrap_mode(gtk::pango::WrapMode::WordChar)
             .justify(gtk::Justification::Center)
             .halign(gtk::Align::Center)
+            // The ceiling, and with the two set alike the floor as well. A
+            // GtkBox has no maximum width, so the cap has to sit on the text
+            // that would otherwise push it wide - and asking for the same
+            // measure as a minimum is what makes all three steps come out the
+            // same width instead of each shrinking to fit its own sentence.
+            // In characters rather than pixels because that is what wraps, and
+            // it holds at every interface scale without being multiplied.
+            .width_chars(ALIGN_PANEL_CHARS)
+            .max_width_chars(ALIGN_PANEL_CHARS)
             .css_classes(["tp-hint"])
             .build();
         page.append(&hint);
@@ -4351,6 +4376,10 @@ impl App {
             let text = describe_audio_track(track);
             let row = chooser_row(&text);
             row.set_xalign(0.5);
+            // Held to the same measure as the body text. A track carrying a
+            // long title would otherwise widen the whole panel, and it already
+            // ellipsizes rather than wrapping.
+            row.set_max_width_chars(ALIGN_PANEL_CHARS);
             append_named(&list, &row, &text);
         }
 
@@ -4434,8 +4463,7 @@ impl App {
             self.align_page("Analyzing audio to align the tracks. This may take a few moments.");
 
         let bar = gtk::ProgressBar::new();
-        bar.add_css_class("tp-progress");
-        bar.add_css_class("tp-bar");
+        bar.add_css_class("tp-align-bar");
         page.append(&bar);
 
         let status = gtk::Label::builder()
@@ -4534,44 +4562,40 @@ impl App {
                 let rounded = millis.round();
                 let shift = if rounded > 0.0 {
                     format!(
-                        "The audio file runs {rounded:.0}ms late, and is now pulled forward \
-                         to match."
+                        "The audio file runs {rounded:.0}ms late, and has been adjusted to \
+                         sync with the video."
                     )
                 } else if rounded < 0.0 {
                     format!(
-                        "The audio file runs {:.0}ms early, and is now held back to match.",
+                        "The audio file runs {:.0}ms early, and has been adjusted to sync \
+                         with the video.",
                         -rounded
                     )
                 } else {
-                    "The audio file is already in step with the video, so nothing needed \
-                     changing."
+                    "The audio file is already in sync with the video, no adjustment needed."
                         .to_string()
                 };
+                // Confidence is said out loud on purpose. The correction is
+                // hidden, so someone who cannot see the picture has no way to
+                // judge it for themselves - a hidden baseline must never hide
+                // a wrong answer.
                 (
-                    format!(
-                        "{shift}\n\nConfidence {:.0}%. Audio Sync adds to this, so a \
-                         correction by ear now starts from here.",
-                        confidence * 100.0
-                    ),
+                    format!("{shift}\n\nConfidence {:.0}%.", confidence * 100.0),
                     false,
                 )
             }
             // A rate difference is a slope rather than a shift, so no single
             // offset fixes it and averaging one would be a guess that drifts.
-            Verdict::RateMismatch { drift_ms_per_hour } => (
-                format!(
-                    "The two run at slightly different speeds, drifting about {:.0}ms an \
-                     hour apart. No single offset can line them up, so nothing has been \
-                     changed.\n\nAudio Sync will correct whichever part you are watching.",
-                    drift_ms_per_hour.abs()
-                ),
+            Verdict::RateMismatch { .. } => (
+                "The audio file runs at a different speed than the video and cannot be \
+                 automatically adjusted.\n\nUse Audio Sync to line up the part you are \
+                 watching."
+                    .to_string(),
                 true,
             ),
             Verdict::Unsure => (
-                "The two could not be matched with any confidence, so nothing has been \
-                 changed. They may be different edits, or the recording may be too quiet \
-                 to match on.\n\nTry another reference track, or line them up by ear with \
-                 Audio Sync."
+                "The audio file could not be matched with the video.\n\nTry another \
+                 reference track, or line them up by ear with Audio Sync."
                     .to_string(),
                 true,
             ),
@@ -8694,6 +8718,30 @@ fn style_css(scale: f64, dark: bool) -> String {
         .tp-subtitles-button:disabled {{ opacity: 0.2; }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
+        /* The alignment panel's bar, thicker than the playback scrubber: it
+           is the only thing moving on that screen, and it is read from across
+           a room rather than aimed at with a pointer. Its own class, so the
+           scrubber and the settings sliders keep the weight they were given.
+           The height has to sit on both nodes - a GtkProgressBar draws the
+           fill inside the trough, and raising only one leaves a thick bar with
+           a thin fill rattling around in it. */
+        .tp-align-bar, .tp-align-bar trough, .tp-align-bar progress {{
+            min-height: {align_bar}px;
+            border-radius: {align_bar_radius}px;
+        }}
+        /* Styled in full rather than by borrowing `tp-bar`, whose dim fill is
+           meant for a slider with a handle on it to point at. There is no
+           handle here, so the fill is the whole of what is being read and it
+           takes the highlight colour. `background-image: none` first, or the
+           theme's gradient sits over any colour set under it. */
+        .tp-align-bar trough {{
+            background-color: {trough};
+            background-image: none;
+        }}
+        .tp-align-bar progress {{
+            background-color: {highlight};
+            background-image: none;
+        }}
         /* Settings bars, drawn to be found rather than to be tasteful. The
            theme's own colours put a faint handle on a faint trough, which on
            a dark background is a bar that has to be looked for.
@@ -8850,6 +8898,8 @@ fn style_css(scale: f64, dark: bool) -> String {
         back_icon = px(22.0),
         row_icon = px(18.0),
         bar = px(6.0),
+        align_bar = px(14.0),
+        align_bar_radius = px(7.0),
         // A literal color rather than a theme name: GTK's named colors
         // differ between themes and libadwaita, and an undefined one makes
         // the whole declaration fail to parse - which silently leaves the
