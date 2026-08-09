@@ -18,8 +18,17 @@ const EXTENSIONS: [&str; 4] = ["srt", "ass", "ssa", "vtt"];
 /// One entry in the subtitle chooser.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Subtitle {
-    Embedded { index: u32, label: String },
-    External { name: String, label: String },
+    Embedded {
+        index: u32,
+        label: String,
+        /// What a sidecar said, where there was one. See
+        /// [`Subtitle::is_forced`] for why the title is still read as well.
+        flagged: bool,
+    },
+    External {
+        name: String,
+        label: String,
+    },
 }
 
 impl Subtitle {
@@ -65,6 +74,7 @@ pub fn options(video: Option<&Path>, embedded: &[SubtitleTrack]) -> Vec<Subtitle
             } else {
                 format!("{} — {}", track.language, track.title)
             },
+            flagged: track.forced,
         })
         .collect();
     if let Some(video) = video {
@@ -129,13 +139,23 @@ impl Subtitle {
     /// who understands the dialogue still needs, such as alien speech or
     /// signs.
     ///
-    /// Read from the name rather than a flag. Matroska has a forced flag, but
-    /// GStreamer does not surface it, and rips routinely leave it unset while
-    /// saying "Forced" in the title - the flag is false on every track of a
-    /// well-tagged file we tested. The convention in the title and in subtitle
-    /// file names is what actually carries the intent.
+    /// Read from the name, and from a sidecar when one says so.
+    ///
+    /// The name is the older signal and still the load-bearing one. Matroska
+    /// has a forced flag, but GStreamer does not surface it, and rips
+    /// routinely leave it unset while saying "Forced" in the title - the flag
+    /// is false on every track of a well-tagged file we tested. The convention
+    /// in the title and in subtitle file names is what actually carries the
+    /// intent.
+    ///
+    /// A `.nfo` beside the video is the one place a real flag can be read
+    /// from, so it is taken as well. Either saying yes is enough: a library
+    /// that recorded the flag and a ripper who wrote it in the title are two
+    /// independent ways of being told the same thing, and files exist with
+    /// only one of them.
     pub fn is_forced(&self) -> bool {
-        self.label().to_lowercase().contains("forced")
+        let flagged = matches!(self, Subtitle::Embedded { flagged: true, .. });
+        flagged || self.label().to_lowercase().contains("forced")
     }
 }
 
@@ -364,6 +384,7 @@ mod tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "en".to_string(),
+                flagged: false,
             },
             Subtitle::External {
                 name: "Film (2019).en.hi.srt".to_string(),
@@ -468,14 +489,17 @@ mod automatic_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "ru - Forced".to_string(),
+                flagged: false,
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "ru - Full".to_string(),
+                flagged: false,
             },
             Subtitle::Embedded {
                 index: 2,
                 label: "en - Full".to_string(),
+                flagged: false,
             },
             Subtitle::External {
                 name: "f.en.forced.srt".to_string(),
@@ -532,6 +556,7 @@ mod automatic_tests {
         let only_full = vec![Subtitle::Embedded {
             index: 0,
             label: "ru - Full".to_string(),
+            flagged: false,
         }];
         assert_eq!(
             automatic(&Auto::parse("primary_forced"), &only_full, Some("ru"), None),
@@ -570,14 +595,17 @@ mod argument_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "ru - Forced".to_string(),
+                flagged: false,
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "ru - Full".to_string(),
+                flagged: false,
             },
             Subtitle::Embedded {
                 index: 2,
                 label: "en - Full".to_string(),
+                flagged: false,
             },
         ]
     }
@@ -626,10 +654,12 @@ mod fallback_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "ru - Full".to_string(),
+                flagged: false,
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "en - Forced".to_string(),
+                flagged: false,
             },
         ];
         assert_eq!(
@@ -644,10 +674,12 @@ mod fallback_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "en - Forced".to_string(),
+                flagged: false,
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "ru - Forced".to_string(),
+                flagged: false,
             },
         ];
         assert_eq!(
@@ -665,6 +697,7 @@ mod fallback_tests {
         let o = vec![Subtitle::Embedded {
             index: 0,
             label: "en - Full".to_string(),
+            flagged: false,
         }];
         assert_eq!(
             automatic(&Auto::parse("primary"), &o, Some("ru"), Some("en")),
@@ -677,6 +710,7 @@ mod fallback_tests {
         let o = vec![Subtitle::Embedded {
             index: 0,
             label: "en - Full".to_string(),
+            flagged: false,
         }];
         assert_eq!(
             automatic(&Auto::parse("primary_forced"), &o, Some("ru"), Some("en")),

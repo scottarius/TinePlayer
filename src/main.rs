@@ -18,6 +18,7 @@ mod kodi;
 mod kodi_setup;
 mod languages;
 mod media_keys;
+mod nfo;
 mod pipeline;
 mod player;
 mod probe;
