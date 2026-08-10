@@ -16,6 +16,11 @@ use crate::probe::AudioTrack;
 use crate::sound::Sounds;
 use crate::subtitles::{Subtitle, SubtitleChoice};
 
+/// Marks the overlay a modal is stacked in, so that opening one over another
+/// can tell it apart from a page that happens to be built out of an overlay
+/// too - which the media page is.
+const MODAL_STACK: &str = "tp-modal-stack";
+
 /// Which setting a chooser screen is editing. The menu drills into one of
 /// these and returns once a choice is made.
 #[derive(Clone, Copy, PartialEq)]
@@ -775,6 +780,37 @@ impl App {
             let Some(app) = weak.upgrade() else { return };
             app.follow_automatic_scale(window);
         });
+
+        // The media page draws its poster as a proportion of the page's
+        // height, which is read when the page is built. Filling the screen
+        // changes that height by a long way in one step, so the page is
+        // rebuilt to match rather than left with a poster sized for a window
+        // half the height.
+        //
+        // Connected here, once, rather than by the page that wants it: a
+        // handler attached while building the menu would be attached again by
+        // every rebuild, and each rebuild would then trigger the next.
+        // Deferred to an idle so the rebuild does not tear down the widgets
+        // whose own handlers are still running.
+        for maximize in [true, false] {
+            let weak = Rc::downgrade(&app);
+            let watch = move |window: &gtk::ApplicationWindow| {
+                let _ = window;
+                let Some(app) = weak.upgrade() else { return };
+                if *app.screen.borrow() != Screen::Menu {
+                    return;
+                }
+                glib::idle_add_local_once(move || {
+                    if *app.screen.borrow() == Screen::Menu {
+                        app.show_menu();
+                    }
+                });
+            };
+            match maximize {
+                true => window.connect_maximized_notify(watch),
+                false => window.connect_fullscreened_notify(watch),
+            };
+        }
 
         app.install_key_handling();
         app.install_accelerators(gtk_app);
@@ -2414,14 +2450,40 @@ impl App {
             .spacing(px(6.0))
             .hexpand(true)
             .build();
-        for widget in self.heading_block(scale) {
-            main.append(&widget);
-        }
         columns.append(&main);
         content.append(&columns);
 
         let (scroller, list) = scrolling_list();
         name_it(&list, "Playback Options");
+
+        // The description scrolls *with* the rows rather than sitting above
+        // them, which matters only at the extreme and matters a great deal
+        // there. At 3x on a modest screen the title, facts and plot alone are
+        // taller than the window, and with the heading fixed the rows and the
+        // whole footer were pushed off the bottom - so the film could not be
+        // played at all. Inside the scroller, what does not fit is the
+        // description, the footer stays pinned, and the choosers stay
+        // reachable. At every ordinary size there is nothing to scroll and the
+        // page is exactly as composed.
+        //
+        // This is the plan's own answer to the question it left open: when
+        // no-scroll and 3x cannot both hold, what yields is the artwork and
+        // the prose, never the choices.
+        let above = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(6.0))
+            .build();
+        let budget = heading_budget(self.page_height(scale), scale);
+        for widget in self.heading_block(scale, budget) {
+            above.append(&widget);
+        }
+        // The list arrives already parented to the scroller, and a widget with
+        // a parent cannot be appended anywhere: GTK refuses it with a critical
+        // and does nothing, which showed up as a page with a title, a footer
+        // and no rows between them at all.
+        scroller.set_child(None::<&gtk::Widget>);
+        above.append(&list);
+        scroller.set_child(Some(&above));
         main.append(&scroller);
 
         let file = self.file.borrow().clone();
@@ -2684,6 +2746,22 @@ impl App {
 
     // --- The media page ------------------------------------------------
 
+    /// How tall the page is, or is about to be.
+    ///
+    /// Before the window is mapped it has no size, but it does already know
+    /// the size it is going to open at - and that is not simply the interface
+    /// scale times a constant, because the opening size is capped to the
+    /// monitor. Guessing it as `700 * scale` put a 1050px poster in a 1325px
+    /// window at 3x, which pushed the rows and the whole footer off the bottom
+    /// of the screen.
+    fn page_height(&self, scale: f64) -> f64 {
+        match (self.window.height(), self.window.default_height()) {
+            (0, 0) => 700.0 * scale,
+            (0, planned) => planned as f64,
+            (height, _) => height as f64,
+        }
+    }
+
     /// The poster, and the facts about the file under it.
     ///
     /// The two belong together and to nothing else on the page: one is what
@@ -2692,12 +2770,30 @@ impl App {
     /// leaves the whole of the space beside it for the choices.
     fn poster_column(self: &Rc<Self>, scale: f64) -> gtk::Box {
         let px = |base: f64| (base * scale).round() as i32;
-        // Proportioned from the comps against the default window rather than
-        // against the 1920 they were drawn at: 19% of the width there, which
-        // is a little over 200px at the size this window actually opens.
-        const WIDTH: f64 = 208.0;
+
+        // Half the page's height, which is the proportion the comps are drawn
+        // to - 550px of 1080 - and the reason this is not simply a size in
+        // interface units. On a maximized ultrawide the page is held to a
+        // 16:9 column far taller than the default window, and a poster fixed
+        // in scaled pixels sits in the corner of it looking like a thumbnail
+        // of itself. Bounded at both ends so a very short window still gets
+        // something poster-shaped and a very tall one does not get a
+        // billboard.
+        //
+        // Read when the page is built rather than tracked, so a window
+        // resized while the menu is up keeps the size it was built at until
+        // something rebuilds the page - which every trip into a chooser does.
+        // The alternative is another custom widget, and this is a proportion
+        // rather than a constraint: being a little out until the next rebuild
+        // costs nothing that anyone can see.
+        let page_height = self.page_height(scale);
+        // Half the page, and never more. The floor is an absolute size rather
+        // than a scaled one on purpose: scaled, it grows with the interface
+        // exactly when there is least room for it, which is the shape of the
+        // bug above.
+        let height = (page_height * 0.5).clamp(120.0, 560.0 * scale);
         // Two by three, which every poster in every library is drawn to.
-        const HEIGHT: f64 = WIDTH * 1.5;
+        let width = height * 2.0 / 3.0;
 
         let column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -2712,7 +2808,7 @@ impl App {
             // cropped by the frame rather than allowed to reshape it.
             .overflow(gtk::Overflow::Hidden)
             .build();
-        frame.set_size_request(px(WIDTH), px(HEIGHT));
+        frame.set_size_request(width.round() as i32, height.round() as i32);
 
         match self.poster_art.borrow().clone() {
             Some(texture) => {
@@ -2729,8 +2825,10 @@ impl App {
                 frame.append(&picture);
             }
             // Nothing found, which is the common case: of the 123 film folders
-            // in the library this was written against, 28 carry artwork.
-            None => frame.append(&video_file_image(scale, self.dark.get())),
+            // in the library this was written against, 28 carry artwork. The
+            // mark is sized from the frame rather than from the interface, so
+            // it keeps its place inside it at every window size.
+            None => frame.append(&video_file_image(width * 0.42, self.dark.get())),
         }
         column.append(&frame);
 
@@ -2781,10 +2879,32 @@ impl App {
 
     /// The title, the facts line, the summary, and what languages the file
     /// holds - everything above the choices.
-    fn heading_block(self: &Rc<Self>, scale: f64) -> Vec<gtk::Widget> {
+    ///
+    /// `budget` is how much room there is for all of it, in interface units -
+    /// see [`heading_budget`]. Spent in priority order, and what does not fit
+    /// is left out rather than shown and pushed off the screen. The title is
+    /// the exception and is always drawn: a page that will not say what film
+    /// it is about is not a page.
+    fn heading_block(self: &Rc<Self>, scale: f64, budget: f64) -> Vec<gtk::Widget> {
+        // Rough heights in interface units, each a little generous. They only
+        // have to be good enough to order the decisions - the layout does the
+        // real arithmetic, and being a few units out changes nothing except
+        // at the exact boundary.
+        const FACTS: f64 = 32.0;
+        const SUMMARY: f64 = 54.0;
+        const PLOT: f64 = 94.0;
+
         let px = |base: f64| (base * scale).round() as i32;
         let details = self.details.borrow();
         let mut block: Vec<gtk::Widget> = Vec::new();
+        let mut left = budget;
+        let mut afford = |cost: f64| {
+            let fits = left >= cost;
+            if fits {
+                left -= cost;
+            }
+            fits
+        };
 
         let title = gtk::Label::new(Some(&details.title));
         title.add_css_class("tp-film-title");
@@ -2823,7 +2943,7 @@ impl App {
                     .join(", "),
             );
         }
-        if !facts.is_empty() {
+        if !facts.is_empty() && afford(FACTS) {
             let line = gtk::Label::new(Some(&facts.join("     ")));
             line.add_css_class("tp-film-facts");
             line.set_xalign(0.0);
@@ -2832,7 +2952,17 @@ impl App {
             block.push(line.upcast());
         }
 
-        if !details.plot.is_empty() {
+        // Which of the two remaining blocks there is room for, decided before
+        // either is built so that the more useful one wins when only one
+        // fits. The languages line is the more useful by a distance: this is a
+        // player whose entire purpose is choosing between audio tracks, and
+        // what languages the file carries is the question a viewer opens it
+        // with. The plot is decoration beside that.
+        let spoken = (self.audio_languages(), self.subtitle_languages());
+        let show_summary = !(spoken.0.is_empty() && spoken.1.is_empty()) && afford(SUMMARY);
+        let show_plot = !details.plot.is_empty() && afford(PLOT);
+
+        if show_plot {
             let plot = gtk::Label::new(Some(&details.plot));
             plot.add_css_class("tp-film-plot");
             plot.set_xalign(0.0);
@@ -2855,31 +2985,26 @@ impl App {
         // The rows below say which track is going where; this says what there
         // was to choose from, which is the question someone asks before they
         // start opening choosers.
-        let summary = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(px(1.0))
-            .margin_top(px(14.0))
-            .build();
-        let mut any = false;
-        for (name, languages) in [
-            ("Audio", self.audio_languages()),
-            ("Subtitles", self.subtitle_languages()),
-        ] {
-            if languages.is_empty() {
-                continue;
+        if show_summary {
+            let summary = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(px(1.0))
+                .margin_top(px(14.0))
+                .build();
+            for (name, languages) in [("Audio", spoken.0), ("Subtitles", spoken.1)] {
+                if languages.is_empty() {
+                    continue;
+                }
+                let line = gtk::Label::new(None);
+                line.add_css_class("tp-fact");
+                line.set_xalign(0.0);
+                line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                line.set_markup(&format!(
+                    "<span alpha='60%'>{name}:</span> {}",
+                    glib::markup_escape_text(&languages.join(", ")),
+                ));
+                summary.append(&line);
             }
-            any = true;
-            let line = gtk::Label::new(None);
-            line.add_css_class("tp-fact");
-            line.set_xalign(0.0);
-            line.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            line.set_markup(&format!(
-                "<span alpha='60%'>{name}:</span> {}",
-                glib::markup_escape_text(&languages.join(", ")),
-            ));
-            summary.append(&line);
-        }
-        if any {
             block.push(summary.upcast());
         }
         block
@@ -4127,18 +4252,27 @@ impl App {
         // the main menu behind a dialog opened from somewhere else entirely.
         // The window has a child from the first screen onwards, so what is
         // left here is the moment before that.
+        // Only a *modal's* overlay is unwrapped, which is what the marker
+        // class is for. The media page is an overlay too - artwork behind,
+        // page in front - and taking its child handed back the bare backdrop
+        // and threw the page away, so the browser opened over a film's
+        // wallpaper with nothing on it.
+        let modal_stack = |child: &gtk::Widget| {
+            child
+                .downcast_ref::<gtk::Overlay>()
+                .is_some_and(|overlay| overlay.has_css_class(MODAL_STACK))
+        };
         let backdrop: gtk::Widget = match self.window.child() {
-            Some(child) => match child.downcast::<gtk::Overlay>() {
-                Ok(overlay) => {
-                    let under = overlay.child();
-                    overlay.set_child(None::<&gtk::Widget>);
-                    under.unwrap_or_else(|| empty_backdrop().upcast())
-                }
-                Err(child) => {
-                    self.window.set_child(None::<&gtk::Widget>);
-                    child
-                }
-            },
+            Some(child) if modal_stack(&child) => {
+                let overlay = child.downcast::<gtk::Overlay>().expect("checked above");
+                let under = overlay.child();
+                overlay.set_child(None::<&gtk::Widget>);
+                under.unwrap_or_else(|| empty_backdrop().upcast())
+            }
+            Some(child) => {
+                self.window.set_child(None::<&gtk::Widget>);
+                child
+            }
             None => empty_backdrop().upcast(),
         };
         // Not just visually behind: an insensitive page cannot take focus, so
@@ -4153,6 +4287,7 @@ impl App {
         }
 
         let overlay = gtk::Overlay::new();
+        overlay.add_css_class(MODAL_STACK);
         overlay.set_child(Some(&backdrop));
         overlay.add_overlay(&scrim);
         overlay.add_overlay(page);
@@ -8020,13 +8155,39 @@ fn logo_image(scale: f64) -> gtk::Image {
     image
 }
 
+/// How much room the film's description may take, in interface units.
+///
+/// Interface units rather than pixels because that is the question actually
+/// being asked. Everything on the page scales together, so what decides
+/// whether the plot fits is not how many pixels tall the window is but how
+/// many rows-worth of interface fit in it - and at 3x on a 1440px screen that
+/// is a third of what it is at 1x on the same screen.
+///
+/// The reservation is what the page cannot do without: the choosers, the
+/// footer that plays the film, and the margins around them. Whatever is left
+/// over is what the description gets, and at 3x on a modest display that is
+/// nothing - which is the right answer. A page that shows a plot summary and
+/// no way to press play has its priorities backwards.
+///
+/// This is the plan's open question about `ui_scale` answered: no-scroll and
+/// 3x cannot both hold, and what yields is the artwork and the prose.
+fn heading_budget(page_height: f64, scale: f64) -> f64 {
+    // Seven rows at a row's height, plus the gaps between the three groups.
+    const CHOOSERS: f64 = 7.0 * 39.0 + 3.0 * 28.0;
+    const FOOTER: f64 = 62.0;
+    const MARGINS: f64 = 56.0;
+
+    let units = page_height / scale.max(0.01);
+    (units - CHOOSERS - FOOTER - MARGINS).max(0.0)
+}
+
 /// What stands in for a poster when there is none, which is most of the time.
 ///
 /// A PNG per theme rather than the SVG it was drawn from, for the reason
 /// [`logo_image`] gives: GStreamer's Windows distribution ships no gdk-pixbuf
 /// loaders, so nothing there can decode an SVG at runtime. The two versions
 /// carry the same ink as the fullscreen marks beside them.
-fn video_file_image(scale: f64, dark: bool) -> gtk::Image {
+fn video_file_image(size: f64, dark: bool) -> gtk::Image {
     const LIGHT: &[u8] = include_bytes!("../data/ui/video-file-light.png");
     const DARK: &[u8] = include_bytes!("../data/ui/video-file-dark.png");
 
@@ -8036,8 +8197,9 @@ fn video_file_image(scale: f64, dark: bool) -> gtk::Image {
         image.set_paintable(Some(&texture));
     }
     // Drawn well inside the frame rather than filling it: the mark is saying
-    // "no artwork", and one that reached the edges would read as artwork.
-    image.set_pixel_size((96.0 * scale).round() as i32);
+    // there is no artwork, and one that reached the edges would read as
+    // artwork.
+    image.set_pixel_size(size.round().max(1.0) as i32);
     image.set_halign(gtk::Align::Center);
     image.set_valign(gtk::Align::Center);
     image.set_hexpand(true);
@@ -8681,7 +8843,13 @@ fn show_row(row: &gtk::ListBoxRow) {
         }
     };
 
-    let Some((_, top)) = row.translate_coordinates(&list, 0.0, 0.0) else {
+    // Measured against whatever the scroller actually scrolls, not against
+    // the list. On the media page the list is not the scroller's child - the
+    // film's description sits above it inside the same scrolled area - and
+    // coordinates relative to the list are short by the height of everything
+    // above it, which scrolls every row to the wrong place.
+    let scrolled = scroller.child().unwrap_or_else(|| list.clone());
+    let Some((_, top)) = row.translate_coordinates(&scrolled, 0.0, 0.0) else {
         return;
     };
     let adjustment = scroller.vadjustment();
@@ -9709,6 +9877,49 @@ mod notices {
             .collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
         assert_eq!(texts[0], "one line and its continuation");
+    }
+}
+
+#[cfg(test)]
+mod media_page {
+    use super::heading_budget;
+
+    /// The ordinary case: a default window at ordinary sizes has room for
+    /// the whole description, which is what the comps show.
+    #[test]
+    fn a_normal_window_affords_everything() {
+        // Title, facts, summary and plot together cost about 180 units.
+        assert!(heading_budget(700.0, 1.0) >= 180.0);
+        assert!(heading_budget(875.0, 1.25) >= 180.0);
+        assert!(heading_budget(1080.0, 1.0) >= 180.0);
+    }
+
+    /// The case the plan left open, and the reason this exists: at 3x on a
+    /// 1440px display there is no room for prose, and the answer is to keep
+    /// the choosers rather than to keep the plot.
+    #[test]
+    fn a_large_interface_on_a_modest_screen_affords_nothing() {
+        assert_eq!(heading_budget(1325.0, 3.0), 0.0);
+        assert_eq!(heading_budget(1296.0, 3.0), 0.0);
+    }
+
+    /// Scale is what decides it, not pixels: the same window affords the
+    /// description at 1x and does not at 3x.
+    #[test]
+    fn the_same_window_says_different_things_at_different_scales() {
+        let window = 1325.0;
+        assert!(heading_budget(window, 1.0) > heading_budget(window, 2.0));
+        assert!(heading_budget(window, 2.0) >= heading_budget(window, 3.0));
+    }
+
+    /// Never negative, whatever it is asked. A budget below zero would be
+    /// compared against costs and behave, but a caller subtracting from it
+    /// would not, and a zero scale is what a half-initialised window reports.
+    #[test]
+    fn a_budget_is_never_negative() {
+        assert_eq!(heading_budget(0.0, 1.0), 0.0);
+        assert_eq!(heading_budget(100.0, 3.0), 0.0);
+        assert_eq!(heading_budget(0.0, 0.0), 0.0);
     }
 }
 
