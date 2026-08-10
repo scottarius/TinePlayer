@@ -2978,10 +2978,15 @@ impl App {
                         config.primary_sink = picked;
                     } else {
                         config.secondary_sink = picked;
-                        // A secondary track without a device to play it on
-                        // is meaningless, so clear it alongside.
+                        // A secondary track without a device to play it on is
+                        // meaningless, so clear it alongside - and a separate
+                        // audio file the same way, which was missed. Left set,
+                        // it is still a choice the menu shows and the pipeline
+                        // tries to honor, against an output that no longer
+                        // exists.
                         if config.secondary_sink.is_none() {
                             *self.secondary_track.borrow_mut() = None;
+                            *self.secondary_file.borrow_mut() = None;
                             cleared_secondary = true;
                         }
                     }
@@ -2997,6 +3002,8 @@ impl App {
                 // before a newly chosen device took effect.
                 if cleared_secondary {
                     self.remember_tracks();
+                    // The file went with the device, so its alignment goes too.
+                    self.load_baselines();
                 }
 
                 if setting == Setting::PrimaryDevice {
@@ -6832,10 +6839,21 @@ impl App {
         self.stop_playback();
 
         // Belt and braces against the pipeline being asked for an output that
-        // was never configured, whatever left the track set.
+        // was never configured, whatever left the choice set.
+        //
+        // The file as well as the track, which it did not used to cover: an
+        // audio file on the secondary output with no secondary device asked
+        // for a sink that cannot be built, and the whole pipeline failed - so
+        // a film with a perfectly good primary output would not play at all.
+        let has_secondary_device = self.config.borrow().secondary_sink.is_some();
         let primary = *self.primary_track.borrow();
-        let secondary = if self.config.borrow().secondary_sink.is_some() {
+        let secondary = if has_secondary_device {
             *self.secondary_track.borrow()
+        } else {
+            None
+        };
+        let secondary_file = if has_secondary_device {
+            self.secondary_file.borrow().clone()
         } else {
             None
         };
@@ -6846,7 +6864,7 @@ impl App {
             None => track.map(crate::pipeline::AudioSource::Track),
         };
         let primary_audio = audio_for(self.primary_file.borrow().clone(), primary);
-        let secondary_audio = audio_for(self.secondary_file.borrow().clone(), secondary);
+        let secondary_audio = audio_for(secondary_file, secondary);
 
         let subtitle = self.subtitle.borrow().clone();
         if let Some(key) = self.storage_key() {
