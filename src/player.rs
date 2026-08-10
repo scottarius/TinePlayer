@@ -240,6 +240,8 @@ impl Playback {
             .set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start playback: {e}"))?;
 
+        install_seek_test(&playback);
+
         Ok(playback)
     }
 
@@ -449,6 +451,51 @@ impl Playback {
     }
 }
 
+/// Diagnostic scaffolding: seeks by itself, so the seek path can be exercised
+/// on a machine with no way to press a key.
+///
+/// `TINEPLAYER_SEEK_TEST=<wait_s>[:<step_s>[:<repeats>]]`, defaulting to one
+/// 60-second skip 8 seconds in. It exists because the Pi runs Wayland with no
+/// input-injection tool installed, and the failure it was written to catch -
+/// external audio dying on a seek - can only be seen by recording the output
+/// device across one. Branch only, never merged; see the plan.
+fn install_seek_test(playback: &Rc<Playback>) {
+    let Ok(spec) = std::env::var("TINEPLAYER_SEEK_TEST") else {
+        return;
+    };
+    let mut parts = spec.split(':');
+    let number = |part: Option<&str>, fallback: f64| -> f64 {
+        part.and_then(|p| p.trim().parse().ok()).unwrap_or(fallback)
+    };
+    let wait = number(parts.next(), 8.0);
+    let step = number(parts.next(), 60.0);
+    let repeats = number(parts.next(), 1.0).max(1.0) as u32;
+
+    eprintln!("SEEK TEST: {repeats} seek(s) of {step}s, first at {wait}s");
+    let mut done = 0;
+    let weak = Rc::downgrade(playback);
+    // Weak, so a film closed before the timer fires takes the timer with it
+    // rather than being kept alive by it.
+    glib::timeout_add_local(Duration::from_secs_f64(wait.max(0.1)), move || {
+        let Some(playback) = weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let Some(now) = playback.position() else {
+            return glib::ControlFlow::Continue;
+        };
+        let target = playback.offset(now, step);
+        eprintln!("SEEK TEST: {now} -> {target}");
+        playback.aim_at(target);
+        playback.commit_seek();
+        done += 1;
+        if done >= repeats {
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+}
+
 /// The GStreamer release that no longer needs the seek workaround below.
 const SEEK_WORKAROUND_FIXED_IN: (u32, u32) = (1, 24);
 
@@ -494,6 +541,13 @@ fn needs_seek_workaround() -> bool {
     if !cfg!(target_os = "linux") {
         return false;
     }
+    // Diagnostic scaffolding. Turning the workaround off is how the seek path
+    // is measured with and without it on one binary. Branch only, never
+    // merged - see the plan.
+    if std::env::var_os("TINEPLAYER_NO_SEEK_WORKAROUND").is_some() {
+        eprintln!("SEEK TEST: workaround disabled by TINEPLAYER_NO_SEEK_WORKAROUND");
+        return false;
+    }
     // The runtime version, not the one built against: the .deb is compiled
     // once and runs on whatever GStreamer the machine provides.
     let (major, minor, _, _) = gst::version();
@@ -509,6 +563,39 @@ fn seek_workaround_applies(major: u32, minor: u32) -> bool {
 }
 
 impl Playback {
+    /// Hands a seek straight to each external audio file's own source.
+    ///
+    /// Only needed alongside the Linux workaround above, which is the one case
+    /// where the ordinary route - upstream from the sinks - is closed. The
+    /// same flags as the pipeline seek, so the two branches land in the same
+    /// place by the same rules rather than nearly.
+    fn seek_external_audio(&self, target: gst::ClockTime) {
+        // Diagnostic scaffolding, so the failure and the fix can be measured
+        // against each other on one binary. Branch only, never merged.
+        if std::env::var_os("TINEPLAYER_NO_EXTERNAL_SEEK").is_some() {
+            eprintln!("SEEK TEST: external audio seek suppressed");
+            return;
+        }
+        for index in 0.. {
+            let name = format!("{}{index}", crate::pipeline::EXTERNAL_AUDIO_DECODER);
+            let Some(source) = self.pipeline.by_name(&name) else {
+                // Numbered from zero without gaps, so the first miss is the end.
+                break;
+            };
+            let seek = gst::event::Seek::new(
+                1.0,
+                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                gst::SeekType::Set,
+                target,
+                gst::SeekType::None,
+                gst::ClockTime::NONE,
+            );
+            if !source.send_event(seek) {
+                eprintln!("Failed to seek the external audio source {name}");
+            }
+        }
+    }
+
     fn run_seek(&self) {
         let Some(target) = self.seek_target.get() else {
             return;
@@ -538,6 +625,15 @@ impl Playback {
         let result = self
             .pipeline
             .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target);
+
+        // Unconditional, not part of the workaround above. Measured on the Pi
+        // on 2026-08-10: an external file goes silent on the first seek with
+        // the workaround on *and* off, so the seek is not reaching its source
+        // by the ordinary upstream route either way. An embedded track is
+        // unaffected because it shares the video's source, which the seek does
+        // reach. Seeking the same target twice is harmless - both branches are
+        // being sent to the same place.
+        self.seek_external_audio(target);
 
         if workaround {
             for role in ["primary", "secondary"] {

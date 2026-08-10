@@ -43,6 +43,17 @@ struct Targets {
     subtitle: Option<gst::Element>,
 }
 
+/// What each external audio file's decoder is called in the pipeline, with its
+/// index appended. Numbered from zero and contiguous, since there is one per
+/// distinct file and at most one file per output.
+///
+/// The *decoder* rather than the source, because a seek sent here has to pass
+/// back through the parser to be any use: a seek is in time, a file is in
+/// bytes, and the parser inside `decodebin3` is what converts between them.
+/// Sending one to `urisourcebin` instead reaches `filesrc`, which cannot
+/// answer it, and the seek is simply refused.
+pub const EXTERNAL_AUDIO_DECODER: &str = "extaudio_dec_";
+
 /// Where one output's audio comes from.
 ///
 /// A track inside the video, or a whole separate file. The second is what
@@ -182,9 +193,9 @@ pub fn build_pipeline(
     // branch an embedded track gets, inside the one pipeline - so both run off
     // the same clock and stay in step by construction rather than by being
     // nudged back into line.
-    for (uri, roles) in &roles_by_file {
+    for (index, (uri, roles)) in roles_by_file.iter().enumerate() {
         let head = build_audio_branch(&pipeline, roles, config)?;
-        attach_external_audio(&pipeline, &head, uri)?;
+        attach_external_audio(&pipeline, &head, uri, index)?;
     }
 
     let wanted: Vec<u32> = roles_by_track.keys().copied().collect();
@@ -295,10 +306,15 @@ fn attach_external_audio(
     pipeline: &gst::Pipeline,
     head: &gst::Element,
     uri: &str,
+    index: usize,
 ) -> Result<(), String> {
     let src = make("urisourcebin")?;
     src.set_property("uri", uri);
     let decode = make("decodebin3")?;
+    // Named so a seek can be delivered here by hand. Everything else in the
+    // pipeline is seeked through the video's source; this chain has one of its
+    // own and does not reliably hear about a seek at all. See `run_seek`.
+    decode.set_property("name", format!("{EXTERNAL_AUDIO_DECODER}{index}"));
     pipeline
         .add_many([&src, &decode])
         .map_err(|e| e.to_string())?;
