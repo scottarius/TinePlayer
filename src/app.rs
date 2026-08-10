@@ -2103,9 +2103,7 @@ impl App {
         }
         // Heard straight away, like the delay itself: the point of the switch
         // is comparing with and without while something is playing.
-        if let Some(playback) = self.playback.borrow().as_ref() {
-            playback.set_offset_ms(role, self.offset_for(role));
-        }
+        self.push_offset_live(role);
         scale.set_sensitive(on);
         value.set_text(&offset_label(self.config.borrow().applied_offset_ms(role)));
         value.set_sensitive(on);
@@ -2187,10 +2185,10 @@ impl App {
         // applies at once, a drag waits to be let go.
         // Heard straight away when a film is playing, so a delay can be placed
         // against the picture rather than guessed at and checked later.
-        if let Slider::Offset(role) = kind
-            && let Some(playback) = self.playback.borrow().as_ref()
-        {
-            playback.set_offset_ms(role, moved + self.baseline_ms(role));
+        // The configuration above already holds `moved`, so this reads the
+        // same number back rather than adding the baseline to it by hand.
+        if let Slider::Offset(role) = kind {
+            self.push_offset_live(role);
         }
         value.set_text(&match kind {
             Slider::Volume(_) => volume_label(moved / 100.0, false),
@@ -4253,6 +4251,28 @@ impl App {
     /// and only the first is ever shown on the slider.
     fn offset_for(&self, role: &str) -> f64 {
         self.config.borrow().applied_offset_ms(role) + self.baseline_ms(role)
+    }
+
+    /// Sends an output's whole delay to the pipeline: what the viewer asked
+    /// for, plus what alignment worked out for the file being played.
+    ///
+    /// The one road to a sink, deliberately. The sum used to be rebuilt by
+    /// hand at each of the four places that change either half, and the one
+    /// behind the sync control during playback rebuilt it wrong - it sent the
+    /// slider's own value, so touching sync threw the alignment away and left
+    /// the audio seconds out. A half-applied offset is worse than none, and
+    /// the way to stop that recurring is to leave nowhere else to apply one.
+    fn push_offset(&self, playback: &Playback, role: &str) {
+        playback.set_offset_ms(role, self.offset_for(role));
+    }
+
+    /// The same, for whatever is playing now, if anything is. Cloned out of
+    /// the cell rather than borrowed across the call, since what it reaches
+    /// takes the same borrows.
+    fn push_offset_live(&self, role: &str) {
+        if let Some(playback) = self.playback.borrow().clone() {
+            self.push_offset(&playback, role);
+        }
     }
 
     /// The track chosen for one output, and the file chosen for it, where the
@@ -6877,7 +6897,7 @@ impl App {
                 // here, once, before a frame has played.
                 for role in ["primary", "secondary"] {
                     if self.baseline_ms(role) != 0.0 {
-                        playback.set_offset_ms(role, self.offset_for(role));
+                        self.push_offset(&playback, role);
                     }
                 }
                 // Named by device rather than by role: "primary" and
@@ -6958,10 +6978,7 @@ impl App {
                             config.set_offset_ms(role, ms);
                             config.set_offset_on(role, on);
                         }
-                        if let Some(playback) = app.playback.borrow().as_ref() {
-                            playback
-                                .set_offset_ms(role, app.config.borrow().applied_offset_ms(role));
-                        }
+                        app.push_offset_live(role);
                         app.save_volume_soon();
                     });
                 }
