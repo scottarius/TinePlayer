@@ -3100,6 +3100,15 @@ impl App {
                 // choosing not to use a separate file on that output.
                 *self.file_for(role).borrow_mut() = None;
                 self.remember_tracks();
+                // The pairing is gone, so the alignment measured for it has to
+                // go with it. A baseline left behind is applied to a track
+                // inside the video, which shares the video's timeline and needs
+                // no correction - and a large one silences that output
+                // outright. Measured on the Pi 2026-08-10: -830ms against an
+                // embedded track produced no audio at all, while -300ms and
+                // +830ms both played, so it is pulling the audio further
+                // forward than the pipeline can deliver.
+                self.load_baselines();
             }
         }
         false
