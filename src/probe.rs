@@ -138,6 +138,78 @@ pub struct SubtitleTrack {
     pub forced: bool,
 }
 
+/// The picture, as far as the container describes it.
+///
+/// Every field is optional in practice rather than in type: a stream that
+/// cannot say its own size reports zero, and the page leaves the line out
+/// rather than printing it. Kept separate from the audio and subtitle lists
+/// because there is only ever one of it worth showing - a file with two video
+/// streams is a rarity, and the first is the one that plays.
+#[derive(Clone, Default)]
+pub struct VideoDetails {
+    pub width: u32,
+    pub height: u32,
+    /// As `pb_utils_get_codec_description` words it - "H.264", not "avc1".
+    pub codec: String,
+    /// Zero when the container states no frame rate, which is common for a
+    /// variable-rate recording and for some MP4 muxers.
+    pub fps: f64,
+}
+
+impl VideoDetails {
+    /// The shorthand a viewer recognizes: 1080p rather than 1920x1080.
+    ///
+    /// Matched on height, and on the nearest standard below rather than an
+    /// exact figure, because a widescreen film is letterboxed to fewer lines
+    /// than the format names - a 2.39:1 transfer at "1080p" is 1920x800. An
+    /// unusual size falls back to stating both numbers, which is honest
+    /// rather than rounded into a name it does not deserve.
+    pub fn resolution(&self) -> Option<String> {
+        if self.width == 0 || self.height == 0 {
+            return None;
+        }
+        let long = self.width.max(self.height);
+        let name = match long {
+            0..=800 => None,
+            801..=1400 => Some("720p"),
+            1401..=2000 => Some("1080p"),
+            2001..=3000 => Some("1440p"),
+            3001..=4200 => Some("4K"),
+            _ => Some("8K"),
+        };
+        Some(match name {
+            Some(name) => name.to_string(),
+            None => format!("{}x{}", self.width, self.height),
+        })
+    }
+}
+
+/// What the container says about itself, as opposed to about its streams.
+///
+/// This is the last resort the media page falls back to when there is no
+/// sidecar beside the file. Most video files carry nothing here at all -
+/// a muxer writes what it was given, and a download was given nothing - but
+/// a recording from a camera or a purchased file often names itself, and a
+/// title from the file beats a filename with a release tag in it.
+#[derive(Clone, Default)]
+pub struct Tags {
+    pub title: String,
+    /// Whatever `GST_TAG_DATE` or `GST_TAG_DATE_TIME` carried, reduced to the
+    /// year, which is the only part the page shows.
+    pub year: Option<u32>,
+    /// From `GST_TAG_COMMENT` or `GST_TAG_DESCRIPTION`, in that order.
+    pub description: String,
+    /// Cover art carried inside the container, encoded as it was stored -
+    /// which is a JPEG or a PNG in every case that matters, since those are
+    /// the two an image tag is written in.
+    ///
+    /// Worth reading rather than skipping: the Matroska rips in the library
+    /// this was written against each carry a 395x500 poster, so a file with
+    /// no artwork beside it on disk is not necessarily a file with no
+    /// artwork. It is the last thing tried, after everything on disk.
+    pub image: Option<Vec<u8>>,
+}
+
 /// What the file contains, from a single pass. Probing is not free, and the
 /// menu needs both lists at once.
 pub struct Media {
@@ -145,6 +217,76 @@ pub struct Media {
     pub subtitles: Vec<SubtitleTrack>,
     /// Zero when the source could not say, which some live streams cannot.
     pub duration_ns: u64,
+    pub video: VideoDetails,
+    pub tags: Tags,
+}
+
+/// Pulls the few container tags the media page can use out of the whole list.
+///
+/// Deliberately a short list. A container can carry dozens of tags and almost
+/// none of them describe the film: the page shows a title, a year and a
+/// summary, so those are what is read. Anything empty is left empty rather
+/// than filled with a placeholder, because an absent tag and a blank one mean
+/// the same thing to whatever is going to fall back past it.
+fn read_tags(tags: &gst::TagList) -> Tags {
+    let text = |value: Option<String>| value.map(|v| v.trim().to_string()).unwrap_or_default();
+
+    Tags {
+        title: text(tags.get::<gst::tags::Title>().map(|t| t.get().to_string())),
+        // Two spellings of the same fact, and files carry either. `Date` is a
+        // plain calendar date and `DateTime` a timestamp; both reduce to the
+        // year, which is all the facts line shows.
+        year: tags
+            .get::<gst::tags::Date>()
+            .map(|d| d.get().year() as u32)
+            .or_else(|| {
+                tags.get::<gst::tags::DateTime>()
+                    .map(|d| d.get().year() as u32)
+            })
+            // A container with a nonsense date is worse than one with none:
+            // some muxers write the epoch when they were given nothing.
+            .filter(|year| (1870..=2200).contains(year)),
+        description: {
+            let comment = text(
+                tags.get::<gst::tags::Comment>()
+                    .map(|t| t.get().to_string()),
+            );
+            if comment.is_empty() {
+                text(
+                    tags.get::<gst::tags::Description>()
+                        .map(|t| t.get().to_string()),
+                )
+            } else {
+                comment
+            }
+        },
+        // `Image` is the cover proper and `PreviewImage` the thumbnail some
+        // muxers write instead; either is better than none.
+        image: tags
+            .get::<gst::tags::Image>()
+            .and_then(|tag| image_bytes(&tag.get()))
+            .or_else(|| {
+                tags.get::<gst::tags::PreviewImage>()
+                    .and_then(|tag| image_bytes(&tag.get()))
+            }),
+    }
+}
+
+/// Copies the encoded picture out of an image tag.
+///
+/// The sample's buffer is owned by the tag list, which does not outlive the
+/// probe, so this has to be a copy rather than a borrow. Guarded on a size
+/// that could plausibly be a picture: a tag holding a few bytes is a muxer
+/// writing something that is not one, and a tag holding tens of megabytes is
+/// not worth carrying about for a thumbnail.
+fn image_bytes(sample: &gst::Sample) -> Option<Vec<u8>> {
+    const PLAUSIBLE: std::ops::RangeInclusive<usize> = 64..=32 * 1024 * 1024;
+
+    let buffer = sample.buffer()?;
+    let map = buffer.map_readable().ok()?;
+    PLAUSIBLE
+        .contains(&map.size())
+        .then(|| map.as_slice().to_vec())
 }
 
 pub fn probe_media(source: &Source) -> Result<Media, String> {
@@ -233,10 +375,35 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
         });
     }
 
+    // The first video stream, which is the one that plays. A file with two is
+    // rare enough that picking between them would be inventing a problem.
+    let video = info
+        .video_streams()
+        .into_iter()
+        .next()
+        .map(|stream| VideoDetails {
+            width: stream.width(),
+            height: stream.height(),
+            codec: stream
+                .caps()
+                .map(|caps| pbutils::pb_utils_get_codec_description(&caps).to_string())
+                .unwrap_or_default(),
+            // Stated as a fraction, so 23.976 arrives as 24000/1001 and comes
+            // out exact rather than as whatever a decimal field rounded to. A
+            // zero denominator means the container said nothing.
+            fps: match stream.framerate() {
+                rate if rate.denom() != 0 => rate.numer() as f64 / rate.denom() as f64,
+                _ => 0.0,
+            },
+        })
+        .unwrap_or_default();
+
     let mut media = Media {
         audio: tracks,
         subtitles,
         duration_ns: info.duration().map(|d| d.nseconds()).unwrap_or(0),
+        video,
+        tags: info.tags().as_ref().map(read_tags).unwrap_or_default(),
     };
 
     // What a media library already worked out about this file, where one has
@@ -248,6 +415,51 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
     }
 
     Ok(media)
+}
+
+#[cfg(test)]
+mod video_details_tests {
+    use super::VideoDetails;
+
+    fn at(width: u32, height: u32) -> Option<String> {
+        VideoDetails {
+            width,
+            height,
+            ..Default::default()
+        }
+        .resolution()
+    }
+
+    /// The sizes a film actually arrives at, which are mostly not the sizes
+    /// the format names. A 2.39:1 transfer has 800 lines and is still 1080p.
+    #[test]
+    fn names_the_format_a_viewer_would_recognize() {
+        assert_eq!(at(1920, 1080).as_deref(), Some("1080p"));
+        assert_eq!(at(1920, 800).as_deref(), Some("1080p"));
+        assert_eq!(at(1920, 804).as_deref(), Some("1080p"));
+        assert_eq!(at(1280, 720).as_deref(), Some("720p"));
+        assert_eq!(at(1280, 534).as_deref(), Some("720p"));
+        assert_eq!(at(3840, 2160).as_deref(), Some("4K"));
+        assert_eq!(at(4096, 1716).as_deref(), Some("4K"));
+        assert_eq!(at(2560, 1440).as_deref(), Some("1440p"));
+    }
+
+    /// Anything that is not one of the formats states both numbers rather
+    /// than being rounded into a name it does not deserve.
+    #[test]
+    fn an_unusual_size_says_what_it_is() {
+        assert_eq!(at(640, 480).as_deref(), Some("640x480"));
+        assert_eq!(at(720, 576).as_deref(), Some("720x576"));
+    }
+
+    /// A stream that could not say reports zero, and a page that printed
+    /// "0x0" would look broken rather than uninformed.
+    #[test]
+    fn nothing_known_is_nothing_shown() {
+        assert_eq!(at(0, 0), None);
+        assert_eq!(at(1920, 0), None);
+        assert_eq!(at(0, 1080), None);
+    }
 }
 
 #[cfg(test)]

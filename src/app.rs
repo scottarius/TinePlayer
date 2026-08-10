@@ -16,6 +16,74 @@ use crate::probe::AudioTrack;
 use crate::sound::Sounds;
 use crate::subtitles::{Subtitle, SubtitleChoice};
 
+/// Marks the overlay a modal is stacked in, so that opening one over another
+/// can tell it apart from a page that happens to be built out of an overlay
+/// too - which the media page is.
+const MODAL_STACK: &str = "tp-modal-stack";
+
+/// How many languages either summary line names before it counts the rest.
+///
+/// The line has one line's worth of room and must not wrap: the rows below it
+/// sit at a fixed height, so anything that grows here would push them down.
+/// Six is past the point where a list is being read rather than scanned, and a
+/// file with more than six subtitle languages is a disc rip whose exact
+/// inventory is a chooser away.
+///
+/// Whatever is left over is said rather than dropped - "+5 more". Stopping at
+/// six in silence reads as a complete list, which on a file carrying eleven is
+/// not merely crowded but wrong.
+const MOST_LANGUAGES: usize = 6;
+
+/// What a track that never stated its language is called on the page.
+///
+/// "Unknown" rather than the container's own word for it: `und` is what the
+/// file says and "Undetermined" is what the specification calls that, and
+/// neither is what a viewer would say about a soundtrack they can plainly
+/// hear. It says the same thing in the word already being used everywhere
+/// else something is missing.
+const UNKNOWN_LANGUAGE: &str = "Unknown";
+
+/// One summary line's markup: the label, the languages that fit, and a count
+/// of the ones that did not.
+///
+/// Both lines are built from this, which is the point of its being a function:
+/// audio and subtitles differ only in what they are handed, and a rule applied
+/// in one place cannot drift out of step with the other. In practice the audio
+/// line rarely reaches the limit and the subtitle line often does, so the
+/// truncation would otherwise go untested on the side that shows it least.
+///
+/// What was left off is counted and said outright. Stopping at the limit in
+/// silence reads as a complete list, so a file with eleven subtitle languages
+/// appeared to have six - worse than a long line, because it is wrong rather
+/// than merely crowded. The count is dimmed like the label, so it reads as a
+/// note about the list rather than as another language in it.
+fn summary_markup(name: &str, languages: &[String]) -> String {
+    let shown = match languages.is_empty() {
+        true => NO_TRACKS.to_string(),
+        false => languages
+            .iter()
+            .take(MOST_LANGUAGES)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    let more = match languages.len().saturating_sub(MOST_LANGUAGES) {
+        0 => String::new(),
+        extra => format!(", <span alpha='60%'>+{extra} more</span>"),
+    };
+    format!(
+        "<span alpha='60%'>{name}:</span> {}{more}",
+        glib::markup_escape_text(&shown),
+    )
+}
+
+/// What a summary line says when the file carries no such track at all.
+///
+/// Distinct from `Unknown`, and the difference is worth keeping: one means
+/// there is a track and nobody said what language it is in, the other means
+/// there is nothing there to choose.
+const NO_TRACKS: &str = "None";
+
 /// Which setting a chooser screen is editing. The menu drills into one of
 /// these and returns once a choice is made.
 #[derive(Clone, Copy, PartialEq)]
@@ -25,7 +93,6 @@ enum Setting {
     SecondaryDevice,
     SecondaryTrack,
     Subtitles,
-    Theme,
     PrimaryLanguage,
     SecondaryLanguage,
     SubtitleLanguage,
@@ -176,7 +243,7 @@ pub const READING_CHARS: i32 = 7;
 
 /// The rows the settings screen always has. The version row below the
 /// update switch is extra, and only there while the switch is on.
-const SETTINGS_ROWS: usize = 24;
+const SETTINGS_ROWS: usize = 23;
 
 /// Every row of the settings screen, in the order it is built.
 ///
@@ -187,33 +254,32 @@ const SETTINGS_ROWS: usize = 24;
 /// count still adds up, and the symptom is a row that quietly opens the wrong
 /// screen. Inserting a row means changing one constant rather than renumbering
 /// every literal after it.
-const ROW_THEME: i32 = 0;
-const ROW_INTERFACE_SCALE: i32 = 1;
-const ROW_SOUNDS: i32 = 2;
-const ROW_PRIMARY_DEVICE: i32 = 3;
-const ROW_PRIMARY_LANGUAGE: i32 = 4;
-const ROW_PRIMARY_DESCRIPTION: i32 = 5;
-const ROW_PRIMARY_VOLUME: i32 = 6;
-const ROW_PRIMARY_SYNC: i32 = 7;
-const ROW_SECONDARY_DEVICE: i32 = 8;
-const ROW_SECONDARY_LANGUAGE: i32 = 9;
-const ROW_SECONDARY_DESCRIPTION: i32 = 10;
-const ROW_SECONDARY_VOLUME: i32 = 11;
-const ROW_SECONDARY_SYNC: i32 = 12;
-const ROW_SUBTITLE_LANGUAGE: i32 = 13;
-const ROW_SUBTITLE_SIZE: i32 = 14;
-const ROW_SUBTITLE_FONT: i32 = 15;
-const ROW_RESUME_THRESHOLD: i32 = 16;
-const ROW_WATCHED_THRESHOLD: i32 = 17;
-const ROW_CLEAR_DATA: i32 = 18;
-const ROW_KODI: i32 = 19;
-const ROW_ABOUT: i32 = 20;
-const ROW_NOTICES: i32 = 21;
+const ROW_INTERFACE_SCALE: i32 = 0;
+const ROW_SOUNDS: i32 = 1;
+const ROW_PRIMARY_DEVICE: i32 = 2;
+const ROW_PRIMARY_LANGUAGE: i32 = 3;
+const ROW_PRIMARY_DESCRIPTION: i32 = 4;
+const ROW_PRIMARY_VOLUME: i32 = 5;
+const ROW_PRIMARY_SYNC: i32 = 6;
+const ROW_SECONDARY_DEVICE: i32 = 7;
+const ROW_SECONDARY_LANGUAGE: i32 = 8;
+const ROW_SECONDARY_DESCRIPTION: i32 = 9;
+const ROW_SECONDARY_VOLUME: i32 = 10;
+const ROW_SECONDARY_SYNC: i32 = 11;
+const ROW_SUBTITLE_LANGUAGE: i32 = 12;
+const ROW_SUBTITLE_SIZE: i32 = 13;
+const ROW_SUBTITLE_FONT: i32 = 14;
+const ROW_RESUME_THRESHOLD: i32 = 15;
+const ROW_WATCHED_THRESHOLD: i32 = 16;
+const ROW_CLEAR_DATA: i32 = 17;
+const ROW_KODI: i32 = 18;
+const ROW_ABOUT: i32 = 19;
+const ROW_NOTICES: i32 = 20;
 /// Where the update switch sits, and the row naming a new version under it.
-const UPDATE_SWITCH_ROW: i32 = 22;
+const UPDATE_SWITCH_ROW: i32 = 21;
 /// The version this is, and what the check made of it. Always built, unlike
 /// the check itself, which can be turned off.
-const UPDATE_STATUS_ROW: i32 = 23;
+const UPDATE_STATUS_ROW: i32 = 22;
 
 /// Every row, in the order they are built, which is what the constants above
 /// are positions in. Inserting a row means renumbering everything below it,
@@ -221,7 +287,6 @@ const UPDATE_STATUS_ROW: i32 = 23;
 /// rather than failing - which is how the secondary output's switch came to
 /// be built over its Preferred Language row.
 const SETTINGS_ORDER: [i32; SETTINGS_ROWS] = [
-    ROW_THEME,
     ROW_INTERFACE_SCALE,
     ROW_SOUNDS,
     ROW_PRIMARY_DEVICE,
@@ -360,7 +425,6 @@ enum Role {
 /// would name a different row depending on what is set.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuAction {
-    Video,
     Device(Role),
     Track(Role),
     Align(Role),
@@ -405,15 +469,6 @@ pub struct Launch {
     pub kodi: bool,
     /// Start playing rather than opening the menu.
     pub play: bool,
-    /// The video was remembered from last time rather than asked for.
-    ///
-    /// It decides what happens when the file will not open. A video named on
-    /// the command line that cannot be read is worth stopping for, because
-    /// somebody asked for that video and nothing else will do. One picked up
-    /// from `last_video` is a convenience, and a convenience that fails should
-    /// get out of the way: it is forgotten and the menu opens as if the file
-    /// had never been remembered.
-    pub remembered: bool,
 }
 
 /// Everything the menu can act on. Devices persist to the config file;
@@ -431,6 +486,26 @@ pub struct App {
     /// a new version is waiting to be seen.
     update_badges: RefCell<Vec<gtk::Button>>,
     file: RefCell<Option<Source>>,
+    /// What is known about the file on screen: its name, its artwork, and
+    /// whatever a sidecar or the container itself had to say. Default when
+    /// there is no file, and default is a perfectly good page - most files
+    /// have no sidecar and the layout is designed up from that case.
+    details: RefCell<crate::metadata::Details>,
+    /// Artwork already decoded for the file on screen, keyed by nothing more
+    /// than being the current file: it is dropped whenever one is loaded.
+    ///
+    /// Held so that returning from a chooser redraws the page instantly. The
+    /// menu is rebuilt on every trip in and out of one, and re-reading a
+    /// backdrop from a network share each time is both slow and visible.
+    poster_art: RefCell<Option<gdk::Texture>>,
+    backdrop_art: RefCell<Option<gdk::Texture>>,
+    /// Bumped whenever a different file is loaded, so artwork still arriving
+    /// from a thread for the previous one is dropped rather than drawn.
+    art_generation: Cell<u64>,
+    /// The rebuild waiting for a drag-resize to stop, and the poster height
+    /// the page on screen was built at. See [`App::rebuild_when_resize_ends`].
+    resize_settle: RefCell<Option<glib::SourceId>>,
+    built_poster: Cell<f64>,
     tracks: RefCell<Vec<AudioTrack>>,
     primary_track: RefCell<Option<u32>>,
     secondary_track: RefCell<Option<u32>>,
@@ -529,16 +604,22 @@ pub struct App {
     /// while the size is not being dragged.
     wanted_scale: Cell<Option<f64>>,
     nav_footer: RefCell<Vec<gtk::Button>>,
-    /// Buttons above the list, currently the browser's path trail. Up from
-    /// the first row reaches them, the way Down reaches the footer.
+    /// Buttons above the list: the browser's path trail, and the media page's
+    /// play and settings row. Up from the first row reaches them, the way Down
+    /// reaches the footer.
     nav_header: RefCell<Vec<gtk::Button>>,
+    /// Which header button Up from the list should land on, where the last
+    /// one is not the right answer.
+    ///
+    /// The default is the last, which is what a path trail wants: the crumb
+    /// nearest the list is the folder you are in. A row of actions wants the
+    /// opposite - the first is the one the page is for, and arriving on
+    /// Settings when you meant Play is a button's width of travel every time.
+    nav_header_entry: RefCell<Option<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
     /// Whether the open chooser was reached from the settings screen, so
     /// that finishing with it returns where it came from.
     from_settings: Cell<bool>,
-    /// Whether the dark theme is in force, so switching away from it can be
-    /// recognized.
-    dark: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -615,9 +696,8 @@ impl App {
             external,
             kodi,
             play,
-            remembered,
         } = launch;
-        let dark = appearance::apply_theme(config.theme);
+        appearance::force_dark();
         suppress_error_bell();
 
         // Sized from the tallest monitor to begin with, since no window exists
@@ -625,7 +705,7 @@ impl App {
         let styles = install_styles();
         let monitor = appearance::tallest_monitor();
         let scale = appearance::resolve_scale(config.ui_scale, monitor.as_ref());
-        styles.load_from_data(&style_css(scale, dark));
+        styles.load_from_data(&style_css(scale));
         if config.ui_scale.is_none()
             && scale != 1.0
             && let Some(monitor) = monitor.as_ref()
@@ -659,6 +739,12 @@ impl App {
             updates: RefCell::new(crate::updates::load()),
             update_badges: RefCell::new(Vec::new()),
             file: RefCell::new(None),
+            details: RefCell::new(Default::default()),
+            poster_art: RefCell::new(None),
+            backdrop_art: RefCell::new(None),
+            art_generation: Cell::new(0),
+            resize_settle: RefCell::new(None),
+            built_poster: Cell::new(0.0),
             tracks: RefCell::new(Vec::new()),
             primary_file: RefCell::new(None),
             secondary_file: RefCell::new(None),
@@ -693,9 +779,9 @@ impl App {
             wanted_scale: Cell::new(None),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
+            nav_header_entry: RefCell::new(None),
             controls: RefCell::new(None),
             from_settings: Cell::new(false),
-            dark: Cell::new(dark),
             styles: styles.clone(),
             scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
@@ -747,6 +833,18 @@ impl App {
         window.connect_realize(move |window| {
             let Some(app) = weak.upgrade() else { return };
             app.follow_automatic_scale(window);
+            // The surface is what reports the window's size as it is dragged,
+            // and it does not exist until here. Connected to rather than the
+            // window's own properties because it survives every rebuild of the
+            // page, so this handler is attached exactly once.
+            if let Some(surface) = window.surface() {
+                let weak = Rc::downgrade(&app);
+                surface.connect_layout(move |_, _, _| {
+                    if let Some(app) = weak.upgrade() {
+                        app.rebuild_when_resize_ends();
+                    }
+                });
+            }
         });
         // And again whenever the window fills the screen or stops doing so,
         // since that is what the automatic size depends on.
@@ -755,6 +853,37 @@ impl App {
             let Some(app) = weak.upgrade() else { return };
             app.follow_automatic_scale(window);
         });
+
+        // The media page draws its poster as a proportion of the page's
+        // height, which is read when the page is built. Filling the screen
+        // changes that height by a long way in one step, so the page is
+        // rebuilt to match rather than left with a poster sized for a window
+        // half the height.
+        //
+        // Connected here, once, rather than by the page that wants it: a
+        // handler attached while building the menu would be attached again by
+        // every rebuild, and each rebuild would then trigger the next.
+        // Deferred to an idle so the rebuild does not tear down the widgets
+        // whose own handlers are still running.
+        for maximize in [true, false] {
+            let weak = Rc::downgrade(&app);
+            let watch = move |window: &gtk::ApplicationWindow| {
+                let _ = window;
+                let Some(app) = weak.upgrade() else { return };
+                if *app.screen.borrow() != Screen::Menu {
+                    return;
+                }
+                glib::idle_add_local_once(move || {
+                    if *app.screen.borrow() == Screen::Menu {
+                        app.show_menu();
+                    }
+                });
+            };
+            match maximize {
+                true => window.connect_maximized_notify(watch),
+                false => window.connect_fullscreened_notify(watch),
+            };
+        }
 
         app.install_key_handling();
         app.install_accelerators(gtk_app);
@@ -773,30 +902,10 @@ impl App {
             *app.kodi_item.borrow_mut() = crate::kodi::current_item();
         }
 
-        let mut unopenable = match &file {
+        let unopenable = match &file {
             Some(source) => app.set_file(source).err().map(|e| (source.clone(), e)),
             None => None,
         };
-
-        // A remembered video that will not open is forgotten rather than
-        // reported. Nobody asked for it this time, so an error about it is an
-        // error about a decision the application made on its own - and it
-        // arrived in front of a menu that then could not be reached.
-        //
-        // Seen on a MacBook whose last video was on a network share that was
-        // not mounted: the path still existed as a stale mount point, so the
-        // check in main.rs let it through, and opening it failed. Clearing it
-        // here rather than only ignoring it means the next launch does not
-        // meet the same wall.
-        if remembered && unopenable.is_some() {
-            if let Some((source, error)) = unopenable.take() {
-                eprintln!("Forgetting {}: {error}", source.label());
-            }
-            app.config.borrow_mut().last_video = None;
-            if let Err(e) = app.config.borrow().save() {
-                eprintln!("Could not forget the last video: {e}");
-            }
-        }
 
         // Track choices from the command line are applied whether or not
         // playback is starting. Without --play they simply arrive already
@@ -1731,6 +1840,9 @@ impl App {
         *self.copy_root.borrow_mut() = None;
         *self.nav_list.borrow_mut() = list.cloned();
         *self.nav_header.borrow_mut() = header.to_vec();
+        // Cleared here so it belongs to one screen only: a page that wants Up
+        // to land somewhere particular says so after wiring its navigation.
+        *self.nav_header_entry.borrow_mut() = None;
         *self.nav_footer.borrow_mut() = footer.to_vec();
 
         let mut stops: Vec<gtk::Widget> = header.iter().map(|b| b.clone().upcast()).collect();
@@ -1906,7 +2018,12 @@ impl App {
         if next < 0 {
             if position > 0 {
                 select(0);
-            } else if let Some(button) = App::last_header(&header) {
+            } else if let Some(button) = self
+                .nav_header_entry
+                .borrow()
+                .clone()
+                .or_else(|| App::last_header(&header).cloned())
+            {
                 self.sounds.borrow().click();
                 button.grab_focus();
             }
@@ -2336,17 +2453,118 @@ impl App {
 
     // --- Menu ----------------------------------------------------------
 
-    /// Builds the main menu without installing it.
+    /// Builds the screen the application sits on, without installing it.
+    ///
+    /// Two shapes behind one entry point, because everything that shows the
+    /// menu wants whichever is right rather than having to ask first. With no
+    /// video there is nothing to configure and nothing to play, so the page is
+    /// an invitation to choose one. With a video it is a page about that
+    /// video, and the choices sit under what they are choices about.
     ///
     /// Split out so the browser can raise the same page behind itself as a
     /// backdrop, which is what makes it read as a window opening over the
     /// menu rather than as another screen replacing it.
-    fn build_menu_page(self: &Rc<Self>) -> (gtk::Box, gtk::ListBox) {
-        let (page, list, back, slot) = list_page("Playback Options", false);
-        // The arrow's slot is empty on this screen, so the mark takes it
-        // rather than leaving a gap beside the title.
-        slot.remove(&back);
-        slot.append(&logo_image(self.scale.get()));
+    fn build_menu_page(self: &Rc<Self>) -> (gtk::Widget, Option<gtk::ListBox>) {
+        if self.file.borrow().is_none() {
+            return (self.build_empty_page().upcast(), None);
+        }
+        let (page, list) = self.build_media_page();
+        if std::env::var("TINE_MEASURE").is_ok() {
+            let page2 = page.clone();
+            glib::idle_add_local_once(move || {
+                let v = gtk::Orientation::Vertical;
+                eprintln!("MEASURE overlay {:?}", page2.measure(v, -1));
+                let mut stack: Vec<(gtk::Widget, usize)> = page2
+                    .first_child()
+                    .map(|c| vec![(c, 0usize)])
+                    .unwrap_or_default();
+                while let Some((w, depth)) = stack.pop() {
+                    let (min, nat, _, _) = w.measure(v, -1);
+                    if min > 300 && depth < 7 {
+                        eprintln!(
+                            "MEASURE {:indent$}{} min={} nat={}",
+                            "",
+                            w.type_().name(),
+                            min,
+                            nat,
+                            indent = depth * 2
+                        );
+                    }
+                    let mut child = w.first_child();
+                    while let Some(c) = child {
+                        child = c.next_sibling();
+                        if depth < 7 {
+                            stack.push((c, depth + 1));
+                        }
+                    }
+                }
+            });
+        }
+        (page.upcast(), Some(list))
+    }
+
+    /// The page about the video that is loaded: what it is, above how it is
+    /// about to be played.
+    fn build_media_page(self: &Rc<Self>) -> (gtk::Overlay, gtk::ListBox) {
+        let scale = self.scale.get();
+        let px = |base: f64| (base * scale).round() as i32;
+
+        // Everything sits in one column, held to 16:9 by `hold_safe_area` so
+        // that a wide window widens the artwork behind rather than the text on
+        // top. A plot line three thousand pixels across is not a page anyone
+        // reads, and a row whose value drifts that far from its label stops
+        // reading as one row.
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(16.0))
+            .margin_top(px(30.0))
+            // Matched to the sides rather than to the top. The panel now runs
+            // to the bottom of the page, so this margin is a visible edge
+            // along it, and at 26 it read as a thinner border than the 34 down
+            // either side.
+            .margin_bottom(px(34.0))
+            .margin_start(px(34.0))
+            .margin_end(px(34.0))
+            // Filled, not centered. The centering is `Column`'s job, and a
+            // box that also centers itself shrinks to its natural width
+            // inside the column it was just given - which is what truncated
+            // every row value on a file with a short plot.
+            .css_classes(["tp-media"])
+            .build();
+
+        // The poster keeps to the left for the height of the page; everything
+        // else runs down the column beside it.
+        let columns = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(px(32.0))
+            .vexpand(true)
+            .build();
+        columns.append(&self.poster_column(scale));
+
+        let main = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(6.0))
+            .hexpand(true)
+            .build();
+        columns.append(&main);
+        content.append(&columns);
+
+        let (scroller, list) = scrolling_list();
+        name_it(&list, "Playback Options");
+
+        // The film's details sit still. Only the rows scroll, so the poster,
+        // the title and the buttons stay where they are however long the list
+        // gets - and the list scrolls under them rather than the page moving
+        // as a whole.
+        let info = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(6.0))
+            .valign(gtk::Align::Start)
+            .build();
+        for widget in self.heading_block(scale) {
+            info.append(&widget);
+        }
+        main.append(&info);
 
         let file = self.file.borrow().clone();
         let config = self.config.borrow();
@@ -2359,27 +2577,44 @@ impl App {
 
         let has_file = file.is_some();
         let has_secondary = config.secondary_sink.is_some();
-        let mut rows: Vec<(String, String, bool, MenuAction)> = vec![
-            (
-                "Video".to_string(),
-                self.file_label()
-                    .unwrap_or_else(|| "Choose a video…".to_string()),
-                // Something else chose the video, so there is nothing to pick
-                // here. The row stays, to name what is about to play.
-                !self.external,
-                MenuAction::Video,
-            ),
-            (
-                "Primary Audio Device".to_string(),
+
+        // The rows, and the group each one opens - `None` for a row that
+        // continues the group above it.
+        //
+        // Kept as a second list rather than a fifth element on the tuple so
+        // that `alignment_row` can go on returning a row and nothing else. The
+        // two are pushed together every time, which is what keeps them in step.
+        let mut rows: Vec<(String, String, bool, MenuAction)> = Vec::new();
+        let mut groups: Vec<Option<&str>> = Vec::new();
+        let mut push = |group: Option<&'static str>,
+                        row: Option<(String, String, bool, MenuAction)>| {
+            if let Some(row) = row {
+                groups.push(group);
+                rows.push(row);
+            }
+        };
+
+        // Which output, said once at the top of the group, rather than on the
+        // front of all three rows under it. "First Output" and "Second Output"
+        // rather than primary and secondary: the ordinal is the whole of what
+        // distinguishes them to anyone watching, and Primary/Secondary is the
+        // vocabulary of the code and the config file.
+        push(
+            Some("FIRST OUTPUT"),
+            Some((
+                "Output Device".to_string(),
                 config
                     .primary_sink
                     .clone()
                     .unwrap_or_else(|| "Not set".to_string()),
                 true,
                 MenuAction::Device(Role::Primary),
-            ),
-            (
-                "Primary Audio Track".to_string(),
+            )),
+        );
+        push(
+            None,
+            Some((
+                "Audio Track".to_string(),
                 if has_file {
                     self.describe_audio(Role::Primary)
                 } else {
@@ -2387,178 +2622,235 @@ impl App {
                 },
                 has_file,
                 MenuAction::Track(Role::Primary),
-            ),
-        ];
-        rows.extend(self.alignment_row(Role::Primary));
-        rows.push((
-            "Secondary Audio Device".to_string(),
-            config
-                .secondary_sink
-                .clone()
-                .unwrap_or_else(|| "None".to_string()),
-            true,
-            MenuAction::Device(Role::Secondary),
-        ));
-        rows.push((
-            "Secondary Audio Track".to_string(),
-            if has_file && has_secondary {
-                self.describe_audio(Role::Secondary)
-            } else {
-                "—".to_string()
-            },
-            has_file && has_secondary,
-            MenuAction::Track(Role::Secondary),
-        ));
+            )),
+        );
+        push(None, self.alignment_row(Role::Primary));
+
+        push(
+            Some("SECOND OUTPUT"),
+            Some((
+                "Output Device".to_string(),
+                config
+                    .secondary_sink
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string()),
+                true,
+                MenuAction::Device(Role::Secondary),
+            )),
+        );
+        push(
+            None,
+            Some((
+                "Audio Track".to_string(),
+                if has_file && has_secondary {
+                    self.describe_audio(Role::Secondary)
+                } else {
+                    "—".to_string()
+                },
+                has_file && has_secondary,
+                MenuAction::Track(Role::Secondary),
+            )),
+        );
         if has_secondary {
-            rows.extend(self.alignment_row(Role::Secondary));
+            push(None, self.alignment_row(Role::Secondary));
         }
-        // Its own section rather than sitting with the audio pair: the
-        // subtitle language is an independent choice, and may be a third
-        // language again or a repeat of either soundtrack.
-        rows.push((
-            "Subtitles".to_string(),
-            self.describe_subtitle(),
-            has_file,
-            MenuAction::Subtitles,
-        ));
+
+        // Its own group rather than sitting with the audio pair: the subtitle
+        // language is an independent choice, and may be a third language again
+        // or a repeat of either soundtrack.
+        push(
+            Some("SUBTITLES"),
+            Some((
+                "Language".to_string(),
+                self.describe_subtitle(),
+                has_file,
+                MenuAction::Subtitles,
+            )),
+        );
 
         let can_play = has_file && config.primary_sink.is_some();
         drop(tracks);
         drop(config);
 
-        for (index, (label, value, enabled, action)) in rows.iter().enumerate() {
-            append_named(
-                &list,
-                &menu_row(label, value, *enabled),
-                &row_name(label, value),
-            );
-            let Some(row) = list.row_at_index(index as i32) else {
-                continue;
-            };
-            match action {
-                // Extra space above the rows that begin a group, so the
-                // primary and secondary pairs read as sections. Done with a
-                // margin on the row rather than by inserting separator rows,
-                // which would be focusable and interrupt keyboard navigation.
-                MenuAction::Device(_) | MenuAction::Subtitles => {
-                    row.add_css_class("tp-section-start")
+        // What each row is called to anyone who cannot see the list. The group
+        // heading is read once at the top of a group and does not survive into
+        // a row announced on its own, so the name carries it: "Audio Track" is
+        // two rows on this page and "First output, Audio Track" is one.
+        //
+        // Worked out here, where both lists are still in hand, and in title
+        // case rather than the heading's capitals - a screen reader given
+        // "FIRST OUTPUT" may spell it.
+        let mut heading = String::new();
+        let names: Vec<String> = rows
+            .iter()
+            .zip(&groups)
+            .map(|((label, value, _, _), group)| {
+                if let Some(group) = group {
+                    heading = title_case(group);
                 }
-                // Indented, because aligning belongs to the audio file named
-                // in the row above rather than to the output.
-                MenuAction::Align(_) => row.add_css_class("tp-subrow"),
-                _ => {}
-            }
+                row_name(&format!("{heading}, {label}"), value)
+            })
+            .collect();
+
+        for ((label, value, enabled, _), name) in rows.iter().zip(&names) {
+            append_named(&list, &menu_row(label, value, *enabled), name);
         }
 
-        // Pinned below the scrolling list so it stays reachable however
-        // long the list gets.
+        // A heading above the row that opens a group, and nothing above the
+        // rest. Headings are not rows: they sit outside the selection model
+        // and outside the focus chain, so they are unselectable and skipped by
+        // the arrow keys without anything having to arrange it.
+        //
+        // That is also why the indent under them is gone. It said "this
+        // belongs to the output above"; the heading says it for all three rows
+        // at once, and says which output.
+        //
+        // It has to be done through this function rather than by setting the
+        // header on each row directly, which is the obvious way and does
+        // nothing: `set_header` only stores the widget on the row, and the
+        // list parents and draws it from inside its header function - which
+        // returns immediately when none is set. The headings were built, held
+        // and never mounted.
+        list.set_header_func(move |row, _before| {
+            let index = row.index();
+            match groups.get(index as usize).copied().flatten() {
+                Some(group) => row.set_header(Some(&group_heading(group, scale, index == 0))),
+                None => row.set_header(None::<&gtk::Widget>),
+            }
+        });
+
         let resumable = resume_at.is_some();
 
+        // Between the film and the choices rather than under both. Playing is
+        // what the page is for, so it sits where the eye arrives after
+        // reading what the film is - and the rows below become what they
+        // actually are, the settings you may want to change first rather than
+        // a list to get past. Generous room above and below, so it reads as a
+        // division of the page rather than as another row.
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(16)
+            .spacing(px(14.0))
+            .margin_top(px(34.0))
+            .margin_bottom(px(34.0))
             .build();
-        // The play buttons share the space between them; the gear keeps to
-        // its own width at the end.
+        // Everything in this row packs to the left, over the rows it acts on:
+        // playing, starting over, and then the two marks. Nothing expands, so
+        // there is no gap pushing the marks to the far end - they read as the
+        // rest of one row of controls rather than as a separate corner.
         let plays = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(16)
-            .homogeneous(true)
-            .hexpand(true)
+            .spacing(px(14.0))
+            .halign(gtk::Align::Start)
             .build();
         let mut play_buttons: Vec<gtk::Button> = Vec::new();
 
         // Resuming is the common case for a part-watched film, so it takes
         // the first position and the focus. Starting over is deliberate
-        // enough to be worth its own button rather than a hidden modifier.
-        if let Some(position) = resume_at {
-            let resume = format!(
-                "▶  Resume {}",
-                crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
-            );
-            for label in [resume.as_str(), "↻  Restart"] {
-                let button = gtk::Button::with_label(label);
-                button.add_css_class("tp-play");
-                button.set_sensitive(can_play);
-                plays.append(&button);
-                play_buttons.push(button);
-            }
-        } else {
-            let play = gtk::Button::with_label("▶  Play");
-            play.add_css_class("tp-play");
-            play.set_sensitive(can_play);
-            plays.append(&play);
-            play_buttons.push(play);
+        // enough to be worth its own button rather than a hidden modifier -
+        // but not enough to be worth a word beside it, so once there are two
+        // the second keeps only its mark. It is the same button either way;
+        // what changes is how much room it argues for.
+        let play = gtk::Button::new();
+        play.set_child(Some(&marked_face(
+            play_image(scale),
+            &match resume_at {
+                Some(position) => format!(
+                    "  Resume ({})",
+                    crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
+                ),
+                None => "  Play".to_string(),
+            },
+        )));
+        // The face is two labels, so the button has no text of its own for a
+        // screen reader to read off. Named outright instead.
+        name_it(
+            &play,
+            &match resume_at {
+                Some(position) => format!(
+                    "Resume at {}",
+                    crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
+                ),
+                None => "Play".to_string(),
+            },
+        );
+        play.add_css_class("tp-button");
+        play.add_css_class("tp-action");
+        play.add_css_class("tp-tall");
+        play.set_sensitive(can_play);
+        plays.append(&play);
+        play_buttons.push(play);
+
+        if resume_at.is_some() {
+            let restart = gtk::Button::new();
+            restart.set_child(Some(&marked_face(restart_image(scale), "")));
+            restart.add_css_class("tp-button");
+            restart.add_css_class("tp-action");
+            restart.add_css_class("tp-action-icon");
+            restart.add_css_class("tp-tall");
+            restart.set_sensitive(can_play);
+            // The word is gone from the face, so it has to be somewhere: a
+            // tooltip for a pointer, and a name for a screen reader, which
+            // would otherwise announce the glyph or nothing at all.
+            restart.set_tooltip_text(Some("Start from the beginning"));
+            name_it(&restart, "Restart");
+            plays.append(&restart);
+            play_buttons.push(restart);
         }
         buttons.append(&plays);
 
-        // Maximize and restore rather than the usual fullscreen pair, which
-        // is absent from the icon theme on both platforms and would draw the
-        // missing-image glyph.
-        let fullscreen = gtk::Button::new();
-        fullscreen.set_child(Some(&fullscreen_image(
-            self.window.is_fullscreen(),
-            self.scale.get(),
-            self.dark.get(),
-        )));
-        fullscreen.add_css_class("tp-gear");
-        // Still reachable by keyboard and controller, but a mouse click no
-        // longer leaves it holding focus and lit up.
-        fullscreen.set_focus_on_click(false);
-        fullscreen.set_tooltip_text(Some("Toggle fullscreen"));
-        name_it(&fullscreen, "Toggle fullscreen");
-        // Left out entirely when fullscreen is not this viewer's to change: a
-        // button that declines to do the one thing it offers is worse than no
-        // button.
-        if !self.locked_fullscreen {
-            buttons.append(&fullscreen);
-        }
+        let (fullscreen, gear) = self.corner_buttons();
+        let open = self.browse_button();
+        // Square, and as tall as the play button beside them. The marks are
+        // built the same way on the empty page, where there is no tall button
+        // to match, so this is asked for here rather than where they are made.
+        for mark in [Some(&open), Some(&gear), fullscreen.as_ref()]
+            .into_iter()
+            .flatten()
         {
-            let app = self.clone();
-            fullscreen.connect_clicked(move |_| {
-                app.sounds.borrow().click();
-                app.toggle_fullscreen();
-            });
+            mark.add_css_class("tp-tall");
         }
-        {
-            // Weak, so a menu rebuilt later leaves this handler harmless
-            // rather than keeping the old button alive.
-            let weak = fullscreen.downgrade();
-            let scale = self.scale.get();
-            let dark = self.dark.get();
-            self.window.connect_fullscreened_notify(move |window| {
-                if let Some(button) = weak.upgrade() {
-                    button.set_child(Some(&fullscreen_image(window.is_fullscreen(), scale, dark)));
-                }
-            });
+        // A little clear air between the pair that plays the film and the
+        // marks that do not, so the row reads as two groups rather than a run
+        // of equal buttons.
+        open.set_margin_start(px(16.0));
+        // Left out under a launcher: something else chose the film and is
+        // waiting for this playback of it, so there is nothing to choose here.
+        if !self.external {
+            buttons.append(&open);
         }
-
-        let gear = gtk::Button::from_icon_name("emblem-system-symbolic");
-        gear.add_css_class("tp-gear");
-        gear.set_focus_on_click(false);
-        gear.set_tooltip_text(Some("Settings"));
-        name_it(&gear, "Settings");
         buttons.append(&gear);
-        // Rebuilt with the screen, so the list is replaced rather than added
-        // to - the old buttons are gone and holding them would keep them
-        // alive for nothing.
-        *self.update_badges.borrow_mut() = vec![gear.clone()];
-        self.draw_update_badge();
-        page.append(&buttons);
-
-        {
-            let app = self.clone();
-            gear.connect_clicked(move |_| {
-                app.sounds.borrow().click();
-                app.show_settings();
-            });
+        if let Some(fullscreen) = fullscreen.as_ref() {
+            buttons.append(fullscreen);
         }
+        let close = self.close_button();
+        close.add_css_class("tp-tall");
+        buttons.append(&close);
 
-        // Ordered as they sit on screen, so left and right walk along the
-        // row and Down from the list lands on the first.
-        let mut footer = play_buttons.clone();
-        footer.push(fullscreen);
-        footer.push(gear);
+        // The page in order: what the film is, what to do about it, and then
+        // the choices - which are the only part that scrolls.
+        main.append(&buttons);
+        // The rows sit in a panel of their own rather than loose on the page.
+        // It runs to the bottom because the scroller inside it expands, which
+        // is also what turns the space left below the last row into part of
+        // the panel instead of a band of nothing.
+        let panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .vexpand(true)
+            .css_classes(["tp-menu-panel"])
+            .build();
+        panel.append(&scroller);
+        main.append(&panel);
+
+        // A header now rather than a footer, because that is where they sit:
+        // Up from the first row reaches them, and Down from them returns.
+        // Ordered as they appear, so left and right walk along the row.
+        let mut header = play_buttons.clone();
+        if !self.external {
+            header.push(open);
+        }
+        header.push(gear);
+        header.extend(fullscreen);
+        header.push(close);
 
         {
             let app = self.clone();
@@ -2579,7 +2871,6 @@ impl App {
                 app.sounds.borrow().click();
                 *app.menu_row.borrow_mut() = row.index();
                 match actions.get(row.index() as usize) {
-                    Some(MenuAction::Video) => app.choose_video(),
                     Some(MenuAction::Device(Role::Primary)) => {
                         app.show_chooser(Setting::PrimaryDevice)
                     }
@@ -2609,8 +2900,31 @@ impl App {
             });
         }
 
-        self.wire_navigation(&list, &[], &footer);
-        (page, list)
+        self.wire_navigation(&list, &header, &[]);
+        // Up from the top row lands on Play rather than on the far end of the
+        // row, which is Settings. Playing is what the page is for, and it is
+        // also what someone arrowing upwards off the list is reaching for.
+        *self.nav_header_entry.borrow_mut() = header.first().cloned();
+        (self.behind_artwork(&content), list)
+    }
+
+    /// Puts a page in front of the backdrop, and holds it to its column.
+    ///
+    /// Both screens go through here, so a page with no artwork still gets the
+    /// same ground and the same width as one with it - which is what keeps the
+    /// two from being two designs.
+    fn behind_artwork(self: &Rc<Self>, content: &gtk::Box) -> gtk::Overlay {
+        let backdrop = crate::artwork::Artwork::backdrop();
+        backdrop.set_texture(self.backdrop_art.borrow().clone());
+
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&backdrop));
+        // The backdrop fills the window; the page inside stops widening once
+        // lines get too long to read. See src/column.rs for why that is a
+        // widget rather than something set on this box.
+        let most = (PAGE_MAX_UNITS * self.scale.get()).round() as i32;
+        overlay.add_overlay(&crate::column::Column::around(content, most));
+        overlay
     }
 
     fn show_menu(self: &Rc<Self>) {
@@ -2618,6 +2932,10 @@ impl App {
 
         *self.screen.borrow_mut() = Screen::Menu;
         self.window.set_child(Some(&page));
+
+        // The empty page has no rows to land on: its two buttons are the
+        // whole of it, and `build_empty_page` has already focused one.
+        let Some(list) = list else { return };
         // Selected as well as focused: focus alone doesn't mark a row
         // selected, which left the list opening with nothing highlighted
         // until the first arrow key.
@@ -2628,18 +2946,791 @@ impl App {
         }
     }
 
+    // --- The media page ------------------------------------------------
+
+    /// How tall the page is, or is about to be.
+    ///
+    /// Before the window is mapped it has no size, but it does already know
+    /// the size it is going to open at - and that is not simply the interface
+    /// scale times a constant, because the opening size is capped to the
+    /// monitor. Guessing it as `700 * scale` put a 1050px poster in a 1325px
+    /// window at 3x, which pushed the rows and the whole footer off the bottom
+    /// of the screen.
+    fn page_height(&self, scale: f64) -> f64 {
+        match (self.window.height(), self.window.default_height()) {
+            (0, 0) => 700.0 * scale,
+            (0, planned) => planned as f64,
+            (height, _) => height as f64,
+        }
+    }
+
+    /// How tall the poster should be for the window as it stands: a share of
+    /// the page, within hard bounds at both ends.
+    ///
+    /// The ceiling matters for more than composition. This is a size
+    /// *request*, which is a minimum its window must honor, so a poster sized
+    /// from the window's own height is a loop: the taller the window, the more
+    /// height its contents insist on. Capping it breaks that - past this size
+    /// the poster stops following the window, and the window stays free to be
+    /// made smaller again.
+    ///
+    /// The floor is absolute rather than scaled for the opposite reason:
+    /// scaled, it grows with the interface exactly when there is least room
+    /// for it.
+    fn poster_height(&self, scale: f64) -> f64 {
+        (self.page_height(scale) * POSTER_SHARE).clamp(120.0, 620.0 * scale)
+    }
+
+    /// Rebuilds the media page once a drag-resize has stopped moving.
+    ///
+    /// GTK has no "the resize finished" signal - `layout` arrives on every
+    /// frame of a drag, and rebuilding the page on each one would be both slow
+    /// and unpleasant to watch, the poster jumping under the pointer. So the
+    /// rebuild is put on a short timer that each new size cancels and restarts,
+    /// and only the last one in a drag survives to fire.
+    ///
+    /// Without this the poster only resized on maximize and restore, which
+    /// have their own handler and change the height in one step. Dragging a
+    /// window smaller left the page built for the size it used to be, which is
+    /// the sort of thing that looks like a bug rather than a decision.
+    ///
+    /// The guard is the poster's own height rather than the window's: past the
+    /// ceiling in [`App::poster_height`] the window can grow as much as it
+    /// likes without the page looking any different, and rebuilding then would
+    /// throw away the viewer's place in the list for nothing.
+    fn rebuild_when_resize_ends(self: &Rc<Self>) {
+        /// Long enough to sit out a drag, short enough that letting go and
+        /// seeing the page settle reads as one action rather than two.
+        const SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
+        if *self.screen.borrow() != Screen::Menu {
+            return;
+        }
+        if let Some(pending) = self.resize_settle.borrow_mut().take() {
+            pending.remove();
+        }
+        let app = self.clone();
+        let source = glib::timeout_add_local_once(SETTLE, move || {
+            *app.resize_settle.borrow_mut() = None;
+            if *app.screen.borrow() != Screen::Menu {
+                return;
+            }
+            if app.poster_height(app.scale.get()) == app.built_poster.get() {
+                return;
+            }
+            app.show_menu();
+        });
+        *self.resize_settle.borrow_mut() = Some(source);
+    }
+
+    /// The poster, and the facts about the file under it.
+    ///
+    /// The two belong together and to nothing else on the page: one is what
+    /// the film looks like and the other is what this copy of it is, and
+    /// neither is a choice anybody makes. Keeping them in their own column
+    /// leaves the whole of the space beside it for the choices.
+    fn poster_column(self: &Rc<Self>, scale: f64) -> gtk::Box {
+        let px = |base: f64| (base * scale).round() as i32;
+
+        // Half the page's height, which is the proportion the comps are drawn
+        // to - 550px of 1080 - and the reason this is not simply a size in
+        // interface units. On a maximized ultrawide the page is held to a
+        // 16:9 column far taller than the default window, and a poster fixed
+        // in scaled pixels sits in the corner of it looking like a thumbnail
+        // of itself. Bounded at both ends so a very short window still gets
+        // something poster-shaped and a very tall one does not get a
+        // billboard.
+        //
+        // Read when the page is built rather than tracked, so a window
+        // resized while the menu is up keeps the size it was built at until
+        // something rebuilds the page - which every trip into a chooser does.
+        // The alternative is another custom widget, and this is a proportion
+        // rather than a constraint: being a little out until the next rebuild
+        // costs nothing that anyone can see.
+        let height = self.poster_height(scale);
+        // Recorded so a resize can tell whether rebuilding the page would
+        // change anything. Past the ceiling below it would not.
+        self.built_poster.set(height);
+        // Two by three, which every poster in every library is drawn to.
+        let width = height * 2.0 / 3.0;
+
+        let column = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(12.0))
+            .valign(gtk::Align::Start)
+            .build();
+        // Exactly as wide as the poster and no wider. Without this the column
+        // is as wide as its widest *fact*, so a long codec name pushed the
+        // whole page to the right and left a gap beside the poster that
+        // belonged to nothing.
+        column.set_size_request(width.round() as i32, -1);
+        // Explicitly not expanding, and this is load-bearing. GTK propagates
+        // `hexpand` up from children, so the poster picture asking to fill its
+        // own frame quietly made this whole column an expanding one - and a
+        // box then splits the spare width between it and the page beside it.
+        // Measured: a column asking for 291px was being handed 567, which is
+        // the gap that appeared to sit between the poster and the rows.
+        column.set_hexpand(false);
+
+        let frame = gtk::Box::builder()
+            .css_classes(["tp-poster"])
+            .halign(gtk::Align::Start)
+            // Clipped, so a poster that is not exactly two by three is
+            // cropped by the frame rather than allowed to reshape it.
+            .overflow(gtk::Overflow::Hidden)
+            .build();
+        frame.set_size_request(width.round() as i32, height.round() as i32);
+
+        match self.poster_art.borrow().clone() {
+            Some(texture) => {
+                // Fills the frame and keeps its shape, which is the same rule
+                // the backdrop follows and the reason both are cropped rather
+                // than letterboxed: a poster with bars down its sides reads
+                // as a mistake. Real posters are two by three and are not
+                // cropped at all; what this rescues is an episode thumbnail
+                // or a scan that is a few pixels out.
+                // Expanding is how it fills the frame: the widget draws a
+                // texture and measures as nothing, so without this the frame
+                // allocates it no width at all and the poster disappears.
+                // The request stops at the column, which sets its own
+                // `hexpand` explicitly - see there.
+                let picture = crate::artwork::Artwork::poster();
+                picture.set_texture(Some(texture));
+                picture.set_hexpand(true);
+                picture.set_vexpand(true);
+                frame.append(&picture);
+            }
+            // Nothing found, which is the common case: of the 123 film folders
+            // in the library this was written against, 28 carry artwork. The
+            // mark is sized from the frame rather than from the interface, so
+            // it keeps its place inside it at every window size.
+            None => frame.append(&video_file_image(width * 0.42)),
+        }
+        column.append(&frame);
+
+        let facts = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(1.0))
+            // A few pixels in from the poster's edges, and the same on both:
+            // the readings are ranged right, so without this they sat hard
+            // against the frame above on one side while the names were inset
+            // on the other.
+            .margin_start(px(4.0))
+            .margin_end(px(4.0))
+            .build();
+        // Two columns: what it is on the left, what it says on the right,
+        // ranged against the poster's own right edge. As one run of text the
+        // readings started at a different place on every line and there was
+        // nothing to read down; against an edge they line up as a table, which
+        // is what a column of measurements wants to be.
+        for (name, value) in self.file_facts() {
+            let line = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(px(8.0))
+                .build();
+
+            // Ellipsizing decides how a label *shrinks*; it does nothing to
+            // what one asks for in the first place, which stays the full width
+            // of its text. So a long reading here would widen the column past
+            // the poster and push the whole page right. Both halves are capped
+            // in what they may ask for; the width they actually get comes from
+            // the poster above, and anything longer is cut with an ellipsis.
+            let key = gtk::Label::new(Some(&format!("{name}:")));
+            key.add_css_class("tp-fact");
+            key.add_css_class("tp-fact-name");
+            key.set_xalign(0.0);
+            key.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            // Enough for the longest of them, "Resolution:". Capped at six it
+            // cut every name to "Resol...", which is a label that has stopped
+            // labelling anything. The pair still comes to well under the
+            // poster's width, which is what the cap is protecting.
+            key.set_max_width_chars(12);
+            line.append(&key);
+
+            let reading = gtk::Label::new(Some(&value));
+            reading.add_css_class("tp-fact");
+            reading.set_xalign(1.0);
+            reading.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            reading.set_max_width_chars(12);
+            // Pushes itself to the far edge. Safe only because the column
+            // sets `hexpand` false outright - otherwise this request would
+            // travel up and widen the whole left column, which is the fault
+            // the poster picture caused before it.
+            reading.set_hexpand(true);
+            line.append(&reading);
+
+            facts.append(&line);
+        }
+        column.append(&facts);
+        column
+    }
+
+    /// What this copy of the film is, as opposed to what the film is.
+    ///
+    /// Only what is actually known: a remote source can be measured for none
+    /// of it, and a line reading "Unknown" is worse than no line, so anything
+    /// unanswered is simply absent. The order runs from what a viewer checks
+    /// first to what they check last.
+    fn file_facts(&self) -> Vec<(String, String)> {
+        let details = self.details.borrow();
+        [
+            // Two lines rather than "1080p (H.264)". Together they are the
+            // longest reading in the column, and the column is only as wide
+            // as the poster - so as one line they were the thing that decided
+            // how much room the picture got.
+            ("Resolution", details.resolution()),
+            ("Codec", details.codec()),
+            ("Framerate", details.framerate()),
+            ("Bitrate", details.bitrate()),
+            (
+                "Container",
+                Some(details.container.clone()).filter(|c| !c.is_empty()),
+            ),
+            // Last, under the readings that describe the picture. It is the
+            // one line here that says nothing about how the film will look.
+            ("File size", details.filesize()),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| value.map(|value| (name.to_string(), value)))
+        .collect()
+    }
+
+    /// The title, the facts line, the summary, and what languages the file
+    /// holds - everything above the choices.
+    ///
+    /// Everything except the summary keeps its natural height; the summary is
+    /// held to three lines whether it has them or not, which is what stops the
+    /// rows underneath moving between one film and the next.
+    fn heading_block(self: &Rc<Self>, scale: f64) -> Vec<gtk::Widget> {
+        let px = |base: f64| (base * scale).round() as i32;
+        let details = self.details.borrow();
+        let mut block: Vec<gtk::Widget> = Vec::new();
+
+        let title = gtk::Label::new(Some(&details.title));
+        title.add_css_class("tp-film-title");
+        title.set_xalign(0.0);
+        // One line, cut with an ellipsis. A filename with a release tag on it
+        // is long and would happily take two - but the rows below sit at a
+        // fixed distance from the top, and a title that is sometimes one line
+        // and sometimes two is exactly the thing that moves them.
+        title.set_wrap(false);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        block.push(title.upcast());
+
+        // Year, running time, certificate, score, genres - whichever of them
+        // anything answered. Spaced rather than punctuated between, which is
+        // what the comps do and what keeps a line of three facts from reading
+        // as a sentence.
+        let mut facts: Vec<String> = Vec::new();
+        facts.extend(details.year.map(|year| year.to_string()));
+        facts.extend(details.runtime());
+        if !details.certificate.is_empty() {
+            facts.push(details.certificate.clone());
+        }
+        // A star, so a bare number is not left to be guessed at. Out of ten is
+        // what every writer of this format stores and what the star implies,
+        // and the sidecar is the only place it comes from - nothing is ever
+        // fetched to produce it.
+        //
+        // The star is in a font TinePlayer ships, which the other marks in the
+        // interface are not: see `INTERFACE_SYMBOLS` in
+        // packaging/fonts/build-fonts.py before using any new symbol here.
+        //
+        // One decimal: the scrapers store three, and "8.235" is a precision
+        // nobody asked for about an opinion.
+        facts.extend(details.rating.map(|score| format!("★ {score:.1}")));
+        if !details.genres.is_empty() {
+            // Three at most. A scraper will happily list six, and the line has
+            // the width of one line.
+            facts.push(
+                details
+                    .genres
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        }
+        if !facts.is_empty() {
+            let line = gtk::Label::new(Some(&facts.join("     ")));
+            line.add_css_class("tp-film-facts");
+            line.set_xalign(0.0);
+            line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            line.set_margin_top(px(4.0));
+            block.push(line.upcast());
+        }
+
+        // The summary, in a space of its own that is the same height whether
+        // there is one or not. This is the only thing on the page held to a
+        // fixed height, and it is the only one that needs to be: a plot runs
+        // from nothing to a paragraph, and everything else here is one line or
+        // absent. Reserving three lines for it is what keeps the rows below
+        // from walking up and down the page as you step through a folder.
+        let plot = gtk::Label::new(Some(&details.plot));
+        plot.add_css_class("tp-film-plot");
+        plot.set_xalign(0.0);
+        plot.set_yalign(0.0);
+        plot.set_wrap(true);
+        plot.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        plot.set_lines(3);
+        plot.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        plot.set_margin_top(px(12.0));
+        // Filling the width it is given rather than a fraction of it. A
+        // wrapping label asks for its whole text on one line, so it used to be
+        // capped at twenty characters to stop it stretching the page - which
+        // capped where it *wrapped* too, and left it running down the middle
+        // of the column at about half width. Nothing needs to cap it now that
+        // the poster column no longer expands and `Column` decides the page's
+        // width outright.
+        // -1, which is the value that means "no cap". Zero is a cap of zero
+        // characters, and left it wrapping down the middle of the column.
+        plot.set_max_width_chars(-1);
+        plot.set_size_request(-1, px(PLOT_UNITS));
+        block.push(plot.upcast());
+        drop(details);
+
+        // What is in the file, in languages rather than in track numbers.
+        // The rows below say which track is going where; this says what there
+        // was to choose from, which is the question someone asks before they
+        // start opening choosers.
+        //
+        // Both lines are always drawn, even when there is nothing to put on
+        // them. They are the two facts this application exists to act on, and
+        // a line that comes and goes with the file moves everything under it.
+        let spoken = (self.audio_languages(), self.subtitle_languages());
+        let summary = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(1.0))
+            .margin_top(px(14.0))
+            .build();
+        for (name, languages) in [("Audio", spoken.0), ("Subtitles", spoken.1)] {
+            let line = gtk::Label::new(None);
+            line.add_css_class("tp-fact");
+            line.set_xalign(0.0);
+            // Cut rather than wrapped: a second line here would push the rows
+            // down on exactly the files that carry the most languages.
+            line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+            line.set_markup(&summary_markup(name, &languages));
+            summary.append(&line);
+        }
+        block.push(summary.upcast());
+        block
+    }
+
+    /// Every language the file offers sound in, in the order the tracks are
+    /// listed, with description called out.
+    ///
+    /// Deduplicated, because a file with four English tracks is offering one
+    /// language four ways and a line reading "English, English, English,
+    /// English" says less than one reading "English". A described track is a
+    /// separate entry rather than a duplicate: it is a genuinely different
+    /// thing to listen to, and for this application the most important entry
+    /// on the line.
+    fn audio_languages(&self) -> Vec<String> {
+        let mut named: Vec<String> = Vec::new();
+        for track in self.tracks.borrow().iter() {
+            // A track that never said what it is still counts. Plenty of files
+            // tag nothing at all - an AVI usually does not - and a line that
+            // quietly left those out would claim a file had no soundtrack.
+            let name = crate::languages::name_of_tag(&track.language).unwrap_or(UNKNOWN_LANGUAGE);
+            let entry = match crate::probe::is_audio_description(&track.title) {
+                true => format!("{name} (Described)"),
+                false => name.to_string(),
+            };
+            if !named.contains(&entry) {
+                named.push(entry);
+            }
+        }
+        named
+    }
+
+    /// The same for subtitles, over everything on offer - streams inside the
+    /// file and files sitting beside it alike.
+    ///
+    /// Both are things the viewer can pick, so a line that counted only the
+    /// embedded ones would understate a folder full of `.srt` files, which is
+    /// exactly the shape most of this library is in.
+    fn subtitle_languages(&self) -> Vec<String> {
+        let mut named: Vec<String> = Vec::new();
+        for option in self.subtitle_options.borrow().iter() {
+            // Labels arrive as a tag and possibly a title after it - "eng",
+            // "eng — Forced", "en.hi" - and the language is the first word of
+            // whichever shape it is.
+            let tag = option
+                .label()
+                .split(" — ")
+                .next()
+                .unwrap_or_default()
+                .split('.')
+                .next()
+                .unwrap_or_default();
+            let name = crate::languages::name_of_tag(tag).unwrap_or(UNKNOWN_LANGUAGE);
+            if !named.iter().any(|held| held == name) {
+                named.push(name.to_string());
+            }
+        }
+        named
+    }
+
+    /// The panel that offers the two ways to choose a video: the prompt, and
+    /// a button for each.
+    ///
+    /// Shared by the screen shown when nothing is loaded and by the panel the
+    /// browse button opens over a film, because they say the same thing and
+    /// should not drift apart. `cancel` adds a third button and is what tells
+    /// them apart: the empty screen has nowhere to go back to, while the panel
+    /// is floating over a film that is still loaded.
+    ///
+    /// Returns the panel and its buttons, since what each one does depends on
+    /// which screen asked for it.
+    fn choose_source_panel(
+        self: &Rc<Self>,
+        scale: f64,
+        cancel: bool,
+    ) -> (gtk::Box, gtk::Button, gtk::Button, Option<gtk::Button>) {
+        let px = |base: f64| (base * scale).round() as i32;
+
+        let middle = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(24.0))
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::Center)
+            .vexpand(true)
+            .build();
+        // The mark only where the screen is otherwise empty. Over a film it
+        // would be the application introducing itself in the middle of being
+        // used.
+        if !cancel {
+            middle.append(&logo_image(scale * 2.2));
+        }
+
+        let prompt = gtk::Label::new(Some(
+            "Drop a video file here, browse for a local file, or enter a URL",
+        ));
+        prompt.add_css_class("tp-empty-prompt");
+        prompt.set_wrap(true);
+        prompt.set_justify(gtk::Justification::Center);
+        middle.append(&prompt);
+
+        const BROWSE_ICON: &[u8] = include_bytes!("../data/ui/browse.png");
+        const LINK_ICON: &[u8] = include_bytes!("../data/ui/link.png");
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(px(14.0))
+            .halign(gtk::Align::Center)
+            .build();
+        // Straight to the thing itself rather than to a menu row that opens
+        // it: with one file to choose and two ways to choose it, a step in
+        // between is a step for nothing.
+        //
+        // Each carries the mark of what it opens, and Browse carries the same
+        // one the media page's button does - so the button on the page and the
+        // button in the panel it opens are visibly the same errand.
+        let browse = gtk::Button::new();
+        browse.set_child(Some(&marked_face(
+            marked_image(BROWSE_ICON, PLAY_MARK_PX * scale),
+            "  Browse...",
+        )));
+        browse.add_css_class("tp-button");
+        browse.add_css_class("tp-action");
+        name_it(&browse, "Browse");
+
+        let address = gtk::Button::new();
+        address.set_child(Some(&marked_face(
+            marked_image(LINK_ICON, PLAY_MARK_PX * scale),
+            "  Enter URL",
+        )));
+        address.add_css_class("tp-button");
+        address.add_css_class("tp-action");
+        name_it(&address, "Enter URL");
+
+        buttons.append(&browse);
+        buttons.append(&address);
+        middle.append(&buttons);
+
+        // On a row of its own beneath them rather than beside them: it is not
+        // a third way to choose a video, and standing in line with two that
+        // are made it look like one.
+        let back = cancel.then(|| {
+            let back = gtk::Button::with_label("Cancel");
+            back.add_css_class("tp-button");
+            back.set_halign(gtk::Align::Center);
+            middle.append(&back);
+            back
+        });
+        (middle, browse, address, back)
+    }
+
+    /// The screen with no video on it: an invitation, and the two ways to
+    /// accept it.
+    ///
+    /// Deliberately not the menu with everything greyed out. There is nothing
+    /// to choose until there is a film to choose it for, and a page of dashes
+    /// asks to be read before it can be dismissed. The gear stays, because
+    /// this is where somebody who has just installed the application arrives
+    /// and every setting they might need is behind it.
+    fn build_empty_page(self: &Rc<Self>) -> gtk::Overlay {
+        let scale = self.scale.get();
+        let px = |base: f64| (base * scale).round() as i32;
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_top(px(30.0))
+            .margin_bottom(px(26.0))
+            .margin_start(px(34.0))
+            .margin_end(px(34.0))
+            // Filled for the reason the media page is: `Column` does the
+            // centering, and a box that centers itself as well collapses to
+            // its contents and takes the footer's corner with it.
+            .build();
+
+        let (middle, browse, address, _) = self.choose_source_panel(scale, false);
+        content.append(&middle);
+
+        {
+            let app = self.clone();
+            browse.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.browse_for_file();
+            });
+        }
+        {
+            let app = self.clone();
+            address.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_paste_uri();
+            });
+        }
+
+        // The same pair as the media page carries, in the same corner, so
+        // they do not appear to move when a film is chosen.
+        let footer = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(px(14.0))
+            .halign(gtk::Align::End)
+            .build();
+        let (fullscreen, gear) = self.corner_buttons();
+        footer.append(&gear);
+        if let Some(fullscreen) = fullscreen.as_ref() {
+            footer.append(fullscreen);
+        }
+        content.append(&footer);
+
+        let mut stops: Vec<gtk::Button> = vec![browse.clone(), address];
+        stops.push(gear);
+        stops.extend(fullscreen);
+        self.set_nav(None, &[], &stops);
+        // Deferred until the page is actually in the window. This is built
+        // before `show_menu` installs it, and focus cannot be taken by a
+        // widget that is not on screen yet - the same reason `settle_on`
+        // waits for the map on the first screen of a session.
+        match browse.is_mapped() {
+            true => browse.grab_focus(),
+            false => {
+                browse.connect_map(|browse| {
+                    browse.grab_focus();
+                });
+                true
+            }
+        };
+
+        self.behind_artwork(&content)
+    }
+
+    /// The mark that closes the player, at the far end of the row.
+    ///
+    /// Where a window's own close button would be, and worth having because
+    /// on a television there is no window: TinePlayer opens fullscreen with no
+    /// titlebar, and quitting otherwise means knowing that Escape asks. It
+    /// asks the same question Escape does rather than quitting outright.
+    fn close_button(self: &Rc<Self>) -> gtk::Button {
+        const ICON: &[u8] = include_bytes!("../data/ui/close.png");
+
+        let close = gtk::Button::new();
+        close.set_child(Some(&marked_image(ICON, CORNER_MARK_PX * self.scale.get())));
+        close.add_css_class("tp-gear");
+        close.set_focus_on_click(false);
+        close.set_tooltip_text(Some("Close the player"));
+        name_it(&close, "Close the player");
+        {
+            let app = self.clone();
+            close.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_confirm_quit();
+            });
+        }
+        close
+    }
+
+    /// The mark that opens the panel for choosing a different video.
+    ///
+    /// Drawn and placed like the settings and fullscreen marks rather than
+    /// like the play button, because it is the same kind of thing: something
+    /// the page can do, rather than the thing the page is for.
+    fn browse_button(self: &Rc<Self>) -> gtk::Button {
+        const ICON: &[u8] = include_bytes!("../data/ui/browse.png");
+
+        let open = gtk::Button::new();
+        open.set_child(Some(&marked_image(ICON, CORNER_MARK_PX * self.scale.get())));
+        open.add_css_class("tp-gear");
+        open.set_focus_on_click(false);
+        open.set_tooltip_text(Some("Choose a video"));
+        name_it(&open, "Choose a video");
+        {
+            let app = self.clone();
+            open.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.choose_video();
+            });
+        }
+        open
+    }
+
+    /// The fullscreen mark and the gear, which sit together at the end of
+    /// every footer on these two screens.
+    ///
+    /// Built here rather than twice, because the pair has three details worth
+    /// not getting differently right in two places: the mark follows the
+    /// window's own state, the gear carries the update badge, and neither
+    /// takes focus from a click.
+    fn corner_buttons(self: &Rc<Self>) -> (Option<gtk::Button>, gtk::Button) {
+        // Maximize and restore rather than the usual fullscreen pair, which
+        // is absent from the icon theme on both platforms and would draw the
+        // missing-image glyph.
+        let fullscreen = gtk::Button::new();
+        fullscreen.set_child(Some(&fullscreen_image(
+            self.window.is_fullscreen(),
+            self.scale.get(),
+        )));
+        fullscreen.add_css_class("tp-gear");
+        fullscreen.set_focus_on_click(false);
+        fullscreen.set_tooltip_text(Some("Toggle fullscreen"));
+        name_it(&fullscreen, "Toggle fullscreen");
+        {
+            let app = self.clone();
+            fullscreen.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.toggle_fullscreen();
+            });
+        }
+        {
+            let weak = fullscreen.downgrade();
+            let scale = self.scale.get();
+            self.window.connect_fullscreened_notify(move |window| {
+                if let Some(button) = weak.upgrade() {
+                    button.set_child(Some(&fullscreen_image(window.is_fullscreen(), scale)));
+                }
+            });
+        }
+
+        let gear = gtk::Button::new();
+        gear.set_child(Some(&settings_image(CORNER_MARK_PX * self.scale.get())));
+        gear.add_css_class("tp-gear");
+        gear.set_focus_on_click(false);
+        gear.set_tooltip_text(Some("Settings"));
+        name_it(&gear, "Settings");
+        {
+            let app = self.clone();
+            gear.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_settings();
+            });
+        }
+        *self.update_badges.borrow_mut() = vec![gear.clone()];
+        self.draw_update_badge();
+
+        // Left out entirely when fullscreen is not this viewer's to change: a
+        // button that declines to do the one thing it offers is worse than no
+        // button.
+        match self.locked_fullscreen {
+            true => (None, gear),
+            false => (Some(fullscreen), gear),
+        }
+    }
+
+    /// Reads the artwork for the file just loaded, and redraws the page when
+    /// it arrives.
+    ///
+    /// On a thread, because this is the part with a megabyte in it. A backdrop
+    /// over a network share is long enough to be felt, and the page has to be
+    /// on screen before it - a film's details held back until its wallpaper
+    /// loads is the wrong thing to wait for.
+    fn start_art_load(self: &Rc<Self>) {
+        let (poster, backdrop) = {
+            let details = self.details.borrow();
+            (details.poster.clone(), details.backdrop.clone())
+        };
+        if poster.is_none() && backdrop.is_none() {
+            return;
+        }
+
+        // What the artwork being read belongs to. A viewer who opens one film
+        // and immediately opens another gets the second one's backdrop, not
+        // whichever thread happened to finish last.
+        let generation = self.art_generation.get();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let read = |art: Option<crate::metadata::Art>| {
+                art.as_ref().and_then(crate::metadata::load_image)
+            };
+            let _ = sender.send((read(poster), read(backdrop)));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
+            let (poster, backdrop) = match receiver.try_recv() {
+                Ok(art) => art,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            if app.art_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+
+            // Decoding happens here rather than on the thread: a GdkTexture
+            // belongs to the main thread, and this is the only place that can
+            // make one.
+            let decode = |bytes: Option<Vec<u8>>| {
+                let bytes = bytes?;
+                match gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)) {
+                    Ok(texture) => Some(texture),
+                    // Said out loud, because a poster that silently fails to
+                    // appear looks like one that was never found - and the two
+                    // want completely different things done about them.
+                    Err(e) => {
+                        eprintln!("Couldn't decode artwork: {e}");
+                        None
+                    }
+                }
+            };
+            *app.poster_art.borrow_mut() = decode(poster);
+            *app.backdrop_art.borrow_mut() = decode(backdrop);
+
+            // Only worth redrawing the page that shows it, and only while it
+            // is still the page on screen.
+            if *app.screen.borrow() == Screen::Menu {
+                app.show_menu();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
     // --- Choosers ------------------------------------------------------
 
     fn show_chooser(self: &Rc<Self>, setting: Setting) {
         let title = match setting {
-            Setting::PrimaryDevice => "Primary Audio Device",
-            Setting::PrimaryTrack => "Primary Audio Track",
-            Setting::SecondaryDevice => "Secondary Audio Device",
-            Setting::SecondaryTrack => "Secondary Audio Track",
+            Setting::PrimaryDevice => "First Output Device",
+            Setting::PrimaryTrack => "First Audio Track",
+            Setting::SecondaryDevice => "Second Output Device",
+            Setting::SecondaryTrack => "Second Audio Track",
             Setting::Subtitles => "Subtitles",
-            Setting::Theme => "Theme",
-            Setting::PrimaryLanguage => "Primary Language Preference",
-            Setting::SecondaryLanguage => "Secondary Language Preference",
+            Setting::PrimaryLanguage => "First Language Preference",
+            Setting::SecondaryLanguage => "Second Language Preference",
             Setting::SubtitleLanguage => "Subtitle Preference",
             Setting::SubtitleFont => "Subtitle Font",
         };
@@ -2717,16 +3808,6 @@ impl App {
                     entries.push((format!("Audio File: {}", file.label()), Some(audio_file)));
                 } else {
                     entries.push(("Audio File...".to_string(), Some(audio_file)));
-                }
-            }
-            Setting::Theme => {
-                current = Some(match self.config.borrow().theme {
-                    crate::config::Theme::Auto => 0,
-                    crate::config::Theme::Light => 1,
-                    crate::config::Theme::Dark => 2,
-                });
-                for (position, name) in ["System", "Light", "Dark"].into_iter().enumerate() {
-                    entries.push((name.to_string(), Some(position)));
                 }
             }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
@@ -3014,36 +4095,6 @@ impl App {
                     *self.sounds.borrow_mut() = Sounds::new(enabled, device);
                 }
             }
-            Setting::Theme => {
-                let theme = match choice {
-                    Some(1) => crate::config::Theme::Light,
-                    Some(2) => crate::config::Theme::Dark,
-                    _ => crate::config::Theme::Auto,
-                };
-                {
-                    let mut config = self.config.borrow_mut();
-                    config.theme = theme;
-                    let _ = config.save();
-                }
-                let was_dark = self.dark.get();
-                let now_dark = appearance::apply_theme(theme);
-                self.dark.set(now_dark);
-
-                // GTK's Windows build will move to the dark theme but never
-                // back, whatever is done to the settings. Everything worth
-                // keeping is already written to disk, so restarting is
-                // seamless, but it should still be asked for rather than
-                // done out of the blue.
-                if cfg!(target_os = "windows") && was_dark && !now_dark {
-                    let app = self.clone();
-                    self.show_confirm(
-                        "Switching to the light theme needs a restart.\nRestart now?",
-                        "Restart",
-                        move || app.relaunch(),
-                    );
-                    return true;
-                }
-            }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let picked = choice
                     .and_then(|index| crate::languages::LANGUAGES.get(index))
@@ -3119,25 +4170,6 @@ impl App {
             }
         }
         false
-    }
-
-    /// Starts a fresh copy and closes this one. Playback cannot be running
-    /// here, since the settings are only reachable from the menu, and the
-    /// file, tracks, position and window state are all already saved.
-    fn relaunch(&self) {
-        match std::env::current_exe() {
-            Ok(exe) => {
-                if let Err(e) = std::process::Command::new(exe).spawn() {
-                    eprintln!("Could not restart: {e}");
-                    return;
-                }
-            }
-            Err(e) => {
-                eprintln!("Could not find the executable to restart: {e}");
-                return;
-            }
-        }
-        self.window.close();
     }
 
     // --- File selection ------------------------------------------------
@@ -3245,6 +4277,12 @@ impl App {
 
     /// Drops everything that described the file that was loaded.
     fn forget_file(&self) {
+        *self.details.borrow_mut() = Default::default();
+        *self.poster_art.borrow_mut() = None;
+        *self.backdrop_art.borrow_mut() = None;
+        // Anything still being read for the file being forgotten is now for
+        // the wrong one, and this is what tells it so.
+        self.art_generation.set(self.art_generation.get() + 1);
         *self.tracks.borrow_mut() = Vec::new();
         *self.subtitle_options.borrow_mut() = Vec::new();
         *self.primary_track.borrow_mut() = None;
@@ -3289,6 +4327,19 @@ impl App {
             }
         }
 
+        // What the page shows about the file, from the sidecar beside it and
+        // the container's own tags. Cheap - a small file and a few `is_file`
+        // calls - and the artwork behind whatever it found is read separately,
+        // on a thread, because that is the part with a megabyte in it.
+        //
+        // Taken here rather than further down because the lists below are
+        // moved out of `media`, and this reads the whole of it.
+        *self.poster_art.borrow_mut() = None;
+        *self.backdrop_art.borrow_mut() = None;
+        self.art_generation.set(self.art_generation.get() + 1);
+        *self.details.borrow_mut() = crate::metadata::resolve(source, &media);
+
+        let duration_ns = media.duration_ns;
         let tracks = media.audio;
         let options = crate::subtitles::options(source.local(), &media.subtitles);
 
@@ -3453,10 +4504,13 @@ impl App {
         *self.subtitle_options.borrow_mut() = options;
         *self.tracks.borrow_mut() = tracks;
         *self.file.borrow_mut() = Some(source.clone());
-        self.duration_s.set(media.duration_ns as f64 / 1e9);
+        self.duration_s.set(duration_ns as f64 / 1e9);
         // Now that the video and its audio files are both settled, whatever
         // was measured about that pairing applies again.
         self.load_baselines();
+        // The page can be drawn without artwork and filled in when it lands,
+        // so this is started rather than waited for.
+        self.start_art_load();
 
         // Only a local file is worth reopening: a remote URL can carry an
         // access token that expires, and whatever launched us will hand it over
@@ -3550,18 +4604,27 @@ impl App {
         // the main menu behind a dialog opened from somewhere else entirely.
         // The window has a child from the first screen onwards, so what is
         // left here is the moment before that.
+        // Only a *modal's* overlay is unwrapped, which is what the marker
+        // class is for. The media page is an overlay too - artwork behind,
+        // page in front - and taking its child handed back the bare backdrop
+        // and threw the page away, so the browser opened over a film's
+        // wallpaper with nothing on it.
+        let modal_stack = |child: &gtk::Widget| {
+            child
+                .downcast_ref::<gtk::Overlay>()
+                .is_some_and(|overlay| overlay.has_css_class(MODAL_STACK))
+        };
         let backdrop: gtk::Widget = match self.window.child() {
-            Some(child) => match child.downcast::<gtk::Overlay>() {
-                Ok(overlay) => {
-                    let under = overlay.child();
-                    overlay.set_child(None::<&gtk::Widget>);
-                    under.unwrap_or_else(|| empty_backdrop().upcast())
-                }
-                Err(child) => {
-                    self.window.set_child(None::<&gtk::Widget>);
-                    child
-                }
-            },
+            Some(child) if modal_stack(&child) => {
+                let overlay = child.downcast::<gtk::Overlay>().expect("checked above");
+                let under = overlay.child();
+                overlay.set_child(None::<&gtk::Widget>);
+                under.unwrap_or_else(|| empty_backdrop().upcast())
+            }
+            Some(child) => {
+                self.window.set_child(None::<&gtk::Widget>);
+                child
+            }
             None => empty_backdrop().upcast(),
         };
         // Not just visually behind: an insensitive page cannot take focus, so
@@ -3571,11 +4634,9 @@ impl App {
         let scrim = gtk::Box::builder().css_classes(["tp-scrim"]).build();
 
         page.add_css_class("tp-modal");
-        if self.dark.get() {
-            page.add_css_class("tp-modal-dark");
-        }
 
         let overlay = gtk::Overlay::new();
+        overlay.add_css_class(MODAL_STACK);
         overlay.set_child(Some(&backdrop));
         overlay.add_overlay(&scrim);
         overlay.add_overlay(page);
@@ -3632,10 +4693,9 @@ impl App {
             .build();
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
         let open = gtk::Button::with_label("Open");
         open.add_css_class("tp-button");
-        open.add_css_class("tp-play");
+        open.add_css_class("tp-action");
         // Nothing to open until there is something in the field, and an empty
         // one would only fail slowly against a source that does not exist.
         open.set_sensitive(false);
@@ -3765,7 +4825,6 @@ impl App {
 
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
         cancel.set_halign(gtk::Align::Center);
         page.append(&cancel);
         {
@@ -3977,7 +5036,6 @@ impl App {
 
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
 
         BrowserPage {
             page,
@@ -4093,48 +5151,46 @@ impl App {
     /// what is here; an address reaches what is not, and no amount of
     /// browsing would ever lead to it.
     fn choose_video(self: &Rc<Self>) {
-        let (page, list, back, _header) = list_page("Choose a Video", true);
+        let scale = self.scale.get();
+        let (panel, browse, address, cancel) = self.choose_source_panel(scale, true);
+        let cancel = cancel.expect("asked for with a cancel button");
 
-        for (label, value) in [
-            (
-                "Browse for a File",
-                "On this machine or a shared network drive",
-            ),
-            (
-                "Enter a URL",
-                "A link to a video, such as one from a media server",
-            ),
-        ] {
-            append_named(
-                &list,
-                &menu_row(label, value, true),
-                &row_name(label, value),
-            );
-        }
+        // A floor rather than a fixed size, the way the Opening panel has one:
+        // three buttons and a line of text would otherwise make a panel much
+        // narrower than the page behind it, and the swap would read as the
+        // window jumping about.
+        panel.set_size_request((560.0 * scale).round() as i32, -1);
 
         {
             let app = self.clone();
-            list.connect_row_activated(move |_, row| {
+            browse.connect_clicked(move |_| {
                 app.sounds.borrow().click();
-                match row.index() {
-                    0 => app.browse_for_file(),
-                    1 => app.show_paste_uri(),
-                    _ => {}
-                }
+                app.browse_for_file();
             });
         }
         {
             let app = self.clone();
-            back.connect_clicked(move |_| app.show_menu());
+            address.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_paste_uri();
+            });
+        }
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_menu();
+            });
         }
 
-        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        // The same words the empty screen shows, floated over the film rather
+        // than replacing it: what is loaded is still loaded, and backing out
+        // returns to it.
+        self.remember_origin();
+        self.set_nav(None, &[], &[cancel.clone(), browse.clone(), address]);
         *self.screen.borrow_mut() = Screen::VideoSource;
-        self.window.set_child(Some(&page));
-        if let Some(row) = list.row_at_index(0) {
-            list.select_row(Some(&row));
-            settle_on(&row);
-        }
+        self.window.set_child(Some(&self.modal(&panel)));
+        browse.grab_focus();
     }
 
     /// Opens the file browser where browsing last stopped.
@@ -4213,17 +5269,15 @@ impl App {
             .storage_key()
             .and_then(|key| crate::config::load_alignment(&key, path));
         Some((
-            // Named for what pressing it would do now. Running it again
-            // replaces the stored answer, which is also the way out when that
-            // answer is wrong.
-            match stored {
-                Some(_) => "Re-align",
-                None => "Auto-align",
-            }
-            .to_string(),
+            // One name whether or not there is a stored answer. It used to say
+            // "Auto-align" or "Re-align" to name what pressing it would do,
+            // which the value beside it now says better: "Unsynced" against a
+            // measured offset is the same distinction, in the column that
+            // exists to carry state.
+            "Sync".to_string(),
             match stored {
                 Some(millis) => describe_lateness(millis),
-                None => "Not measured".to_string(),
+                None => "Unsynced".to_string(),
             },
             true,
             MenuAction::Align(role),
@@ -4428,7 +5482,7 @@ impl App {
         cancel.add_css_class("tp-button");
         let next = gtk::Button::with_label("Next");
         next.add_css_class("tp-button");
-        next.add_css_class("tp-play");
+        next.add_css_class("tp-action");
         buttons.append(&cancel);
         buttons.append(&next);
         page.append(&buttons);
@@ -4636,15 +5690,28 @@ impl App {
         // Offered only where it could help. Trying another reference track is
         // the answer when the one measured against was a dub and the separate
         // recording was made from the original.
-        let again = gtk::Button::with_label("Try Another Track");
+        let again = gtk::Button::with_label("Try another reference track");
         again.add_css_class("tp-button");
+        again.add_css_class("tp-action");
+
+        // What the second button means depends on what happened. Where the
+        // measurement worked there is nothing to do but accept it; where it
+        // did not, the useful thing is to measure again against a different
+        // track, and this button becomes the way out beside it.
+        let done = gtk::Button::with_label(match retry {
+            true => "Cancel",
+            false => "Finish",
+        });
+        done.add_css_class("tp-button");
+        if !retry {
+            done.add_css_class("tp-action");
+        }
+        // Cancel first, then the action, which is the order every other pair
+        // in the application sits in.
+        buttons.append(&done);
         if retry {
             buttons.append(&again);
         }
-        let done = gtk::Button::with_label("Done");
-        done.add_css_class("tp-button");
-        done.add_css_class("tp-play");
-        buttons.append(&done);
         page.append(&buttons);
 
         {
@@ -4663,14 +5730,20 @@ impl App {
         }
 
         self.remember_origin();
+        // In the order they now sit, so Tab walks the row left to right.
         self.set_nav(None, &[], &[]);
+        self.add_nav_stop(&done);
         if retry {
             self.add_nav_stop(&again);
         }
-        self.add_nav_stop(&done);
         *self.screen.borrow_mut() = Screen::AlignResult;
         self.window.set_child(Some(&self.modal(&page)));
-        done.grab_focus();
+        // Whichever button is the action here: measuring again where that is
+        // still worth doing, and accepting the answer where it is not.
+        match retry {
+            true => again.grab_focus(),
+            false => done.grab_focus(),
+        };
     }
 
     /// Writes an alignment down and puts it into force.
@@ -4707,15 +5780,6 @@ impl App {
             };
             [
                 (
-                    "Theme".to_string(),
-                    match config.theme {
-                        crate::config::Theme::Auto => "System".to_string(),
-                        crate::config::Theme::Light => "Light".to_string(),
-                        crate::config::Theme::Dark => "Dark".to_string(),
-                    },
-                    true,
-                ),
-                (
                     "Interface Size".to_string(),
                     match config.ui_scale {
                         Some(scale) => format!("{scale}x"),
@@ -4729,7 +5793,7 @@ impl App {
                     true,
                 ),
                 (
-                    "Primary Audio Device".to_string(),
+                    "First Output Device".to_string(),
                     config
                         .primary_sink
                         .clone()
@@ -4762,7 +5826,7 @@ impl App {
                     true,
                 ),
                 (
-                    "Secondary Audio Device".to_string(),
+                    "Second Output Device".to_string(),
                     config
                         .secondary_sink
                         .clone()
@@ -5082,7 +6146,6 @@ impl App {
                 // row it was opened from, as the main menu does.
                 *app.settings_row.borrow_mut() = row.index();
                 match row.index() {
-                    ROW_THEME => app.open_setting(Setting::Theme),
                     ROW_INTERFACE_SCALE => app.work_switch_row(ROW_INTERFACE_SCALE),
                     ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
                     ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
@@ -5402,7 +6465,7 @@ impl App {
     }
 
     /// Redraws the interface at the size the bar is now at.
-    fn apply_scale(&self, steps: f64) {
+    fn apply_scale(self: &Rc<Self>, steps: f64) {
         let scale = scale_from_steps(steps);
         if scale != self.scale.get() {
             self.restyle(scale);
@@ -5419,7 +6482,7 @@ impl App {
     ///
     /// A size set by hand is that size in both, which is what asking for one
     /// means.
-    fn follow_automatic_scale(&self, window: &gtk::ApplicationWindow) {
+    fn follow_automatic_scale(self: &Rc<Self>, window: &gtk::ApplicationWindow) {
         if self.config.borrow().ui_scale.is_some() {
             return;
         }
@@ -5436,10 +6499,32 @@ impl App {
     }
 
     /// Re-renders every size in the interface at a new scale.
-    fn restyle(&self, scale: f64) {
+    fn restyle(self: &Rc<Self>, scale: f64) {
         self.scale.set(scale);
-        self.styles
-            .load_from_data(&style_css(scale, self.dark.get()));
+        self.styles.load_from_data(&style_css(scale));
+
+        // The stylesheet is only half of a size. Everything drawn rather than
+        // styled takes its size in Rust at the moment the page is built - the
+        // poster, the marks on the buttons, every margin, the width the page
+        // is held to - and none of that moves when the stylesheet is
+        // reloaded. Restyling alone therefore left the two halves disagreeing:
+        // type at the new size inside a page laid out for the old one.
+        //
+        // It shows worst where the change is largest. A 4K television picks
+        // 2x, so a page built at 1x and restyled kept a half-size poster and
+        // half-size margins under full-size text, and the whole composition
+        // sat in the top of the screen with the bottom third empty.
+        //
+        // Rebuilding is cheap here and this happens on a monitor change or a
+        // fullscreen toggle, not on a drag.
+        if *self.screen.borrow() == Screen::Menu {
+            let app = self.clone();
+            glib::idle_add_local_once(move || {
+                if *app.screen.borrow() == Screen::Menu {
+                    app.show_menu();
+                }
+            });
+        }
     }
 
     /// What is running, who wrote what it is built on, and under what terms.
@@ -6138,6 +7223,7 @@ impl App {
 
         let choose = gtk::Button::with_label("Choose");
         choose.add_css_class("tp-button");
+        choose.add_css_class("tp-action");
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(24)
@@ -6519,6 +7605,10 @@ impl App {
 
         let ok = gtk::Button::with_label("OK");
         ok.add_css_class("tp-button");
+        // An action, unlike its twin on the error screen: this screen is the
+        // end of a wizard that has just done something, and OK is the way on
+        // from it rather than a way to dismiss bad news.
+        ok.add_css_class("tp-action");
         ok.set_halign(gtk::Align::Center);
         page.append(&ok);
         {
@@ -6589,19 +7679,19 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        // The red is a warning, so it belongs on whichever button does the
-        // damage. Backing out of something destructive is the safe choice and
-        // should not be the one painted like a hazard.
+        // Backing out is never the hazard, so Cancel is never the red one.
+        // It used to be: red was put on whichever button was left over, so a
+        // confirmation of something harmless painted the way out as the
+        // dangerous choice.
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
         let destructive = confirm.destructive;
         let confirm = gtk::Button::with_label(confirm.label);
         confirm.add_css_class("tp-button");
-        if destructive {
-            confirm.add_css_class("tp-cancel");
-        } else {
-            cancel.add_css_class("tp-cancel");
-        }
+        confirm.add_css_class(match destructive {
+            true => "tp-danger",
+            false => "tp-action",
+        });
         row.append(&cancel);
         row.append(&confirm);
         page.append(&row);
@@ -6957,7 +8047,6 @@ impl App {
                 let controls = Controls::new(
                     playback.widget(),
                     self.scale.get(),
-                    self.dark.get(),
                     self.window.is_fullscreen(),
                     self.locked_fullscreen,
                     &outputs,
@@ -7244,7 +8333,7 @@ impl App {
         cancel.add_css_class("tp-button");
         let quit = gtk::Button::with_label("Close");
         quit.add_css_class("tp-button");
-        quit.add_css_class("tp-cancel");
+        quit.add_css_class("tp-danger");
         buttons.append(&cancel);
         buttons.append(&quit);
         page.append(&buttons);
@@ -7443,6 +8532,116 @@ fn logo_image(scale: f64) -> gtk::Image {
     image
 }
 
+/// How much room the film's description may take, in interface units.
+///
+/// Interface units rather than pixels because that is the question actually
+/// being asked. Everything on the page scales together, so what decides
+/// whether the plot fits is not how many pixels tall the window is but how
+/// many rows-worth of interface fit in it - and at 3x on a 1440px screen that
+/// is a third of what it is at 1x on the same screen.
+///
+/// The reservation is what the page cannot do without: the choosers, the
+/// footer that plays the film, and the margins around them. Whatever is left
+/// over is what the description gets, and at 3x on a modest display that is
+/// nothing - which is the right answer. A page that shows a plot summary and
+/// no way to press play has its priorities backwards.
+///
+/// This is the plan's open question about `ui_scale` answered: no-scroll and
+/// 3x cannot both hold, and what yields is the artwork and the prose.
+/// A button face: a drawn mark, and the words beside it.
+///
+/// A box rather than a label with a mark in the text, and both halves are
+/// centered on their own terms. The marks were glyphs to begin with, which
+/// meant they took the label's font size and came out smaller than the type
+/// they sat with; sizing them up through markup then made the whole *line*
+/// taller, so the words sat on a baseline set by the mark and read as having
+/// slipped downwards. An image beside a label has neither problem, and the
+/// mark is drawn at whatever size suits rather than at whatever the text is.
+fn marked_face(mark: gtk::Image, words: &str) -> gtk::Box {
+    let face = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+
+    mark.set_valign(gtk::Align::Center);
+    face.append(&mark);
+
+    if !words.is_empty() {
+        let text = gtk::Label::new(Some(words));
+        text.set_valign(gtk::Align::Center);
+        face.append(&text);
+    }
+    face
+}
+
+/// How wide the media page is allowed to get, in interface units.
+///
+/// A ceiling rather than a shape. The reason to stop widening is that a line
+/// of prose gets too long to read and a row's value drifts too far from its
+/// label - both of which are about width alone, so nothing here consults the
+/// height. Below this the page simply fills the window at any proportion.
+///
+/// **1920 is not an arbitrary round number.** The automatic interface size is
+/// the display's height over 1080, so on any 16:9 screen shown fullscreen this
+/// works out to `1920 * height / 1080`, which is `height * 16/9` - the screen's
+/// own width. A television therefore fills edge to edge, which is what the
+/// page is composed for and what the 16:9 rule this replaced did directly.
+/// Anything wider than 16:9, or any window short of fullscreen, is where the
+/// ceiling starts doing something, and what is left over goes to the backdrop
+/// on either side.
+///
+/// Set at 1600 first, which quietly left a 1920px screen with 320px of
+/// backdrop down the sides at fullscreen - the one case that most wants
+/// filling.
+const PAGE_MAX_UNITS: f64 = 1920.0;
+
+/// How much of the page's height the poster takes.
+///
+/// Wider than it was, and the width is the point: the poster and the column
+/// beside it share one line, so a broader poster is what sets how wide the
+/// summary runs. The extra depth on both sides is what fills a 16:9 screen
+/// rather than leaving a band along the bottom.
+const POSTER_SHARE: f64 = 0.58;
+
+/// Three lines of summary, in interface units, reserved whether the film has
+/// a summary or not.
+///
+/// The one fixed height on the page, and the only one that earns it: a plot
+/// runs from nothing to a paragraph while everything else here is one line or
+/// absent, so it is the only thing that would move the rows underneath as you
+/// step from one film to the next. A film with no summary gets the space as
+/// blank rather than getting it back.
+const PLOT_UNITS: f64 = 90.0;
+
+/// What stands in for a poster when there is none, which is most of the time.
+///
+/// A PNG per theme rather than the SVG it was drawn from, for the reason
+/// [`logo_image`] gives: GStreamer's Windows distribution ships no gdk-pixbuf
+/// loaders, so nothing there can decode an SVG at runtime. The two versions
+/// carry the same ink as the fullscreen marks beside them.
+fn video_file_image(size: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/video-file.png");
+
+    let image = gtk::Image::new();
+    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
+        image.set_paintable(Some(&texture));
+    }
+    // Drawn well inside the frame rather than filling it: the mark is saying
+    // there is no artwork, and one that reached the edges would read as
+    // artwork.
+    image.set_pixel_size(size.round().max(1.0) as i32);
+    image.set_halign(gtk::Align::Center);
+    image.set_valign(gtk::Align::Center);
+    // Expands to centre itself in the frame. The request stops at the poster
+    // column, which sets its own `hexpand` explicitly.
+    image.set_hexpand(true);
+    image.set_vexpand(true);
+    // Decoration beside a title that already names the file.
+    image.set_accessible_role(gtk::AccessibleRole::Presentation);
+    image
+}
+
 /// Uppercased here rather than with the `text-transform` CSS property,
 /// which needs a newer GTK than this project's baseline.
 /// Whether a scrap of clipboard text is worth offering as something to open.
@@ -7473,13 +8672,7 @@ fn heading_label(text: &str) -> gtk::Label {
 /// there is nothing for a second version to adapt to.
 pub fn subtitles_image(scale: f64) -> gtk::Image {
     const ICON: &[u8] = include_bytes!("../data/ui/subtitles.png");
-
-    let image = gtk::Image::new();
-    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
-        image.set_paintable(Some(&texture));
-    }
-    image.set_pixel_size((26.0 * scale).round() as i32);
-    image
+    marked_image(ICON, 26.0 * scale)
 }
 
 /// The mark on the button that puts an output back in sync.
@@ -7495,23 +8688,27 @@ pub fn subtitles_image(scale: f64) -> gtk::Image {
 /// the control strip draws its own dark background whatever the theme is.
 /// The size of the strip's icons, before scaling: the transport buttons, the
 /// gear, and the buttons in the volume panel.
-const ICON_PX: f64 = 24.0;
+pub const ICON_PX: f64 = 24.0;
 
 pub fn sync_image(scale: f64) -> gtk::Image {
     const ICON: &[u8] = include_bytes!("../data/ui/sync.png");
-
-    let image = gtk::Image::new();
-    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
-        image.set_paintable(Some(&texture));
-    }
-    // The size the panel's other icons come out at, set here because
-    // `-gtk-icon-size` sizes icon names and this is a paintable, so the CSS
-    // that catches the mute button passes over this one. A pixel or two out
-    // and the button beside it is a different width, which moves the start of
-    // the bar and leaves the two bars different lengths.
-    image.set_pixel_size((ICON_PX * scale).round() as i32);
-    image
+    marked_image(ICON, SYNC_MARK_PX * scale)
 }
+
+/// The sync mark's size before scaling, which is deliberately not [`ICON_PX`]
+/// like everything else in that panel.
+///
+/// Larger, so that it *looks* the same size. The speaker above it is a themed
+/// icon whose glyph fills its box, while this is a drawn mark with clear space
+/// around it - so at the same nominal size the stopwatch came out visibly the
+/// smaller of the two.
+///
+/// The number is arithmetic rather than taste: the mark's ink fills 83% of its
+/// canvas, the speaker draws 29px, and 29 / 0.83 / 1.25 lands here. Eyeballing
+/// the screenshot first gave 32, which would have overshot to 34px - so if the
+/// artwork is ever redrawn with different margins, measure the ink rather than
+/// nudging this by feel.
+const SYNC_MARK_PX: f64 = 28.0;
 
 /// The fullscreen mark, in the direction it will take you.
 ///
@@ -7522,23 +8719,79 @@ pub fn sync_image(scale: f64) -> gtk::Image {
 /// Drawn twice in each direction, once in each theme's foreground color,
 /// because an embedded image cannot be recoloured the way a symbolic icon is.
 /// A single compromise gray read poorly against both.
-pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
-    const ENTER_LIGHT: &[u8] = include_bytes!("../data/ui/fullscreen-light.png");
-    const ENTER_DARK: &[u8] = include_bytes!("../data/ui/fullscreen-dark.png");
-    const LEAVE_LIGHT: &[u8] = include_bytes!("../data/ui/restore-light.png");
-    const LEAVE_DARK: &[u8] = include_bytes!("../data/ui/restore-dark.png");
+///
+/// **`dark` is about the surface, not about the theme.** The control strip
+/// draws its own near-black background under either theme, so it asks for the
+/// dark-theme mark always - see [`marked_image`].
+pub fn fullscreen_image(fullscreen: bool, scale: f64) -> gtk::Image {
+    const ENTER: &[u8] = include_bytes!("../data/ui/fullscreen.png");
+    const LEAVE: &[u8] = include_bytes!("../data/ui/restore.png");
 
-    let bytes = match (fullscreen, dark) {
-        (true, true) => LEAVE_DARK,
-        (true, false) => LEAVE_LIGHT,
-        (false, true) => ENTER_DARK,
-        (false, false) => ENTER_LIGHT,
+    let bytes = match fullscreen {
+        true => LEAVE,
+        false => ENTER,
     };
+    marked_image(bytes, CORNER_MARK_PX * scale)
+}
+
+/// The gear, for the settings screen.
+///
+/// A pair like the fullscreen marks, and for the same reason: it sits on the
+/// page under either theme. It used to be `emblem-system-symbolic` from the
+/// icon theme, which GTK recolors from the foreground - including dimming it
+/// when the window loses focus, while the drawn mark beside it did not, so the
+/// two came apart every time the window went to the back.
+/// `size` is in real pixels and is the caller's to decide, because the gear
+/// appears at two sizes: beside the fullscreen mark on the media page, where
+/// the two have to agree, and among the transport icons on the control strip,
+/// where it has to agree with those instead.
+pub fn settings_image(size: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/settings.png");
+
+    marked_image(ICON, size)
+}
+
+/// How large the two marks in the media page's corner are drawn, before
+/// scaling. One number for both, so they cannot drift apart.
+const CORNER_MARK_PX: f64 = 26.0;
+
+/// The triangle on the play button, and the arrow on restart.
+///
+/// White under either theme, because both sit on the blue button rather than
+/// on the page. The play mark is deliberately not the one the control strip
+/// uses: that one is the theme's own transport icon, and this is the button a
+/// whole page is pointing at.
+pub fn play_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/play.png");
+    marked_image(ICON, PLAY_MARK_PX * scale)
+}
+
+pub fn restart_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/restart.png");
+    marked_image(ICON, PLAY_MARK_PX * scale)
+}
+
+/// How large the marks on the play and restart buttons are drawn, before
+/// scaling. Bigger than the strip's icons: these are the one action the page
+/// exists to offer, and they are read from across a room.
+const PLAY_MARK_PX: f64 = 26.0;
+
+/// An image from bytes compiled into the binary, at a size in real pixels.
+///
+/// The size is set here rather than in the stylesheet because `-gtk-icon-size`
+/// sizes icon *names*, and every mark in this application is a paintable - so
+/// the CSS that catches a themed icon passes silently over these. A pixel or
+/// two out and a button is a different width, which in the volume panel moves
+/// the start of a bar and leaves the two bars visibly different lengths.
+fn marked_image(bytes: &'static [u8], size: f64) -> gtk::Image {
     let image = gtk::Image::new();
-    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
-        image.set_paintable(Some(&texture));
+    match gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
+        Ok(texture) => image.set_paintable(Some(&texture)),
+        // Said out loud: a mark that silently fails to appear looks like a
+        // button with nothing on it, which is not a clue anyone can act on.
+        Err(e) => eprintln!("Could not load an interface mark: {e}"),
     }
-    image.set_pixel_size((26.0 * scale).round() as i32);
+    image.set_pixel_size(size.round().max(1.0) as i32);
     image
 }
 
@@ -8056,9 +9309,38 @@ fn settle_on(row: &gtk::ListBoxRow) {
 fn after_layout(row: &gtk::ListBoxRow) {
     let row = row.clone();
     glib::idle_add_local_once(move || {
+        // Only if the focus is still in this list. The grab below is a second
+        // attempt, for the one case where the first one was too early to take
+        // - and a second attempt that runs unconditionally is a second attempt
+        // at stealing the focus back from wherever it has since gone.
+        //
+        // Arrowing up off the top row twice in quick succession did exactly
+        // that: the first press selected the top row and queued this, the
+        // second moved out to the Play button, and then this fired and pulled
+        // the focus back down to the row. Slowly it was fine, because the idle
+        // had already run before the second press arrived - which is the shape
+        // of every bug that only happens when you are not being careful.
+        if focus_is_outside(&row) {
+            return;
+        }
         row.grab_focus();
         show_row(&row);
     });
+}
+
+/// Whether the focus has left the list this row belongs to.
+///
+/// Nothing focused at all counts as inside: that is the state on the very
+/// first screen of a session, before anything has taken focus, and it is
+/// precisely when the deferred grab is needed.
+fn focus_is_outside(row: &gtk::ListBoxRow) -> bool {
+    let (Some(root), Some(list)) = (row.root(), row.parent()) else {
+        return false;
+    };
+    match root.focus() {
+        Some(focused) => focused != list && !focused.is_ancestor(&list),
+        None => false,
+    }
 }
 
 /// Moves the scroller so a row is on screen, a third of the way down rather
@@ -8077,7 +9359,13 @@ fn show_row(row: &gtk::ListBoxRow) {
         }
     };
 
-    let Some((_, top)) = row.translate_coordinates(&list, 0.0, 0.0) else {
+    // Measured against whatever the scroller actually scrolls, not against
+    // the list. On the media page the list is not the scroller's child - the
+    // film's description sits above it inside the same scrolled area - and
+    // coordinates relative to the list are short by the height of everything
+    // above it, which scrolls every row to the wrong place.
+    let scrolled = scroller.child().unwrap_or_else(|| list.clone());
+    let Some((_, top)) = row.translate_coordinates(&scrolled, 0.0, 0.0) else {
         return;
     };
     let adjustment = scroller.vadjustment();
@@ -8185,6 +9473,54 @@ fn describe_lateness(millis: f64) -> String {
 
 /// A menu row: what the setting is on the left, its current value and a
 /// chevron on the right.
+/// The heading that opens a group of rows: which output the three rows under
+/// it belong to.
+///
+/// A `GtkListBox` header rather than a row, which is what makes it
+/// unselectable for free - headers sit outside the selection model and outside
+/// the focus chain, so the arrow keys walk past without being told to.
+///
+/// Capitals with a little tracking, in the manner of a section label rather
+/// than a title: it has to be legible enough to group what is under it and
+/// quiet enough that the rows stay the thing being read. The tracking is a
+/// Pango attribute rather than CSS `letter-spacing`, which GTK's stylesheet
+/// parser accepts and does not apply.
+fn group_heading(title: &str, scale: f64, first: bool) -> gtk::Label {
+    let heading = gtk::Label::new(Some(title));
+    heading.set_xalign(0.0);
+    heading.add_css_class("tp-group");
+    // Nothing above the first heading. It opens the list rather than dividing
+    // it, and the buttons already sit above with room of their own.
+    if first {
+        heading.add_css_class("tp-group-first");
+    }
+    let attributes = gtk::pango::AttrList::new();
+    attributes.insert(gtk::pango::AttrInt::new_letter_spacing(
+        (1.5 * scale * gtk::pango::SCALE as f64) as i32,
+    ));
+    heading.set_attributes(Some(&attributes));
+    heading
+}
+
+/// A heading's capitals turned back into words, for a screen reader.
+///
+/// "FIRST OUTPUT" read literally is a risk of being spelled out a letter at a
+/// time, which is a real behaviour of several readers on all-capital text.
+fn title_case(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let mut characters = word.chars();
+            match characters.next() {
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &characters.as_str().to_lowercase()
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -8461,7 +9797,7 @@ fn install_styles() -> gtk::CssProvider {
     provider
 }
 
-fn style_css(scale: f64, dark: bool) -> String {
+fn style_css(scale: f64) -> String {
     let px = |base: f64| (base * scale).round() as i32;
 
     format!(
@@ -8496,6 +9832,7 @@ fn style_css(scale: f64, dark: bool) -> String {
                 \"TinePlayer Sans Devanagari\", \"TinePlayer Sans Georgian\",
                 \"TinePlayer Sans Gurmukhi\", \"TinePlayer Sans Hangul\",
                 \"TinePlayer Sans Hebrew\", \"TinePlayer Sans Malayalam\",
+                \"TinePlayer Sans Symbols\",
                 \"TinePlayer Sans Tamil\", \"TinePlayer Sans Telugu\",
                 \"TinePlayer Sans Thai\",
                 sans-serif;
@@ -8552,27 +9889,175 @@ fn style_css(scale: f64, dark: bool) -> String {
             font-weight: bold;
             margin-top: {pad_v}px;
         }}
-        .tp-button, .tp-play {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
-        .tp-play {{ font-weight: bold; }}
+        /* Every button in the interface: one size, one padding, one corner.
+           The corner matches a menu row's, so a button and the rows it sits
+           over read as parts of one page. */
+        .tp-button {{
+            font-size: {row}px;
+            padding: {pad_v}px {pad_h}px;
+            border-radius: {radius}px;
+        }}
+        /* The one action every screen is pointing at.
+
+           Deliberately *not* the blue the selected row is drawn in, which is
+           what it was first. Two things were wrong with that. A blue button
+           sitting directly above a blue selected row read as two halves of
+           one control rather than as an action and a choice; and when the
+           button took focus it had nothing left to say so with, because it
+           was already wearing the color that means this one is selected. A
+           different hue gives the focus ring something to be seen against,
+           and lets blue go on meaning one thing throughout.
+
+           Blue, and the clash is resolved from the other side: what changed
+           is the *focus* color, which is now a neutral rather than the same
+           accent. Blue means an action throughout, and white means where you
+           currently are. Literal, and with the
+           gradient cleared: the theme paints
+           buttons with one, and a flat color underneath it comes out as a tint
+           of whatever the theme wanted rather than as this color. */
+        .tp-action {{
+            font-weight: bold;
+            background-image: none;
+            background-color: {play_fill};
+            color: {play_ink};
+            border-color: transparent;
+        }}
+        .tp-action:hover {{ background-color: {play_hover}; }}
+        /* Focus said loudly, because this is read from a distance and these
+           buttons no longer sit in a list whose highlight does the saying. A
+           ring around the button rather than a change of fill: the fill is
+           what the button *is*, and swapping one green for another is a
+           difference nobody can see across a room. */
+        /* Drawn as a shadow rather than an outline. `outline` is what a focus
+           ring is normally, and GTK parsed it here without complaint and drew
+           nothing - so it is not something to spend an afternoon on when a
+           spread shadow does the same job and demonstrably works. */
+
+        /* The corner marks had no focus state at all, which on a screen meant
+           to be driven by a gamepad from a sofa means arrowing onto one and
+           having nothing tell you. Same ring, drawn round the icon. */
+        .tp-gear:focus {{
+            background-color: rgba(128, 128, 128, 0.22);
+            box-shadow: 0 0 0 {focus_ring}px {focus};
+        }}
+        /* Nothing to press it about: a disabled action keeps its shape and
+           loses its insistence, rather than staying the loudest thing on a
+           page it cannot act on. */
+        .tp-action:disabled {{
+            background-color: {trough};
+            color: inherit;
+            opacity: 0.5;
+        }}
+        /* Restart, once Resume has taken the words. Square rather than merely
+           narrow, so it reads as the mark's button rather than as a button
+           whose label went missing. */
+        .tp-action-icon {{ padding: {pad_v}px {pad_v}px; min-width: {play_icon}px; }}
+        /* Half again the height, on the media page's pair alone. They are the
+           one thing the page is for, and on a television they are pressed from
+           across a room - so they are worth more than the height a line of
+           text happens to need. Declared after `.tp-action-icon` so the
+           restart button takes this padding rather than that one. */
+        .tp-tall {{ padding-top: {tall_v}px; padding-bottom: {tall_v}px; }}
+        /* The media page.
+
+           The ground the whole page is drawn on, and - through `color` - the
+           ground the backdrop screen-blends against. See src/backdrop.rs for
+           why the background arrives as a foreground property: a widget
+           cannot read its own CSS background from inside `snapshot`, and
+           every other color in this application is declared here rather than
+           in Rust. Literal, for the reason the highlight is literal. */
+        .tp-backdrop {{ color: {page_bg}; }}
+        /* The rows sit on the artwork, so everything between them and it has
+           to get out of the way. A GtkListBox and a GtkScrolledWindow both
+           paint the theme's view background by default, which came out as an
+           opaque slab over the backdrop in the shape of the list. */
+        .tp-menu, .tp-menu > row {{ background-color: transparent; }}
+        .tp-media scrolledwindow, .tp-media viewport {{ background-color: transparent; }}
+        /* The two marks in the corner are affordances rather than actions:
+           no fill and no border until the pointer is on them, so they carry
+           no weight beside the button the page is actually pointing at. */
+        .tp-gear {{
+            background-image: none;
+            background-color: transparent;
+            border-color: transparent;
+            box-shadow: none;
+        }}
+        /* No color, and none needed. The gear was a symbolic icon, which GTK
+           recolors from the foreground - including dimming it when the window
+           loses focus, while the drawn mark beside it did not, so the pair came
+           apart every time the window went to the back. It is a drawn mark
+           itself now, in the same ink, so the two behave alike without being
+           told to. */
+        .tp-gear:hover {{ background-color: rgba(128, 128, 128, 0.22); }}
+        /* No focus ring on the playback controls. Every button there already
+           says where the cursor is by filling with the accent - see
+           `.tp-selected` - so the shared ring was a second mark for the same
+           fact, drawn inside the fill and reading as an outline around it. The
+           menus keep theirs, where there is no fill to say it instead. */
+        .tp-transport-button:focus {{ box-shadow: none; }}
+        /* The frame the poster sits in, which is also what is seen when there
+           is no poster. A flat panel a shade off the page rather than an
+           outline: at a distance a thin border on a dark ground disappears,
+           and the shape is what says a picture belongs here. */
+        .tp-poster {{
+            background-color: {panel};
+            border-radius: {radius}px;
+        }}
+        /* The film's name. The largest thing on the page by a good margin,
+           because from across a room it is the one thing being checked. */
+        .tp-film-title {{
+            font-size: {film_title}px;
+            font-weight: bold;
+        }}
+        .tp-film-facts {{ font-size: {film_facts}px; opacity: 0.65; }}
+        .tp-film-plot {{ font-size: {film_plot}px; opacity: 0.92; }}
+        /* The label-and-reading lines: under the poster, and the languages
+           above the rows. The label's own dimming is set per-span in the
+           markup, so this carries only the size. */
+        .tp-fact {{ font-size: {fact}px; }}
+        /* The name of a reading rather than the reading itself, dimmed so a
+           column of these scans as values with labels rather than as a block
+           of text of one weight. */
+        .tp-fact-name {{ opacity: 0.6; }}
+        .tp-empty-prompt {{ font-size: {row}px; opacity: 0.7; }}
         /* Backing out, on every screen that offers it. A literal red for the
            same reason the highlight is literal: a theme name that does not
            exist makes the whole declaration fail to parse. */
-        .tp-cancel {{
+        .tp-danger {{
             background-image: none;
             background-color: #c01c28;
             color: #ffffff;
         }}
-        .tp-cancel:hover {{ background-color: #a51d2d; }}
+        .tp-danger:hover {{ background-color: #a51d2d; }}
         /* Beside a main action rather than being one: smaller type and far
            less padding than the buttons it sits with, so it reads as a way to
            reach something else rather than as the thing to press. */
         .tp-secondary {{ font-size: {small}px; padding: {tight_v}px {tight_h}px; }}
         .tp-menu > row {{ border-radius: {radius}px; }}
+        /* The ground the rows sit on. Black at a fraction rather than a
+           lighter grey: it has to read as a panel over whatever backdrop the
+           film brought, and a tint that darkens works over every one of them
+           where a fixed colour only works over some. */
+        .tp-menu-panel {{
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: {panel_radius}px;
+            padding: {panel_pad}px;
+        }}
         /* Gray rather than a theme color, so it lifts off the background in
            both light and dark without needing two rules. */
         .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
-        .tp-menu:focus-within > row:selected:hover {{ background-color: {highlight}; }}
+        .tp-menu:focus-within > row:selected:hover {{ background-color: {focus_row}; }}
         .tp-menu > row.tp-section-start {{ margin-top: {section}px; }}
+        /* A group heading. Quiet on purpose: smaller than a row and dimmed,
+           so it labels what is under it without competing with it. Indented to
+           `pad_h` so it starts exactly where the row labels below it do. */
+        .tp-group {{
+            font-size: {group}px;
+            font-weight: bold;
+            opacity: 0.55;
+            margin: {group_top}px {pad_h}px {group_gap}px {pad_h}px;
+        }}
+        .tp-group-first {{ margin-top: {group_first_top}px; }}
         /* Which row is in force, as opposed to which row the cursor is on.
            Two different facts that a list has only one highlight for, and
            conflating them is actively misleading in the places column: moving
@@ -8599,12 +10084,12 @@ fn style_css(scale: f64, dark: bool) -> String {
            focus, so there is still exactly one thing highlighted on screen. */
         .tp-menu:focus-within > row:selected {{
             background-image: none;
-            background-color: {highlight};
-            color: #ffffff;
+            background-color: {focus_row};
+            color: {on_focus};
         }}
         .tp-menu:focus-within > row:selected .tp-value,
         .tp-menu:focus-within > row:selected .tp-chevron {{
-            color: #ffffff;
+            color: {on_focus};
             opacity: 0.85;
         }}
         /* A ring rather than a fill. Recoloring a focused button changes what
@@ -8613,7 +10098,7 @@ fn style_css(scale: f64, dark: bool) -> String {
            peers. An inset shadow rather than a border so nothing shifts, and
            rather than an outline so it follows the rounded corners. */
         button:focus {{
-            box-shadow: inset 0 0 0 {mark}px {highlight};
+            box-shadow: 0 0 0 {focus_ring}px {focus};
         }}
         /* Chrome-less until pointed at, but the arrow itself stays visible
            so the way back is always apparent. */
@@ -8642,11 +10127,7 @@ fn style_css(scale: f64, dark: bool) -> String {
             background-color: rgba(128, 128, 128, 0.25);
             opacity: 1;
         }}
-        .tp-back:focus {{
-            background-image: none;
-            background-color: {highlight};
-            opacity: 1;
-        }}
+        .tp-back:focus {{ opacity: 1; }}
         /* Laid over the picture, so it sets its own colors rather than
            inheriting theme ones that may be light. */
         .tp-controls {{
@@ -8734,15 +10215,11 @@ fn style_css(scale: f64, dark: bool) -> String {
            colors rather than theme names, for the reason given by the
            highlight color below. */
         .tp-modal {{
-            background-color: #fafafa;
-            border: 1px solid rgba(0, 0, 0, 0.2);
+            background-color: #1e1e1e;
+            border: 1px solid rgba(255, 255, 255, 0.14);
             border-radius: {radius}px;
             margin: {modal}px;
             padding: {modal_pad}px;
-        }}
-        .tp-modal-dark {{
-            background-color: #1e1e1e;
-            border-color: rgba(255, 255, 255, 0.14);
         }}
         /* Taller than a stock entry: this is the one thing on its panel, and
            it is read from the same distance as everything else. */
@@ -8874,7 +10351,11 @@ fn style_css(scale: f64, dark: bool) -> String {
                 {on_highlight} 0, {on_highlight} {badge_r}px, transparent {badge_r}px);
         }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
-        .tp-gear image {{ -gtk-icon-size: {icon}px; }}
+        /* Only where it sits beside the tall pair, and the same height as it.
+           `tall_pad` across is what `tall_v` down was before the height came
+           back ten percent - it is kept because the widths were to stay put,
+           which leaves these marginally wider than tall rather than square. */
+        .tp-gear.tp-tall {{ padding: {tall_v}px {tall_pad}px; }}
         .tp-row-icon {{ -gtk-icon-size: {row_icon}px; opacity: 0.65; }}
         .tp-back image {{ -gtk-icon-size: {back_icon}px; }}
         .{video} {{ background-color: black; }}
@@ -8899,33 +10380,38 @@ fn style_css(scale: f64, dark: bool) -> String {
         pad_v = px(9.0),
         pad_h = px(18.0),
         radius = px(8.0),
+        // Larger than a row's corner, in proportion to the box it rounds. At
+        // the row radius a panel this size reads as a rectangle with the
+        // corners knocked off.
+        panel_radius = px(16.0),
+        panel_pad = px(8.0),
         outline = px(2.0).max(1),
         handle = px(18.0),
         // Bright on dark; on light a white knob held in by its ring rather
         // than a dark disc, which read as heavy against a white row and
         // heavier still in a column of them.
-        knob = if dark { "#dcdcdc" } else { "#ffffff" },
-        fill = if dark { "#b9b9b9" } else { "#8e8e8e" },
-        trough = if dark {
-            "rgba(255, 255, 255, 0.13)"
-        } else {
-            "rgba(0, 0, 0, 0.11)"
-        },
-        // On light the ring is what makes a white knob visible at all, so
-        // it carries the contrast the knob itself no longer does.
-        knob_edge = if dark {
-            "rgba(0, 0, 0, 0.55)"
-        } else {
-            "rgba(0, 0, 0, 0.38)"
-        },
+        knob = "#dcdcdc",
+        fill = "#b9b9b9",
+        trough = "rgba(255, 255, 255, 0.13)",
+        knob_edge = "rgba(0, 0, 0, 0.55)",
         edge = px(1.0).max(1),
         switch_w = px(64.0),
         switch_h = px(32.0),
         slider = px(26.0),
         section = px(28.0),
+        group = px(16.0),
+        group_top = px(24.0),
+        group_gap = px(4.0),
+        group_first_top = px(10.0),
         subrow = px(28.0),
         mark = px(4.0),
-        icon = px(ICON_PX),
+        // A shade larger than `ICON_PX`, which is what every other icon in
+        // the interface uses. The gear sits beside the fullscreen mark, and
+        // that mark is a picture with clear space drawn into it - so at the
+        // same nominal size the gear's own glyph came out visibly the smaller
+        // of the two. Matched by eye rather than by number, because what has
+        // to agree is the drawn marks and not the boxes around them.
+        icon = px(ICON_PX + 3.5),
         icon_main = px(38.4),
         crumb_pad = px(6.0),
         leading = px(38.0),
@@ -8943,6 +10429,49 @@ fn style_css(scale: f64, dark: bool) -> String {
         modal = px(48.0),
         modal_pad = px(16.0),
         highlight = "#3584e4",
+        film_title = px(48.0),
+        film_facts = px(24.0),
+        film_plot = px(22.0),
+        fact = px(20.0),
+        // Half again as tall as the type inside it would otherwise leave it,
+        // less ten percent. Vertical and horizontal are separate numbers
+        // because that ten percent came off the height alone: the marks in the
+        // button bar keep the width that had them square.
+        tall_v = px(17.0),
+        tall_pad = px(20.0),
+        play_icon = px(46.0),
+        focus_ring = px(3.0).max(2),
+        // The blue the play and restart buttons are drawn in - the same accent
+        // as everything else the application colors deliberately.
+        play_fill = "#3584e4",
+        play_hover = "#4a90e8",
+        play_ink = "#ffffff",
+        // What shows where you are: the selected row, and the ring round a
+        // focused button.
+        //
+        // **Not the accent, and that is the point.** With blue meaning both
+        // "this is the action" and "this is where you are", a blue button
+        // sitting above a blue selected row read as one continuous thing, and
+        // a focused button had nothing left to distinguish itself with. The
+        // highest-contrast neutral against the page says "here" without
+        // competing with any color that means something - white on the dark
+        // theme, and near-black on the light one, where white would be
+        // invisible against a near-white page.
+        focus = "#ffffff",
+        // The same white, backed off, for the row the cursor is on. Only the
+        // row: the ring on a focused button stays at full strength, being a
+        // thin outline that has nothing like the area to spare.
+        focus_row = "rgba(255, 255, 255, 0.7)",
+        on_focus = "#1c1c1c",
+        // The ink both corner marks share. The fullscreen image is drawn in
+        // it as a picture; the gear is told to match.
+        // The page's own ground. Matched to what each theme's window is
+        // already drawn in, since the backdrop paints over the whole page and
+        // a mismatch would show as a rectangle behind the content.
+        page_bg = "#242424",
+        // The poster's frame, a shade off the page in whichever direction
+        // there is room to go.
+        panel = "rgba(255, 255, 255, 0.07)",
         video = crate::player::VIDEO_CSS_CLASS,
     )
 }
@@ -9016,6 +10545,64 @@ mod notices {
             .collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
         assert_eq!(texts[0], "one line and its continuation");
+    }
+}
+
+#[cfg(test)]
+mod summary_lines {
+    use super::{MOST_LANGUAGES, summary_markup};
+
+    fn languages(count: usize) -> Vec<String> {
+        (0..count).map(|i| format!("Lang{i}")).collect()
+    }
+
+    /// The rule applies to whichever line is handed too many, not to the one
+    /// that happens to show it most. The subtitle line is usually the long
+    /// one, so an audio line built by different code would go untested.
+    #[test]
+    fn either_line_counts_what_it_left_out() {
+        for name in ["Audio", "Subtitles"] {
+            let line = summary_markup(name, &languages(MOST_LANGUAGES + 5));
+            assert!(line.contains("+5 more"), "{name} did not count the rest");
+            assert!(line.starts_with(&format!("<span alpha='60%'>{name}:</span>")));
+        }
+    }
+
+    /// Exactly at the limit is a complete list, and saying "+0 more" about it
+    /// would be both noise and a lie.
+    #[test]
+    fn nothing_left_over_is_said_about() {
+        let line = summary_markup("Audio", &languages(MOST_LANGUAGES));
+        assert!(!line.contains("more"));
+        assert!(line.contains("Lang0"));
+        assert!(line.contains(&format!("Lang{}", MOST_LANGUAGES - 1)));
+    }
+
+    /// Only as many as fit are named, whatever it was given.
+    #[test]
+    fn never_names_more_than_the_limit() {
+        let line = summary_markup("Subtitles", &languages(40));
+        assert_eq!(line.matches("Lang").count(), MOST_LANGUAGES);
+        assert!(line.contains(&format!("+{} more", 40 - MOST_LANGUAGES)));
+    }
+
+    /// A file with no such track says so, rather than showing an empty line
+    /// where a list should be.
+    #[test]
+    fn nothing_at_all_says_so() {
+        let line = summary_markup("Subtitles", &[]);
+        assert!(line.contains(super::NO_TRACKS));
+        assert!(!line.contains("more"));
+    }
+
+    /// Track titles come from files and can hold anything. An unescaped
+    /// ampersand is not a stray character here - it makes the markup invalid,
+    /// and GTK draws nothing at all for the whole line.
+    #[test]
+    fn a_language_named_with_markup_cannot_break_the_line() {
+        let line = summary_markup("Audio", &["Ol' <b>Bill</b> & Ben".to_string()]);
+        assert!(line.contains("&amp;"));
+        assert!(line.contains("&lt;b&gt;"));
     }
 }
 

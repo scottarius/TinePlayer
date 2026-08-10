@@ -72,6 +72,29 @@ LATIN_RANGES = (
     "U+1E00-1EFF,U+2000-206F,U+20A0-20BF,U+2190-21FF,U+25A0-25FF,U+2600-26FF"
 )
 
+# Marks the interface draws itself, which no language name contains and so
+# nothing below would otherwise ask for.
+#
+# They are listed here because asking for them in LATIN_RANGES does not work
+# and silently looks as though it did. Those ranges do include the arrows,
+# geometric shapes and symbols blocks - and the comment above has always
+# claimed the play triangle among them - but Noto Sans carries none of those
+# characters, so subsetting to a range the source does not cover produces
+# nothing at all and says nothing about it. Checked 2026-08-10: the star, the
+# play triangle and the reload arrow were all absent from the shipped fonts
+# and had been drawn by whatever each machine happened to have.
+#
+# Noto keeps them in a separate face, which is why this needs its own entry
+# rather than a wider range on the Latin one.
+#   ★  U+2605  BLACK STAR, beside a rating
+#
+# Worth knowing before adding to this: the play triangle U+25B6 and the reload
+# arrow U+21BB on the buttons are *not* here, and so are still drawn by
+# whatever each machine happens to have - DejaVu on the Pi, Segoe on Windows.
+# U+25B6 is available in this same face if that is ever wanted; U+21BB is in
+# no Noto face at all, and U+2B6E is the nearest shipped equivalent.
+INTERFACE_SYMBOLS = "★"
+
 # Which font covers which script. The name is the family fontconfig will see,
 # and the file is what gets downloaded and cut down.
 SCRIPTS = {
@@ -85,6 +108,9 @@ SCRIPTS = {
     "HANGUL": "NotoSansKR",
     "HEBREW": "NotoSansHebrew",
     "MALAYALAM": "NotoSansMalayalam",
+    # Not a script: the interface's own marks, which Noto keeps apart from the
+    # text faces. Symbols 2 rather than Symbols - the star is in the second.
+    "SYMBOLS": "NotoSansSymbols2",
     "TAMIL": "NotoSansTamil",
     "TELUGU": "NotoSansTelugu",
     "THAI": "NotoSansThai",
@@ -218,7 +244,9 @@ def main():
     names = native_names()
     print(f"{len(names)} language names in the table")
 
-    wanted = {}
+    # Seeded rather than discovered, being the one set of characters that
+    # comes from the interface rather than from the language table.
+    wanted = {"SYMBOLS": set(INTERFACE_SYMBOLS)}
     unknown = set()
     for name in names:
         for character in name:

@@ -266,8 +266,11 @@ pub struct Controls {
     /// direction is pressed.
     selected: Cell<bool>,
     /// Kept so the fullscreen mark can be redrawn when the state changes.
+    ///
+    /// The theme is deliberately not kept beside it. Every mark on this strip
+    /// is chosen for the strip's own near-black background rather than for the
+    /// window's theme, so there is nothing here for a theme to decide.
     scale: f64,
-    dark: bool,
     fullscreen_state: RefCell<bool>,
 }
 
@@ -275,7 +278,6 @@ impl Controls {
     pub fn new(
         video: &gtk::Picture,
         scale: f64,
-        dark: bool,
         fullscreen_now: bool,
         lock_fullscreen: bool,
         outputs: &[(&'static str, String)],
@@ -345,11 +347,7 @@ impl Controls {
         name_it(&position, "Position");
 
         let fullscreen = gtk::Button::new();
-        fullscreen.set_child(Some(&crate::app::fullscreen_image(
-            fullscreen_now,
-            scale,
-            dark,
-        )));
+        fullscreen.set_child(Some(&crate::app::fullscreen_image(fullscreen_now, scale)));
         fullscreen.add_css_class("tp-transport-button");
         name_it(&fullscreen, "Toggle fullscreen");
         // Hidden rather than dimmed when fullscreen is fixed for this run:
@@ -503,7 +501,7 @@ impl Controls {
         // Away from the transport controls, beside the other things that are
         // not about what playback is doing: it leaves playback rather than
         // changing it.
-        let settings_icon = gtk::Image::from_icon_name("emblem-system-symbolic");
+        let settings_icon = crate::app::settings_image(crate::app::ICON_PX * scale);
         settings_icon.add_css_class("tp-transport");
         let settings = gtk::Button::new();
         settings.set_child(Some(&settings_icon));
@@ -685,7 +683,6 @@ impl Controls {
             swallow_click: Cell::new(false),
             selected: Cell::new(false),
             scale,
-            dark,
             fullscreen_state: RefCell::new(fullscreen_now),
         });
 
@@ -1590,9 +1587,7 @@ impl Controls {
         }
         *self.fullscreen_state.borrow_mut() = fullscreen;
         self.fullscreen
-            .set_child(Some(&crate::app::fullscreen_image(
-                fullscreen, self.scale, self.dark,
-            )));
+            .set_child(Some(&crate::app::fullscreen_image(fullscreen, self.scale)));
     }
 
     /// Refreshes the readout. Cheap enough to call on a timer, since it is

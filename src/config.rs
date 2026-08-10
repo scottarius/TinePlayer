@@ -47,17 +47,6 @@ fn default_check_for_updates() -> bool {
     true
 }
 
-/// Which way round to draw the interface. `Auto` follows the desktop, and
-/// falls back to dark when it cannot be asked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Theme {
-    #[default]
-    Auto,
-    Light,
-    Dark,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub primary_sink: Option<String>,
@@ -72,8 +61,6 @@ pub struct Config {
     /// are saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_scale: Option<f64>,
-    #[serde(default)]
-    pub theme: Theme,
     /// Where the built-in browser last was, so it reopens there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_folder: Option<PathBuf>,
@@ -198,7 +185,6 @@ impl Default for Config {
             primary_sink: None,
             secondary_sink: None,
             ui_scale: None,
-            theme: Theme::default(),
             last_folder: None,
             kodi_paths: Vec::new(),
             subtitle_font: None,

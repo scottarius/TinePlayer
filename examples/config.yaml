@@ -12,10 +12,6 @@
 
 # --- Appearance -------------------------------------------------------------
 
-# auto, light or dark. auto follows the desktop, and falls back to dark where
-# that cannot be asked.
-theme: dark
-
 # Multiplies every font size and spacing in the interface, from 0.33 to 3.
 #
 # Leave it out and the size follows the display while the window is fullscreen,
