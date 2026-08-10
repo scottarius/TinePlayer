@@ -3037,9 +3037,18 @@ impl App {
         if !details.certificate.is_empty() {
             facts.push(details.certificate.clone());
         }
+        // A star, so a bare number is not left to be guessed at. Out of ten is
+        // what every writer of this format stores and what the star implies,
+        // and the sidecar is the only place it comes from - nothing is ever
+        // fetched to produce it.
+        //
+        // The star is in a font TinePlayer ships, which the other marks in the
+        // interface are not: see `INTERFACE_SYMBOLS` in
+        // packaging/fonts/build-fonts.py before using any new symbol here.
+        //
         // One decimal: the scrapers store three, and "8.235" is a precision
         // nobody asked for about an opinion.
-        facts.extend(details.rating.map(|score| format!("{score:.1}")));
+        facts.extend(details.rating.map(|score| format!("★ {score:.1}")));
         if !details.genres.is_empty() {
             // Three at most. A scraper will happily list six, and the line has
             // the width of one line.
@@ -9465,6 +9474,7 @@ fn style_css(scale: f64, dark: bool) -> String {
                 \"TinePlayer Sans Devanagari\", \"TinePlayer Sans Georgian\",
                 \"TinePlayer Sans Gurmukhi\", \"TinePlayer Sans Hangul\",
                 \"TinePlayer Sans Hebrew\", \"TinePlayer Sans Malayalam\",
+                \"TinePlayer Sans Symbols\",
                 \"TinePlayer Sans Tamil\", \"TinePlayer Sans Telugu\",
                 \"TinePlayer Sans Thai\",
                 sans-serif;
