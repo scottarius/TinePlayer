@@ -434,6 +434,20 @@ enum MenuAction {
 /// `None` is the "None" entry, which most of these lists begin with.
 type Choice = (String, Option<usize>);
 
+/// Everything a chooser needs to draw itself.
+struct Choices {
+    entries: Vec<Choice>,
+    /// The choice already in force, so the list opens on it rather than at the
+    /// top. `None` when nothing is set, which lands on the "None" row every
+    /// list that has one begins with.
+    current: Option<usize>,
+    /// Entries with a rule drawn above them, by index. Only the subtitle
+    /// preference has any: it offers three unlike things in one list - nothing,
+    /// four ways of following an output, and two hundred languages - and
+    /// without the rules they read as one long undifferentiated run.
+    dividers: Vec<usize>,
+}
+
 /// Puts a selector's rows in, and can be run again when what they should say
 /// has changed - which for a device list is a moment after it opens.
 type Fill = dyn Fn(&Rc<App>);
@@ -3811,22 +3825,22 @@ impl App {
     /// can offer exactly the same list. They differ in how they are put on
     /// screen and in nothing else, and two copies of this match is the way
     /// that stops being true.
-    fn chooser_entries(
-        self: &Rc<Self>,
-        setting: Setting,
-    ) -> (Vec<(String, Option<usize>)>, Option<usize>) {
+    fn chooser_entries(self: &Rc<Self>, setting: Setting) -> Choices {
         // Entries are (display text, choice). `None` means the "None"
         // option, which every list offers except the primary device - an
         // output has to exist for anything to play.
         let mut entries: Vec<Choice> = Vec::new();
-        // The choice already in force, so the list opens on it rather than
-        // at the top. Left as None when nothing is set, which lands on the
-        // "None" row every list that has one begins with.
         let mut current: Option<usize> = None;
+        let mut dividers: Vec<usize> = Vec::new();
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
                 if setting == Setting::SecondaryDevice {
                     entries.push(("None".to_string(), None));
+                    // A rule under it. "None" here means "play nothing on a
+                    // second output", which is a different kind of answer to
+                    // the hardware listed below it - and the only list where
+                    // this one is offered at all.
+                    dividers.push(1);
                 }
                 let configured = {
                     let config = self.config.borrow();
@@ -3900,6 +3914,11 @@ impl App {
                     }
                 };
                 current = language_position(configured.as_deref());
+                // A rule under it, before the languages. The entry above is
+                // not a language at all - it is the absence of a preference,
+                // which leaves the choice to whatever the file offers first -
+                // and run flush against Afrikaans it reads as one.
+                dividers.push(1);
                 // Worded exactly as the settings row shows it when unset, so
                 // the list and the value it came from agree.
                 entries.push((
@@ -3939,6 +3958,12 @@ impl App {
                             .position(|(code, _, _, _)| *code == setting)
                             .map(|position| modes + position)
                     });
+                // Below "None", and again above the languages. What sits
+                // between is the part worth choosing: following an output
+                // tracks whatever is actually being heard, file by file, where
+                // naming a language is a guess that holds until it does not.
+                dividers.push(1);
+                dividers.push(modes);
                 for (position, (_, label)) in crate::subtitles::MODES.iter().enumerate() {
                     entries.push((label.to_string(), Some(position)));
                 }
@@ -3965,7 +3990,11 @@ impl App {
             }
         }
 
-        (entries, current)
+        Choices {
+            entries,
+            current,
+            dividers,
+        }
     }
 
     /// Puts the current screen's navigation aside, so something on top of it
@@ -4018,7 +4047,11 @@ impl App {
             let entries = entries.clone();
             let list = list.clone();
             Rc::new(move |app: &Rc<Self>| {
-                let (fresh, current) = app.chooser_entries(setting);
+                let Choices {
+                    entries: fresh,
+                    current,
+                    dividers,
+                } = app.chooser_entries(setting);
                 while let Some(row) = list.row_at_index(0) {
                     list.remove(&row);
                 }
@@ -4039,6 +4072,19 @@ impl App {
                     .position(|(_, choice)| *choice == current)
                     .unwrap_or(0) as i32;
                 *entries.borrow_mut() = fresh;
+                // A rule above the entries that begin a group. A header rather
+                // than a row of its own, for the reason the media page's group
+                // headings give: headers sit outside the selection model and
+                // the focus chain, so a rule cannot be landed on. Set on every
+                // fill, since the rows it describes are rebuilt each time.
+                list.set_header_func(move |row, _| {
+                    match dividers.contains(&(row.index() as usize)) {
+                        true => {
+                            row.set_header(Some(&gtk::Separator::new(gtk::Orientation::Horizontal)))
+                        }
+                        false => row.set_header(None::<&gtk::Widget>),
+                    }
+                });
                 if let Some(row) = list.row_at_index(opening) {
                     row.add_css_class("tp-current");
                     list.select_row(Some(&row));
@@ -10365,6 +10411,10 @@ fn style_css(scale: f64) -> String {
             font-size: {selector_row}px;
             padding: {selector_row_pad_v}px {selector_row_pad_h}px;
         }}
+        .tp-selector separator {{
+            margin: {rule_gap}px 0;
+            background-color: rgba(255, 255, 255, 0.14);
+        }}
         .tp-selector > contents {{
             background-color: {selector_bg};
             border-radius: {panel_radius}px;
@@ -10720,6 +10770,7 @@ fn style_css(scale: f64) -> String {
         // menu behind it, and still a size anyone can read from a sofa - which
         // half size was not, on the one list in the interface made of
         // near-identical strings where a misread picks the wrong track.
+        rule_gap = px(6.0),
         selector_row = px(17.0),
         selector_row_pad_v = px(7.0),
         selector_row_pad_h = px(14.0),
