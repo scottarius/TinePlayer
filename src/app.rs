@@ -425,7 +425,6 @@ enum Role {
 /// would name a different row depending on what is set.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuAction {
-    Video,
     Device(Role),
     Track(Role),
     Align(Role),
@@ -470,15 +469,6 @@ pub struct Launch {
     pub kodi: bool,
     /// Start playing rather than opening the menu.
     pub play: bool,
-    /// The video was remembered from last time rather than asked for.
-    ///
-    /// It decides what happens when the file will not open. A video named on
-    /// the command line that cannot be read is worth stopping for, because
-    /// somebody asked for that video and nothing else will do. One picked up
-    /// from `last_video` is a convenience, and a convenience that fails should
-    /// get out of the way: it is forgotten and the menu opens as if the file
-    /// had never been remembered.
-    pub remembered: bool,
 }
 
 /// Everything the menu can act on. Devices persist to the config file;
@@ -702,7 +692,6 @@ impl App {
             external,
             kodi,
             play,
-            remembered,
         } = launch;
         appearance::force_dark();
         suppress_error_bell();
@@ -895,30 +884,10 @@ impl App {
             *app.kodi_item.borrow_mut() = crate::kodi::current_item();
         }
 
-        let mut unopenable = match &file {
+        let unopenable = match &file {
             Some(source) => app.set_file(source).err().map(|e| (source.clone(), e)),
             None => None,
         };
-
-        // A remembered video that will not open is forgotten rather than
-        // reported. Nobody asked for it this time, so an error about it is an
-        // error about a decision the application made on its own - and it
-        // arrived in front of a menu that then could not be reached.
-        //
-        // Seen on a MacBook whose last video was on a network share that was
-        // not mounted: the path still existed as a stale mount point, so the
-        // check in main.rs let it through, and opening it failed. Clearing it
-        // here rather than only ignoring it means the next launch does not
-        // meet the same wall.
-        if remembered && unopenable.is_some() {
-            if let Some((source, error)) = unopenable.take() {
-                eprintln!("Forgetting {}: {error}", source.label());
-            }
-            app.config.borrow_mut().last_video = None;
-            if let Err(e) = app.config.borrow().save() {
-                eprintln!("Could not forget the last video: {e}");
-            }
-        }
 
         // Track choices from the command line are applied whether or not
         // playback is starting. Without --play they simply arrive already
@@ -2557,15 +2526,6 @@ impl App {
         let has_secondary = config.secondary_sink.is_some();
         let mut rows: Vec<(String, String, bool, MenuAction)> = vec![
             (
-                "Video".to_string(),
-                self.file_label()
-                    .unwrap_or_else(|| "Choose a video…".to_string()),
-                // Something else chose the video, so there is nothing to pick
-                // here. The row stays, to name what is about to play.
-                !self.external,
-                MenuAction::Video,
-            ),
-            (
                 "Primary Audio Device".to_string(),
                 config
                     .primary_sink
@@ -2636,7 +2596,12 @@ impl App {
                 // primary and secondary pairs read as sections. Done with a
                 // margin on the row rather than by inserting separator rows,
                 // which would be focusable and interrupt keyboard navigation.
-                MenuAction::Device(_) | MenuAction::Subtitles => {
+                // A gap above a row that begins a group - but not above the
+                // first row, which begins nothing and has the buttons above it
+                // already. With the Video row gone this became the top of the
+                // list, and carried a section's worth of space at the top of
+                // the page for no reason.
+                MenuAction::Device(_) | MenuAction::Subtitles if index > 0 => {
                     row.add_css_class("tp-section-start")
                 }
                 // Indented, because aligning belongs to the audio file named
@@ -2724,10 +2689,16 @@ impl App {
         buttons.append(&plays);
 
         let (fullscreen, gear) = self.corner_buttons();
+        let open = self.browse_button();
         // A little clear air between the pair that plays the film and the
-        // pair that does not, so the row reads as two groups rather than four
-        // equal buttons.
-        gear.set_margin_start(px(16.0));
+        // marks that do not, so the row reads as two groups rather than a run
+        // of equal buttons.
+        open.set_margin_start(px(16.0));
+        // Left out under a launcher: something else chose the film and is
+        // waiting for this playback of it, so there is nothing to choose here.
+        if !self.external {
+            buttons.append(&open);
+        }
         buttons.append(&gear);
         if let Some(fullscreen) = fullscreen.as_ref() {
             buttons.append(fullscreen);
@@ -2742,6 +2713,9 @@ impl App {
         // Up from the first row reaches them, and Down from them returns.
         // Ordered as they appear, so left and right walk along the row.
         let mut header = play_buttons.clone();
+        if !self.external {
+            header.push(open);
+        }
         header.push(gear);
         header.extend(fullscreen);
 
@@ -2764,7 +2738,6 @@ impl App {
                 app.sounds.borrow().click();
                 *app.menu_row.borrow_mut() = row.index();
                 match actions.get(row.index() as usize) {
-                    Some(MenuAction::Video) => app.choose_video(),
                     Some(MenuAction::Device(Role::Primary)) => {
                         app.show_chooser(Setting::PrimaryDevice)
                     }
@@ -3219,6 +3192,96 @@ impl App {
         named
     }
 
+    /// The panel that offers the two ways to choose a video: the prompt, and
+    /// a button for each.
+    ///
+    /// Shared by the screen shown when nothing is loaded and by the panel the
+    /// browse button opens over a film, because they say the same thing and
+    /// should not drift apart. `cancel` adds a third button and is what tells
+    /// them apart: the empty screen has nowhere to go back to, while the panel
+    /// is floating over a film that is still loaded.
+    ///
+    /// Returns the panel and its buttons, since what each one does depends on
+    /// which screen asked for it.
+    fn choose_source_panel(
+        self: &Rc<Self>,
+        scale: f64,
+        cancel: bool,
+    ) -> (gtk::Box, gtk::Button, gtk::Button, Option<gtk::Button>) {
+        let px = |base: f64| (base * scale).round() as i32;
+
+        let middle = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(24.0))
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::Center)
+            .vexpand(true)
+            .build();
+        // The mark only where the screen is otherwise empty. Over a film it
+        // would be the application introducing itself in the middle of being
+        // used.
+        if !cancel {
+            middle.append(&logo_image(scale * 2.2));
+        }
+
+        let prompt = gtk::Label::new(Some(
+            "Drop a video file here, browse for a local file, or enter a URL",
+        ));
+        prompt.add_css_class("tp-empty-prompt");
+        prompt.set_wrap(true);
+        prompt.set_justify(gtk::Justification::Center);
+        middle.append(&prompt);
+
+        const BROWSE_ICON: &[u8] = include_bytes!("../data/ui/browse.png");
+        const LINK_ICON: &[u8] = include_bytes!("../data/ui/link.png");
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(px(14.0))
+            .halign(gtk::Align::Center)
+            .build();
+        // Straight to the thing itself rather than to a menu row that opens
+        // it: with one file to choose and two ways to choose it, a step in
+        // between is a step for nothing.
+        //
+        // Each carries the mark of what it opens, and Browse carries the same
+        // one the media page's button does - so the button on the page and the
+        // button in the panel it opens are visibly the same errand.
+        let browse = gtk::Button::new();
+        browse.set_child(Some(&marked_face(
+            marked_image(BROWSE_ICON, PLAY_MARK_PX * scale),
+            "  Browse...",
+        )));
+        browse.add_css_class("tp-button");
+        browse.add_css_class("tp-action");
+        name_it(&browse, "Browse");
+
+        let address = gtk::Button::new();
+        address.set_child(Some(&marked_face(
+            marked_image(LINK_ICON, PLAY_MARK_PX * scale),
+            "  Enter URL",
+        )));
+        address.add_css_class("tp-button");
+        address.add_css_class("tp-action");
+        name_it(&address, "Enter URL");
+
+        buttons.append(&browse);
+        buttons.append(&address);
+        middle.append(&buttons);
+
+        // On a row of its own beneath them rather than beside them: it is not
+        // a third way to choose a video, and standing in line with two that
+        // are made it look like one.
+        let back = cancel.then(|| {
+            let back = gtk::Button::with_label("Cancel");
+            back.add_css_class("tp-button");
+            back.set_halign(gtk::Align::Center);
+            middle.append(&back);
+            back
+        });
+        (middle, browse, address, back)
+    }
+
     /// The screen with no video on it: an invitation, and the two ways to
     /// accept it.
     ///
@@ -3242,40 +3305,7 @@ impl App {
             // its contents and takes the footer's corner with it.
             .build();
 
-        let middle = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(px(24.0))
-            .valign(gtk::Align::Center)
-            .halign(gtk::Align::Center)
-            .vexpand(true)
-            .build();
-        middle.append(&logo_image(scale * 2.2));
-
-        let prompt = gtk::Label::new(Some(
-            "Drop a video file here, browse for a local file, or enter a URL",
-        ));
-        prompt.add_css_class("tp-empty-prompt");
-        prompt.set_wrap(true);
-        prompt.set_justify(gtk::Justification::Center);
-        middle.append(&prompt);
-
-        let buttons = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(px(14.0))
-            .halign(gtk::Align::Center)
-            .build();
-        // Straight to the thing itself rather than to a menu row that opens
-        // it: with one file to choose and two ways to choose it, a step in
-        // between is a step for nothing.
-        let browse = gtk::Button::with_label("Browse");
-        browse.add_css_class("tp-button");
-        browse.add_css_class("tp-action");
-        let address = gtk::Button::with_label("Enter URL");
-        address.add_css_class("tp-button");
-        address.add_css_class("tp-action");
-        buttons.append(&browse);
-        buttons.append(&address);
-        middle.append(&buttons);
+        let (middle, browse, address, _) = self.choose_source_panel(scale, false);
         content.append(&middle);
 
         {
@@ -3326,6 +3356,30 @@ impl App {
         };
 
         self.behind_artwork(&content)
+    }
+
+    /// The mark that opens the panel for choosing a different video.
+    ///
+    /// Drawn and placed like the settings and fullscreen marks rather than
+    /// like the play button, because it is the same kind of thing: something
+    /// the page can do, rather than the thing the page is for.
+    fn browse_button(self: &Rc<Self>) -> gtk::Button {
+        const ICON: &[u8] = include_bytes!("../data/ui/browse.png");
+
+        let open = gtk::Button::new();
+        open.set_child(Some(&marked_image(ICON, CORNER_MARK_PX * self.scale.get())));
+        open.add_css_class("tp-gear");
+        open.set_focus_on_click(false);
+        open.set_tooltip_text(Some("Choose a video"));
+        name_it(&open, "Choose a video");
+        {
+            let app = self.clone();
+            open.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.choose_video();
+            });
+        }
+        open
     }
 
     /// The fullscreen mark and the gear, which sit together at the end of
@@ -4890,48 +4944,46 @@ impl App {
     /// what is here; an address reaches what is not, and no amount of
     /// browsing would ever lead to it.
     fn choose_video(self: &Rc<Self>) {
-        let (page, list, back, _header) = list_page("Choose a Video", true);
+        let scale = self.scale.get();
+        let (panel, browse, address, cancel) = self.choose_source_panel(scale, true);
+        let cancel = cancel.expect("asked for with a cancel button");
 
-        for (label, value) in [
-            (
-                "Browse for a File",
-                "On this machine or a shared network drive",
-            ),
-            (
-                "Enter a URL",
-                "A link to a video, such as one from a media server",
-            ),
-        ] {
-            append_named(
-                &list,
-                &menu_row(label, value, true),
-                &row_name(label, value),
-            );
-        }
+        // A floor rather than a fixed size, the way the Opening panel has one:
+        // three buttons and a line of text would otherwise make a panel much
+        // narrower than the page behind it, and the swap would read as the
+        // window jumping about.
+        panel.set_size_request((560.0 * scale).round() as i32, -1);
 
         {
             let app = self.clone();
-            list.connect_row_activated(move |_, row| {
+            browse.connect_clicked(move |_| {
                 app.sounds.borrow().click();
-                match row.index() {
-                    0 => app.browse_for_file(),
-                    1 => app.show_paste_uri(),
-                    _ => {}
-                }
+                app.browse_for_file();
             });
         }
         {
             let app = self.clone();
-            back.connect_clicked(move |_| app.show_menu());
+            address.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_paste_uri();
+            });
+        }
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_menu();
+            });
         }
 
-        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        // The same words the empty screen shows, floated over the film rather
+        // than replacing it: what is loaded is still loaded, and backing out
+        // returns to it.
+        self.remember_origin();
+        self.set_nav(None, &[], &[cancel.clone(), browse.clone(), address]);
         *self.screen.borrow_mut() = Screen::VideoSource;
-        self.window.set_child(Some(&page));
-        if let Some(row) = list.row_at_index(0) {
-            list.select_row(Some(&row));
-            settle_on(&row);
-        }
+        self.window.set_child(Some(&self.modal(&panel)));
+        browse.grab_focus();
     }
 
     /// Opens the file browser where browsing last stopped.

@@ -743,26 +743,17 @@ fn main() -> std::process::ExitCode {
         .build();
 
     {
-        // Falls back to whatever was open last time, so relaunching lands on
-        // the film you were watching. Skipped if it has since been moved or
-        // deleted, which would otherwise open onto an error.
-        // Kodi always passes the file it wants played, so falling back to the
-        // last one would be wrong there as well as pointless.
-        // Whether the video was asked for, which decides how hard a failure to
-        // open it should land. See `Launch::remembered`.
-        let asked_for = source.is_some();
-        let file = source.or_else(|| {
-            (!args.kodi)
-                .then(|| {
-                    config
-                        .last_video
-                        .clone()
-                        .filter(|path| path.exists())
-                        .map(source::Source::File)
-                })
-                .flatten()
-        });
-        let remembered = !asked_for && file.is_some();
+        // Only what was actually asked for. TinePlayer used to reopen whatever
+        // was watched last, which meant it never showed the screen that
+        // explains how to choose something - the one screen a person opening
+        // it for the first time needs, and the one they saw once and never
+        // again. Starting empty is the honest default: nothing has been
+        // chosen, so nothing is loaded.
+        //
+        // `last_video` is still written, and still decides where the browser
+        // opens - see `browser::start_location`. What it no longer does is
+        // load a film nobody asked for.
+        let file = source;
         // Kodi is one launcher among others, so it turns the general mode on
         // and adds only the parts that are about Kodi itself.
         let external = args.external || args.kodi;
@@ -795,7 +786,6 @@ fn main() -> std::process::ExitCode {
                     external,
                     kodi,
                     play,
-                    remembered,
                 },
                 config_problem.clone(),
             );
