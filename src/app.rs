@@ -2474,18 +2474,28 @@ impl App {
             glib::idle_add_local_once(move || {
                 let v = gtk::Orientation::Vertical;
                 eprintln!("MEASURE overlay {:?}", page2.measure(v, -1));
-                let mut stack: Vec<(gtk::Widget, usize)> =
-                    page2.first_child().map(|c| vec![(c, 0usize)]).unwrap_or_default();
+                let mut stack: Vec<(gtk::Widget, usize)> = page2
+                    .first_child()
+                    .map(|c| vec![(c, 0usize)])
+                    .unwrap_or_default();
                 while let Some((w, depth)) = stack.pop() {
                     let (min, nat, _, _) = w.measure(v, -1);
                     if min > 300 && depth < 7 {
-                        eprintln!("MEASURE {:indent$}{} min={} nat={}", "",
-                            w.type_().name(), min, nat, indent = depth * 2);
+                        eprintln!(
+                            "MEASURE {:indent$}{} min={} nat={}",
+                            "",
+                            w.type_().name(),
+                            min,
+                            nat,
+                            indent = depth * 2
+                        );
                     }
                     let mut child = w.first_child();
                     while let Some(c) = child {
                         child = c.next_sibling();
-                        if depth < 7 { stack.push((c, depth + 1)); }
+                        if depth < 7 {
+                            stack.push((c, depth + 1));
+                        }
                     }
                 }
             });
@@ -2508,7 +2518,11 @@ impl App {
             .orientation(gtk::Orientation::Vertical)
             .spacing(px(16.0))
             .margin_top(px(30.0))
-            .margin_bottom(px(26.0))
+            // Matched to the sides rather than to the top. The panel now runs
+            // to the bottom of the page, so this margin is a visible edge
+            // along it, and at 26 it read as a thinner border than the 34 down
+            // either side.
+            .margin_bottom(px(34.0))
             .margin_start(px(34.0))
             .margin_end(px(34.0))
             // Filled, not centered. The centering is `Column`'s job, and a
@@ -2563,18 +2577,44 @@ impl App {
 
         let has_file = file.is_some();
         let has_secondary = config.secondary_sink.is_some();
-        let mut rows: Vec<(String, String, bool, MenuAction)> = vec![
-            (
-                "Primary Audio Device".to_string(),
+
+        // The rows, and the group each one opens - `None` for a row that
+        // continues the group above it.
+        //
+        // Kept as a second list rather than a fifth element on the tuple so
+        // that `alignment_row` can go on returning a row and nothing else. The
+        // two are pushed together every time, which is what keeps them in step.
+        let mut rows: Vec<(String, String, bool, MenuAction)> = Vec::new();
+        let mut groups: Vec<Option<&str>> = Vec::new();
+        let mut push = |group: Option<&'static str>,
+                        row: Option<(String, String, bool, MenuAction)>| {
+            if let Some(row) = row {
+                groups.push(group);
+                rows.push(row);
+            }
+        };
+
+        // Which output, said once at the top of the group, rather than on the
+        // front of all three rows under it. "First Output" and "Second Output"
+        // rather than primary and secondary: the ordinal is the whole of what
+        // distinguishes them to anyone watching, and Primary/Secondary is the
+        // vocabulary of the code and the config file.
+        push(
+            Some("FIRST OUTPUT"),
+            Some((
+                "Output Device".to_string(),
                 config
                     .primary_sink
                     .clone()
                     .unwrap_or_else(|| "Not set".to_string()),
                 true,
                 MenuAction::Device(Role::Primary),
-            ),
-            (
-                "Primary Audio Track".to_string(),
+            )),
+        );
+        push(
+            None,
+            Some((
+                "Audio Track".to_string(),
                 if has_file {
                     self.describe_audio(Role::Primary)
                 } else {
@@ -2582,73 +2622,102 @@ impl App {
                 },
                 has_file,
                 MenuAction::Track(Role::Primary),
-            ),
-        ];
-        rows.extend(self.alignment_row(Role::Primary));
-        rows.push((
-            "Secondary Audio Device".to_string(),
-            config
-                .secondary_sink
-                .clone()
-                .unwrap_or_else(|| "None".to_string()),
-            true,
-            MenuAction::Device(Role::Secondary),
-        ));
-        rows.push((
-            "Secondary Audio Track".to_string(),
-            if has_file && has_secondary {
-                self.describe_audio(Role::Secondary)
-            } else {
-                "—".to_string()
-            },
-            has_file && has_secondary,
-            MenuAction::Track(Role::Secondary),
-        ));
+            )),
+        );
+        push(None, self.alignment_row(Role::Primary));
+
+        push(
+            Some("SECOND OUTPUT"),
+            Some((
+                "Output Device".to_string(),
+                config
+                    .secondary_sink
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string()),
+                true,
+                MenuAction::Device(Role::Secondary),
+            )),
+        );
+        push(
+            None,
+            Some((
+                "Audio Track".to_string(),
+                if has_file && has_secondary {
+                    self.describe_audio(Role::Secondary)
+                } else {
+                    "—".to_string()
+                },
+                has_file && has_secondary,
+                MenuAction::Track(Role::Secondary),
+            )),
+        );
         if has_secondary {
-            rows.extend(self.alignment_row(Role::Secondary));
+            push(None, self.alignment_row(Role::Secondary));
         }
-        // Its own section rather than sitting with the audio pair: the
-        // subtitle language is an independent choice, and may be a third
-        // language again or a repeat of either soundtrack.
-        rows.push((
-            "Subtitles".to_string(),
-            self.describe_subtitle(),
-            has_file,
-            MenuAction::Subtitles,
-        ));
+
+        // Its own group rather than sitting with the audio pair: the subtitle
+        // language is an independent choice, and may be a third language again
+        // or a repeat of either soundtrack.
+        push(
+            Some("SUBTITLES"),
+            Some((
+                "Language".to_string(),
+                self.describe_subtitle(),
+                has_file,
+                MenuAction::Subtitles,
+            )),
+        );
 
         let can_play = has_file && config.primary_sink.is_some();
         drop(tracks);
         drop(config);
 
-        for (index, (label, value, enabled, action)) in rows.iter().enumerate() {
-            append_named(
-                &list,
-                &menu_row(label, value, *enabled),
-                &row_name(label, value),
-            );
-            let Some(row) = list.row_at_index(index as i32) else {
-                continue;
-            };
-            match action {
-                // Extra space above the rows that begin a group, so the
-                // primary and secondary pairs read as sections. Done with a
-                // margin on the row rather than by inserting separator rows,
-                // which would be focusable and interrupt keyboard navigation.
-                // A gap above a row that begins a group - but not above the
-                // first row, which begins nothing and has the buttons above it
-                // already. With the Video row gone this became the top of the
-                // list, and carried a section's worth of space at the top of
-                // the page for no reason.
-                MenuAction::Device(_) | MenuAction::Subtitles if index > 0 => {
-                    row.add_css_class("tp-section-start")
+        // What each row is called to anyone who cannot see the list. The group
+        // heading is read once at the top of a group and does not survive into
+        // a row announced on its own, so the name carries it: "Audio Track" is
+        // two rows on this page and "First output, Audio Track" is one.
+        //
+        // Worked out here, where both lists are still in hand, and in title
+        // case rather than the heading's capitals - a screen reader given
+        // "FIRST OUTPUT" may spell it.
+        let mut heading = String::new();
+        let names: Vec<String> = rows
+            .iter()
+            .zip(&groups)
+            .map(|((label, value, _, _), group)| {
+                if let Some(group) = group {
+                    heading = title_case(group);
                 }
-                // Indented, because aligning belongs to the audio file named
-                // in the row above rather than to the output.
-                MenuAction::Align(_) => row.add_css_class("tp-subrow"),
-                _ => {}
-            }
+                row_name(&format!("{heading}, {label}"), value)
+            })
+            .collect();
+
+        for ((label, value, enabled, _), name) in rows.iter().zip(&names) {
+            append_named(&list, &menu_row(label, value, *enabled), name);
         }
+
+        // A heading above the row that opens a group, and nothing above the
+        // rest. Headings are not rows: they sit outside the selection model
+        // and outside the focus chain, so they are unselectable and skipped by
+        // the arrow keys without anything having to arrange it.
+        //
+        // That is also why the indent under them is gone. It said "this
+        // belongs to the output above"; the heading says it for all three rows
+        // at once, and says which output.
+        //
+        // It has to be done through this function rather than by setting the
+        // header on each row directly, which is the obvious way and does
+        // nothing: `set_header` only stores the widget on the row, and the
+        // list parents and draws it from inside its header function - which
+        // returns immediately when none is set. The headings were built, held
+        // and never mounted.
+        list.set_header_func(move |row, _before| {
+            let index = row.index();
+            match groups.get(index as usize).copied().flatten() {
+                Some(group) => row.set_header(Some(&group_heading(group, scale, index == 0))),
+                None => row.set_header(None::<&gtk::Widget>),
+            }
+        });
 
         let resumable = resume_at.is_some();
 
@@ -2734,7 +2803,10 @@ impl App {
         // Square, and as tall as the play button beside them. The marks are
         // built the same way on the empty page, where there is no tall button
         // to match, so this is asked for here rather than where they are made.
-        for mark in [Some(&open), Some(&gear), fullscreen.as_ref()].into_iter().flatten() {
+        for mark in [Some(&open), Some(&gear), fullscreen.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             mark.add_css_class("tp-tall");
         }
         // A little clear air between the pair that plays the film and the
@@ -2757,7 +2829,17 @@ impl App {
         // The page in order: what the film is, what to do about it, and then
         // the choices - which are the only part that scrolls.
         main.append(&buttons);
-        main.append(&scroller);
+        // The rows sit in a panel of their own rather than loose on the page.
+        // It runs to the bottom because the scroller inside it expands, which
+        // is also what turns the space left below the last row into part of
+        // the panel instead of a band of nothing.
+        let panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .vexpand(true)
+            .css_classes(["tp-menu-panel"])
+            .build();
+        panel.append(&scroller);
+        main.append(&panel);
 
         // A header now rather than a footer, because that is where they sit:
         // Up from the first row reaches them, and Down from them returns.
@@ -3642,13 +3724,13 @@ impl App {
 
     fn show_chooser(self: &Rc<Self>, setting: Setting) {
         let title = match setting {
-            Setting::PrimaryDevice => "Primary Audio Device",
-            Setting::PrimaryTrack => "Primary Audio Track",
-            Setting::SecondaryDevice => "Secondary Audio Device",
-            Setting::SecondaryTrack => "Secondary Audio Track",
+            Setting::PrimaryDevice => "First Output Device",
+            Setting::PrimaryTrack => "First Audio Track",
+            Setting::SecondaryDevice => "Second Output Device",
+            Setting::SecondaryTrack => "Second Audio Track",
             Setting::Subtitles => "Subtitles",
-            Setting::PrimaryLanguage => "Primary Language Preference",
-            Setting::SecondaryLanguage => "Secondary Language Preference",
+            Setting::PrimaryLanguage => "First Language Preference",
+            Setting::SecondaryLanguage => "Second Language Preference",
             Setting::SubtitleLanguage => "Subtitle Preference",
             Setting::SubtitleFont => "Subtitle Font",
         };
@@ -5187,17 +5269,15 @@ impl App {
             .storage_key()
             .and_then(|key| crate::config::load_alignment(&key, path));
         Some((
-            // Named for what pressing it would do now. Running it again
-            // replaces the stored answer, which is also the way out when that
-            // answer is wrong.
-            match stored {
-                Some(_) => "Re-align",
-                None => "Auto-align",
-            }
-            .to_string(),
+            // One name whether or not there is a stored answer. It used to say
+            // "Auto-align" or "Re-align" to name what pressing it would do,
+            // which the value beside it now says better: "Unsynced" against a
+            // measured offset is the same distinction, in the column that
+            // exists to carry state.
+            "Sync".to_string(),
             match stored {
                 Some(millis) => describe_lateness(millis),
-                None => "Not measured".to_string(),
+                None => "Unsynced".to_string(),
             },
             true,
             MenuAction::Align(role),
@@ -5713,7 +5793,7 @@ impl App {
                     true,
                 ),
                 (
-                    "Primary Audio Device".to_string(),
+                    "First Output Device".to_string(),
                     config
                         .primary_sink
                         .clone()
@@ -5746,7 +5826,7 @@ impl App {
                     true,
                 ),
                 (
-                    "Secondary Audio Device".to_string(),
+                    "Second Output Device".to_string(),
                     config
                         .secondary_sink
                         .clone()
@@ -9393,6 +9473,54 @@ fn describe_lateness(millis: f64) -> String {
 
 /// A menu row: what the setting is on the left, its current value and a
 /// chevron on the right.
+/// The heading that opens a group of rows: which output the three rows under
+/// it belong to.
+///
+/// A `GtkListBox` header rather than a row, which is what makes it
+/// unselectable for free - headers sit outside the selection model and outside
+/// the focus chain, so the arrow keys walk past without being told to.
+///
+/// Capitals with a little tracking, in the manner of a section label rather
+/// than a title: it has to be legible enough to group what is under it and
+/// quiet enough that the rows stay the thing being read. The tracking is a
+/// Pango attribute rather than CSS `letter-spacing`, which GTK's stylesheet
+/// parser accepts and does not apply.
+fn group_heading(title: &str, scale: f64, first: bool) -> gtk::Label {
+    let heading = gtk::Label::new(Some(title));
+    heading.set_xalign(0.0);
+    heading.add_css_class("tp-group");
+    // Nothing above the first heading. It opens the list rather than dividing
+    // it, and the buttons already sit above with room of their own.
+    if first {
+        heading.add_css_class("tp-group-first");
+    }
+    let attributes = gtk::pango::AttrList::new();
+    attributes.insert(gtk::pango::AttrInt::new_letter_spacing(
+        (1.5 * scale * gtk::pango::SCALE as f64) as i32,
+    ));
+    heading.set_attributes(Some(&attributes));
+    heading
+}
+
+/// A heading's capitals turned back into words, for a screen reader.
+///
+/// "FIRST OUTPUT" read literally is a risk of being spelled out a letter at a
+/// time, which is a real behaviour of several readers on all-capital text.
+fn title_case(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let mut characters = word.chars();
+            match characters.next() {
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &characters.as_str().to_lowercase()
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -9906,11 +10034,30 @@ fn style_css(scale: f64) -> String {
            reach something else rather than as the thing to press. */
         .tp-secondary {{ font-size: {small}px; padding: {tight_v}px {tight_h}px; }}
         .tp-menu > row {{ border-radius: {radius}px; }}
+        /* The ground the rows sit on. Black at a fraction rather than a
+           lighter grey: it has to read as a panel over whatever backdrop the
+           film brought, and a tint that darkens works over every one of them
+           where a fixed colour only works over some. */
+        .tp-menu-panel {{
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: {panel_radius}px;
+            padding: {panel_pad}px;
+        }}
         /* Gray rather than a theme color, so it lifts off the background in
            both light and dark without needing two rules. */
         .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
-        .tp-menu:focus-within > row:selected:hover {{ background-color: {focus}; }}
+        .tp-menu:focus-within > row:selected:hover {{ background-color: {focus_row}; }}
         .tp-menu > row.tp-section-start {{ margin-top: {section}px; }}
+        /* A group heading. Quiet on purpose: smaller than a row and dimmed,
+           so it labels what is under it without competing with it. Indented to
+           `pad_h` so it starts exactly where the row labels below it do. */
+        .tp-group {{
+            font-size: {group}px;
+            font-weight: bold;
+            opacity: 0.55;
+            margin: {group_top}px {pad_h}px {group_gap}px {pad_h}px;
+        }}
+        .tp-group-first {{ margin-top: {group_first_top}px; }}
         /* Which row is in force, as opposed to which row the cursor is on.
            Two different facts that a list has only one highlight for, and
            conflating them is actively misleading in the places column: moving
@@ -9937,7 +10084,7 @@ fn style_css(scale: f64) -> String {
            focus, so there is still exactly one thing highlighted on screen. */
         .tp-menu:focus-within > row:selected {{
             background-image: none;
-            background-color: {focus};
+            background-color: {focus_row};
             color: {on_focus};
         }}
         .tp-menu:focus-within > row:selected .tp-value,
@@ -10233,6 +10380,11 @@ fn style_css(scale: f64) -> String {
         pad_v = px(9.0),
         pad_h = px(18.0),
         radius = px(8.0),
+        // Larger than a row's corner, in proportion to the box it rounds. At
+        // the row radius a panel this size reads as a rectangle with the
+        // corners knocked off.
+        panel_radius = px(16.0),
+        panel_pad = px(8.0),
         outline = px(2.0).max(1),
         handle = px(18.0),
         // Bright on dark; on light a white knob held in by its ring rather
@@ -10247,6 +10399,10 @@ fn style_css(scale: f64) -> String {
         switch_h = px(32.0),
         slider = px(26.0),
         section = px(28.0),
+        group = px(16.0),
+        group_top = px(24.0),
+        group_gap = px(4.0),
+        group_first_top = px(10.0),
         subrow = px(28.0),
         mark = px(4.0),
         // A shade larger than `ICON_PX`, which is what every other icon in
@@ -10302,6 +10458,10 @@ fn style_css(scale: f64) -> String {
         // theme, and near-black on the light one, where white would be
         // invisible against a near-white page.
         focus = "#ffffff",
+        // The same white, backed off, for the row the cursor is on. Only the
+        // row: the ring on a focused button stays at full strength, being a
+        // thin outline that has nothing like the area to spare.
+        focus_row = "rgba(255, 255, 255, 0.7)",
         on_focus = "#1c1c1c",
         // The ink both corner marks share. The fullscreen image is drawn in
         // it as a picture; the gear is told to match.
