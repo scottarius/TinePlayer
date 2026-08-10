@@ -2703,6 +2703,8 @@ impl App {
         if let Some(fullscreen) = fullscreen.as_ref() {
             buttons.append(fullscreen);
         }
+        let close = self.close_button();
+        buttons.append(&close);
 
         // The page in order: what the film is, what to do about it, and then
         // the choices - which are the only part that scrolls.
@@ -2718,6 +2720,7 @@ impl App {
         }
         header.push(gear);
         header.extend(fullscreen);
+        header.push(close);
 
         {
             let app = self.clone();
@@ -3356,6 +3359,31 @@ impl App {
         };
 
         self.behind_artwork(&content)
+    }
+
+    /// The mark that closes the player, at the far end of the row.
+    ///
+    /// Where a window's own close button would be, and worth having because
+    /// on a television there is no window: TinePlayer opens fullscreen with no
+    /// titlebar, and quitting otherwise means knowing that Escape asks. It
+    /// asks the same question Escape does rather than quitting outright.
+    fn close_button(self: &Rc<Self>) -> gtk::Button {
+        const ICON: &[u8] = include_bytes!("../data/ui/close.png");
+
+        let close = gtk::Button::new();
+        close.set_child(Some(&marked_image(ICON, CORNER_MARK_PX * self.scale.get())));
+        close.add_css_class("tp-gear");
+        close.set_focus_on_click(false);
+        close.set_tooltip_text(Some("Close the player"));
+        name_it(&close, "Close the player");
+        {
+            let app = self.clone();
+            close.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_confirm_quit();
+            });
+        }
+        close
     }
 
     /// The mark that opens the panel for choosing a different video.
