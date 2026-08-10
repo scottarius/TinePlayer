@@ -8,15 +8,19 @@
 //! aspect ratio", which letterboxes instead. `GtkContentFit`, which would say
 //! this in a property, arrived in 4.8.
 //!
-//! The backdrop asks for one thing more, and it is what makes this a widget
-//! rather than a helper. The picture sits at twenty percent over the page's
-//! background and is *screen* blended, which never darkens: it lifts the page
-//! where the picture is bright and leaves it alone where the picture is dark,
-//! so large type keeps a predictable ground. Ordinary transparency cannot do
-//! that - it darkens the page wherever the picture is darker than it, which is
-//! most of a night scene. GSK can, through a blend node, and a blend node
-//! needs both halves inside one widget's snapshot: hence the base color being
-//! painted here rather than inherited from whatever is behind.
+//! The backdrop adds two things to that: it paints the page's own ground
+//! underneath, so there is a known color behind everything rather than
+//! whatever the theme left there, and it draws the picture over it at a
+//! fraction of full strength.
+//!
+//! **It was a *screen* blend and is not any more.** Screen never darkens, so
+//! it lifted the page where the picture was bright and left it alone where the
+//! picture was dark, which is a better-behaved ground for large type than
+//! plain transparency gives. It also looked correct on Windows and came out
+//! all but invisible on the Pi, where the same `GskBlendNode` goes through a
+//! different renderer. A backdrop that depends on which machine is drawing it
+//! is not a backdrop, and this is decoration rather than anything load
+//! bearing - so it composites plainly now, the same way everywhere.
 //!
 //! **The base color comes from the stylesheet, through `color`.** A widget
 //! cannot read its own CSS background from inside `snapshot`, and hardcoding
@@ -28,7 +32,7 @@
 
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::{gdk, glib, graphene, gsk};
+use gtk::{gdk, glib, graphene};
 
 /// How much of the picture reaches the page.
 ///
@@ -102,19 +106,21 @@ mod imp {
                 return;
             }
 
-            // Bottom half of the blend: the ground just painted, which has to
-            // be inside the node to be blended with.
-            snapshot.push_blend(gsk::BlendMode::Screen);
-            snapshot.append_color(&widget.style_context().color(), &bounds);
-            snapshot.pop();
-
-            // Top half: the picture, cropped to the widget and faded back.
+            // The picture over the ground, cropped and faded back. Plainly
+            // composited: no blend node.
+            //
+            // It was a *screen* blend to begin with, which never darkens and
+            // so lifted the page only where the picture was bright. It looked
+            // right on Windows and came out all but invisible on the Pi, where
+            // the same node goes through a different renderer. A backdrop that
+            // depends on which machine is drawing it is not a backdrop, and
+            // this is decoration - not worth a per-platform branch or the
+            // afternoon it would take to find out why. Straight alpha does the
+            // same job the same way everywhere.
             snapshot.push_opacity(STRENGTH);
             snapshot.push_clip(&bounds);
             snapshot.append_texture(&texture, &fitted(&texture, width, height));
             snapshot.pop();
-            snapshot.pop();
-
             snapshot.pop();
         }
     }

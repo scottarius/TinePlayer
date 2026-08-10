@@ -21,6 +21,31 @@ use crate::subtitles::{Subtitle, SubtitleChoice};
 /// too - which the media page is.
 const MODAL_STACK: &str = "tp-modal-stack";
 
+/// How many languages either summary line will name before it stops.
+///
+/// The line has one line's worth of room and must not wrap: the rows below it
+/// sit at a fixed height, so anything that grows here would push them down.
+/// Six is past the point where a list is being read rather than scanned, and a
+/// file with more than six subtitle languages is a disc rip whose exact
+/// inventory is a chooser away.
+const MOST_LANGUAGES: usize = 6;
+
+/// What a track that never stated its language is called on the page.
+///
+/// "Unknown" rather than the container's own word for it: `und` is what the
+/// file says and "Undetermined" is what the specification calls that, and
+/// neither is what a viewer would say about a soundtrack they can plainly
+/// hear. It says the same thing in the word already being used everywhere
+/// else something is missing.
+const UNKNOWN_LANGUAGE: &str = "Unknown";
+
+/// What either summary line says when the file carries no such track at all.
+///
+/// Distinct from `Unknown`, and the difference is worth keeping: one means
+/// there is a track and nobody said what language it is in, the other means
+/// there is nothing there to choose.
+const NO_TRACKS: &str = "None";
+
 /// Which setting a chooser screen is editing. The menu drills into one of
 /// these and returns once a choice is made.
 #[derive(Clone, Copy, PartialEq)]
@@ -550,9 +575,18 @@ pub struct App {
     /// while the size is not being dragged.
     wanted_scale: Cell<Option<f64>>,
     nav_footer: RefCell<Vec<gtk::Button>>,
-    /// Buttons above the list, currently the browser's path trail. Up from
-    /// the first row reaches them, the way Down reaches the footer.
+    /// Buttons above the list: the browser's path trail, and the media page's
+    /// play and settings row. Up from the first row reaches them, the way Down
+    /// reaches the footer.
     nav_header: RefCell<Vec<gtk::Button>>,
+    /// Which header button Up from the list should land on, where the last
+    /// one is not the right answer.
+    ///
+    /// The default is the last, which is what a path trail wants: the crumb
+    /// nearest the list is the folder you are in. A row of actions wants the
+    /// opposite - the first is the one the page is for, and arriving on
+    /// Settings when you meant Play is a button's width of travel every time.
+    nav_header_entry: RefCell<Option<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
     /// Whether the open chooser was reached from the settings screen, so
     /// that finishing with it returns where it came from.
@@ -718,6 +752,7 @@ impl App {
             wanted_scale: Cell::new(None),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
+            nav_header_entry: RefCell::new(None),
             controls: RefCell::new(None),
             from_settings: Cell::new(false),
             dark: Cell::new(dark),
@@ -1787,6 +1822,9 @@ impl App {
         *self.copy_root.borrow_mut() = None;
         *self.nav_list.borrow_mut() = list.cloned();
         *self.nav_header.borrow_mut() = header.to_vec();
+        // Cleared here so it belongs to one screen only: a page that wants Up
+        // to land somewhere particular says so after wiring its navigation.
+        *self.nav_header_entry.borrow_mut() = None;
         *self.nav_footer.borrow_mut() = footer.to_vec();
 
         let mut stops: Vec<gtk::Widget> = header.iter().map(|b| b.clone().upcast()).collect();
@@ -1962,7 +2000,12 @@ impl App {
         if next < 0 {
             if position > 0 {
                 select(0);
-            } else if let Some(button) = App::last_header(&header) {
+            } else if let Some(button) = self
+                .nav_header_entry
+                .borrow()
+                .clone()
+                .or_else(|| App::last_header(&header).cloned())
+            {
                 self.sounds.borrow().click();
                 button.grab_focus();
             }
@@ -2456,35 +2499,19 @@ impl App {
         let (scroller, list) = scrolling_list();
         name_it(&list, "Playback Options");
 
-        // The description scrolls *with* the rows rather than sitting above
-        // them, which matters only at the extreme and matters a great deal
-        // there. At 3x on a modest screen the title, facts and plot alone are
-        // taller than the window, and with the heading fixed the rows and the
-        // whole footer were pushed off the bottom - so the film could not be
-        // played at all. Inside the scroller, what does not fit is the
-        // description, the footer stays pinned, and the choosers stay
-        // reachable. At every ordinary size there is nothing to scroll and the
-        // page is exactly as composed.
-        //
-        // This is the plan's own answer to the question it left open: when
-        // no-scroll and 3x cannot both hold, what yields is the artwork and
-        // the prose, never the choices.
-        let above = gtk::Box::builder()
+        // The film's details sit still. Only the rows scroll, so the poster,
+        // the title and the buttons stay where they are however long the list
+        // gets - and the list scrolls under them rather than the page moving
+        // as a whole.
+        let info = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(px(6.0))
+            .valign(gtk::Align::Start)
             .build();
-        let budget = heading_budget(self.page_height(scale), scale);
-        for widget in self.heading_block(scale, budget) {
-            above.append(&widget);
+        for widget in self.heading_block(scale) {
+            info.append(&widget);
         }
-        // The list arrives already parented to the scroller, and a widget with
-        // a parent cannot be appended anywhere: GTK refuses it with a critical
-        // and does nothing, which showed up as a page with a title, a footer
-        // and no rows between them at all.
-        scroller.set_child(None::<&gtk::Widget>);
-        above.append(&list);
-        scroller.set_child(Some(&above));
-        main.append(&scroller);
+        main.append(&info);
 
         let file = self.file.borrow().clone();
         let config = self.config.borrow();
@@ -2588,22 +2615,27 @@ impl App {
             }
         }
 
-        // Pinned below the scrolling list so it stays reachable however
-        // long the list gets.
         let resumable = resume_at.is_some();
 
+        // Between the film and the choices rather than under both. Playing is
+        // what the page is for, so it sits where the eye arrives after
+        // reading what the film is - and the rows below become what they
+        // actually are, the settings you may want to change first rather than
+        // a list to get past. Generous room above and below, so it reads as a
+        // division of the page rather than as another row.
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(px(14.0))
-            .margin_top(px(14.0))
+            .margin_top(px(34.0))
+            .margin_bottom(px(34.0))
             .build();
-        // The pair that starts playback keeps to the left, under the rows
-        // they act on; the gear and the fullscreen mark are pushed to the far
-        // end by the expanding gap between.
+        // Everything in this row packs to the left, over the rows it acts on:
+        // playing, starting over, and then the two marks. Nothing expands, so
+        // there is no gap pushing the marks to the far end - they read as the
+        // rest of one row of controls rather than as a separate corner.
         let plays = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(px(14.0))
-            .hexpand(true)
             .halign(gtk::Align::Start)
             .build();
         let mut play_buttons: Vec<gtk::Button> = Vec::new();
@@ -2614,20 +2646,37 @@ impl App {
         // but not enough to be worth a word beside it, so once there are two
         // the second keeps only its mark. It is the same button either way;
         // what changes is how much room it argues for.
-        let play = gtk::Button::with_label(&match resume_at {
-            Some(position) => format!(
-                "▶  RESUME {}",
-                crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
-            ),
-            None => "▶  PLAY".to_string(),
-        });
+        let play = gtk::Button::new();
+        play.set_child(Some(&marked_label(
+            "▶",
+            &match resume_at {
+                Some(position) => format!(
+                    "  RESUME {}",
+                    crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
+                ),
+                None => "  PLAY".to_string(),
+            },
+        )));
+        // The face is two labels, so the button has no text of its own for a
+        // screen reader to read off. Named outright instead.
+        name_it(
+            &play,
+            &match resume_at {
+                Some(position) => format!(
+                    "Resume at {}",
+                    crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
+                ),
+                None => "Play".to_string(),
+            },
+        );
         play.add_css_class("tp-play");
         play.set_sensitive(can_play);
         plays.append(&play);
         play_buttons.push(play);
 
         if resume_at.is_some() {
-            let restart = gtk::Button::with_label("↻");
+            let restart = gtk::Button::new();
+            restart.set_child(Some(&marked_label("↻", "")));
             restart.add_css_class("tp-play");
             restart.add_css_class("tp-play-icon");
             restart.set_sensitive(can_play);
@@ -2643,16 +2692,25 @@ impl App {
 
         let (fullscreen, gear) = self.corner_buttons();
         if let Some(fullscreen) = fullscreen.as_ref() {
+            // A little clear air between the pair that plays the film and the
+            // pair that does not, so the row reads as two groups rather than
+            // four equal buttons.
+            fullscreen.set_margin_start(px(16.0));
             buttons.append(fullscreen);
         }
         buttons.append(&gear);
-        main.append(&buttons);
 
-        // Ordered as they sit on screen, so left and right walk along the
-        // row and Down from the list lands on the first.
-        let mut footer = play_buttons.clone();
-        footer.extend(fullscreen);
-        footer.push(gear);
+        // The page in order: what the film is, what to do about it, and then
+        // the choices - which are the only part that scrolls.
+        main.append(&buttons);
+        main.append(&scroller);
+
+        // A header now rather than a footer, because that is where they sit:
+        // Up from the first row reaches them, and Down from them returns.
+        // Ordered as they appear, so left and right walk along the row.
+        let mut header = play_buttons.clone();
+        header.extend(fullscreen);
+        header.push(gear);
 
         {
             let app = self.clone();
@@ -2703,7 +2761,11 @@ impl App {
             });
         }
 
-        self.wire_navigation(&list, &[], &footer);
+        self.wire_navigation(&list, &header, &[]);
+        // Up from the top row lands on Play rather than on the far end of the
+        // row, which is Settings. Playing is what the page is for, and it is
+        // also what someone arrowing upwards off the list is reaching for.
+        *self.nav_header_entry.borrow_mut() = header.first().cloned();
         (self.behind_artwork(&content), list)
     }
 
@@ -2718,10 +2780,11 @@ impl App {
 
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&backdrop));
-        // The backdrop fills the window; the page inside keeps to the shape
-        // it was composed for. See src/column.rs for why that is a widget
-        // rather than something set on this box.
-        overlay.add_overlay(&crate::column::Column::around(content));
+        // The backdrop fills the window; the page inside stops widening once
+        // lines get too long to read. See src/column.rs for why that is a
+        // widget rather than something set on this box.
+        let most = (PAGE_MAX_UNITS * self.scale.get()).round() as i32;
+        overlay.add_overlay(&crate::column::Column::around(content, most));
         overlay
     }
 
@@ -2787,10 +2850,18 @@ impl App {
         // rather than a constraint: being a little out until the next rebuild
         // costs nothing that anyone can see.
         let page_height = self.page_height(scale);
-        // Half the page, and never more. The floor is an absolute size rather
-        // than a scaled one on purpose: scaled, it grows with the interface
-        // exactly when there is least room for it, which is the shape of the
-        // bug above.
+        // Half the page, within hard bounds at both ends.
+        //
+        // The ceiling matters for more than composition. This is a size
+        // *request*, which is a minimum its window must honor, so a poster
+        // sized from the window's own height is a loop: the taller the window,
+        // the more height its contents insist on. Capping it breaks that -
+        // past this size the poster stops following the window, and the window
+        // stays free to be made smaller again.
+        //
+        // The floor is absolute rather than scaled for the opposite reason:
+        // scaled, it grows with the interface exactly when there is least room
+        // for it.
         let height = (page_height * 0.5).clamp(120.0, 560.0 * scale);
         // Two by three, which every poster in every library is drawn to.
         let width = height * 2.0 / 3.0;
@@ -2800,6 +2871,18 @@ impl App {
             .spacing(px(12.0))
             .valign(gtk::Align::Start)
             .build();
+        // Exactly as wide as the poster and no wider. Without this the column
+        // is as wide as its widest *fact*, so a long codec name pushed the
+        // whole page to the right and left a gap beside the poster that
+        // belonged to nothing.
+        column.set_size_request(width.round() as i32, -1);
+        // Explicitly not expanding, and this is load-bearing. GTK propagates
+        // `hexpand` up from children, so the poster picture asking to fill its
+        // own frame quietly made this whole column an expanding one - and a
+        // box then splits the spare width between it and the page beside it.
+        // Measured: a column asking for 291px was being handed 567, which is
+        // the gap that appeared to sit between the poster and the rows.
+        column.set_hexpand(false);
 
         let frame = gtk::Box::builder()
             .css_classes(["tp-poster"])
@@ -2818,6 +2901,11 @@ impl App {
                 // as a mistake. Real posters are two by three and are not
                 // cropped at all; what this rescues is an episode thumbnail
                 // or a scan that is a few pixels out.
+                // Expanding is how it fills the frame: the widget draws a
+                // texture and measures as nothing, so without this the frame
+                // allocates it no width at all and the poster disappears.
+                // The request stops at the column, which sets its own
+                // `hexpand` explicitly - see there.
                 let picture = crate::artwork::Artwork::poster();
                 picture.set_texture(Some(texture));
                 picture.set_hexpand(true);
@@ -2835,19 +2923,54 @@ impl App {
         let facts = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(px(1.0))
+            // A few pixels in from the poster's edges, and the same on both:
+            // the readings are ranged right, so without this they sat hard
+            // against the frame above on one side while the names were inset
+            // on the other.
+            .margin_start(px(4.0))
+            .margin_end(px(4.0))
             .build();
+        // Two columns: what it is on the left, what it says on the right,
+        // ranged against the poster's own right edge. As one run of text the
+        // readings started at a different place on every line and there was
+        // nothing to read down; against an edge they line up as a table, which
+        // is what a column of measurements wants to be.
         for (name, value) in self.file_facts() {
-            let line = gtk::Label::new(None);
-            line.add_css_class("tp-fact");
-            line.set_xalign(0.0);
-            line.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            // The name dimmed and the reading not, so a column of these scans
-            // as values with labels rather than as sentences.
-            line.set_markup(&format!(
-                "<span alpha='60%'>{}:</span> {}",
-                glib::markup_escape_text(&name),
-                glib::markup_escape_text(&value),
-            ));
+            let line = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(px(8.0))
+                .build();
+
+            // Ellipsizing decides how a label *shrinks*; it does nothing to
+            // what one asks for in the first place, which stays the full width
+            // of its text. So a long reading here would widen the column past
+            // the poster and push the whole page right. Both halves are capped
+            // in what they may ask for; the width they actually get comes from
+            // the poster above, and anything longer is cut with an ellipsis.
+            let key = gtk::Label::new(Some(&format!("{name}:")));
+            key.add_css_class("tp-fact");
+            key.add_css_class("tp-fact-name");
+            key.set_xalign(0.0);
+            key.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            // Enough for the longest of them, "Resolution:". Capped at six it
+            // cut every name to "Resol...", which is a label that has stopped
+            // labelling anything. The pair still comes to well under the
+            // poster's width, which is what the cap is protecting.
+            key.set_max_width_chars(12);
+            line.append(&key);
+
+            let reading = gtk::Label::new(Some(&value));
+            reading.add_css_class("tp-fact");
+            reading.set_xalign(1.0);
+            reading.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            reading.set_max_width_chars(12);
+            // Pushes itself to the far edge. Safe only because the column
+            // sets `hexpand` false outright - otherwise this request would
+            // travel up and widen the whole left column, which is the fault
+            // the poster picture caused before it.
+            reading.set_hexpand(true);
+            line.append(&reading);
+
             facts.append(&line);
         }
         column.append(&facts);
@@ -2864,7 +2987,12 @@ impl App {
         let details = self.details.borrow();
         [
             ("Filesize", details.filesize()),
+            // Two lines rather than "1080p (H.264)". Together they are the
+            // longest reading in the column, and the column is only as wide
+            // as the poster - so as one line they were the thing that decided
+            // how much room the picture got.
             ("Resolution", details.resolution()),
+            ("Codec", details.codec()),
             ("Framerate", details.framerate()),
             ("Bitrate", details.bitrate()),
             (
@@ -2880,40 +3008,22 @@ impl App {
     /// The title, the facts line, the summary, and what languages the file
     /// holds - everything above the choices.
     ///
-    /// `budget` is how much room there is for all of it, in interface units -
-    /// see [`heading_budget`]. Spent in priority order, and what does not fit
-    /// is left out rather than shown and pushed off the screen. The title is
-    /// the exception and is always drawn: a page that will not say what film
-    /// it is about is not a page.
-    fn heading_block(self: &Rc<Self>, scale: f64, budget: f64) -> Vec<gtk::Widget> {
-        // Rough heights in interface units, each a little generous. They only
-        // have to be good enough to order the decisions - the layout does the
-        // real arithmetic, and being a few units out changes nothing except
-        // at the exact boundary.
-        const FACTS: f64 = 32.0;
-        const SUMMARY: f64 = 54.0;
-        const PLOT: f64 = 94.0;
-
+    /// Everything except the summary keeps its natural height; the summary is
+    /// held to three lines whether it has them or not, which is what stops the
+    /// rows underneath moving between one film and the next.
+    fn heading_block(self: &Rc<Self>, scale: f64) -> Vec<gtk::Widget> {
         let px = |base: f64| (base * scale).round() as i32;
         let details = self.details.borrow();
         let mut block: Vec<gtk::Widget> = Vec::new();
-        let mut left = budget;
-        let mut afford = |cost: f64| {
-            let fits = left >= cost;
-            if fits {
-                left -= cost;
-            }
-            fits
-        };
 
         let title = gtk::Label::new(Some(&details.title));
         title.add_css_class("tp-film-title");
         title.set_xalign(0.0);
-        title.set_wrap(true);
-        title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        // Two lines at most. A filename with a release tag on it is long, and
-        // three lines of it would push the choices off a short window.
-        title.set_lines(2);
+        // One line, cut with an ellipsis. A filename with a release tag on it
+        // is long and would happily take two - but the rows below sit at a
+        // fixed distance from the top, and a title that is sometimes one line
+        // and sometimes two is exactly the thing that moves them.
+        title.set_wrap(false);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         block.push(title.upcast());
 
@@ -2943,7 +3053,7 @@ impl App {
                     .join(", "),
             );
         }
-        if !facts.is_empty() && afford(FACTS) {
+        if !facts.is_empty() {
             let line = gtk::Label::new(Some(&facts.join("     ")));
             line.add_css_class("tp-film-facts");
             line.set_xalign(0.0);
@@ -2952,61 +3062,66 @@ impl App {
             block.push(line.upcast());
         }
 
-        // Which of the two remaining blocks there is room for, decided before
-        // either is built so that the more useful one wins when only one
-        // fits. The languages line is the more useful by a distance: this is a
-        // player whose entire purpose is choosing between audio tracks, and
-        // what languages the file carries is the question a viewer opens it
-        // with. The plot is decoration beside that.
-        let spoken = (self.audio_languages(), self.subtitle_languages());
-        let show_summary = !(spoken.0.is_empty() && spoken.1.is_empty()) && afford(SUMMARY);
-        let show_plot = !details.plot.is_empty() && afford(PLOT);
-
-        if show_plot {
-            let plot = gtk::Label::new(Some(&details.plot));
-            plot.add_css_class("tp-film-plot");
-            plot.set_xalign(0.0);
-            plot.set_wrap(true);
-            plot.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            // Three lines, cut cleanly. A full plot summary runs to a
-            // paragraph and this page has a hard budget: the choices below it
-            // are what the page is for, and they do not scroll.
-            plot.set_lines(3);
-            plot.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            plot.set_margin_top(px(12.0));
-            // Otherwise a wrapping label asks for its whole text on one line,
-            // and the column stretches to give it.
-            plot.set_max_width_chars(20);
-            block.push(plot.upcast());
-        }
+        // The summary, in a space of its own that is the same height whether
+        // there is one or not. This is the only thing on the page held to a
+        // fixed height, and it is the only one that needs to be: a plot runs
+        // from nothing to a paragraph, and everything else here is one line or
+        // absent. Reserving three lines for it is what keeps the rows below
+        // from walking up and down the page as you step through a folder.
+        let plot = gtk::Label::new(Some(&details.plot));
+        plot.add_css_class("tp-film-plot");
+        plot.set_xalign(0.0);
+        plot.set_yalign(0.0);
+        plot.set_wrap(true);
+        plot.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        plot.set_lines(3);
+        plot.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        plot.set_margin_top(px(12.0));
+        // Filling the width it is given rather than a fraction of it. A
+        // wrapping label asks for its whole text on one line, so it used to be
+        // capped at twenty characters to stop it stretching the page - which
+        // capped where it *wrapped* too, and left it running down the middle
+        // of the column at about half width. Nothing needs to cap it now that
+        // the poster column no longer expands and `Column` decides the page's
+        // width outright.
+        // -1, which is the value that means "no cap". Zero is a cap of zero
+        // characters, and left it wrapping down the middle of the column.
+        plot.set_max_width_chars(-1);
+        plot.set_size_request(-1, px(PLOT_UNITS));
+        block.push(plot.upcast());
         drop(details);
 
         // What is in the file, in languages rather than in track numbers.
         // The rows below say which track is going where; this says what there
         // was to choose from, which is the question someone asks before they
         // start opening choosers.
-        if show_summary {
-            let summary = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .spacing(px(1.0))
-                .margin_top(px(14.0))
-                .build();
-            for (name, languages) in [("Audio", spoken.0), ("Subtitles", spoken.1)] {
-                if languages.is_empty() {
-                    continue;
-                }
-                let line = gtk::Label::new(None);
-                line.add_css_class("tp-fact");
-                line.set_xalign(0.0);
-                line.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                line.set_markup(&format!(
-                    "<span alpha='60%'>{name}:</span> {}",
-                    glib::markup_escape_text(&languages.join(", ")),
-                ));
-                summary.append(&line);
-            }
-            block.push(summary.upcast());
+        //
+        // Both lines are always drawn, even when there is nothing to put on
+        // them. They are the two facts this application exists to act on, and
+        // a line that comes and goes with the file moves everything under it.
+        let spoken = (self.audio_languages(), self.subtitle_languages());
+        let summary = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(1.0))
+            .margin_top(px(14.0))
+            .build();
+        for (name, languages) in [("Audio", spoken.0), ("Subtitles", spoken.1)] {
+            let line = gtk::Label::new(None);
+            line.add_css_class("tp-fact");
+            line.set_xalign(0.0);
+            // Cut rather than wrapped: a second line here would push the rows
+            // down on exactly the files that carry the most languages.
+            line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            line.set_markup(&format!(
+                "<span alpha='60%'>{name}:</span> {}",
+                glib::markup_escape_text(&match languages.is_empty() {
+                    true => NO_TRACKS.to_string(),
+                    false => languages.join(", "),
+                }),
+            ));
+            summary.append(&line);
         }
+        block.push(summary.upcast());
         block
     }
 
@@ -3022,20 +3137,19 @@ impl App {
     fn audio_languages(&self) -> Vec<String> {
         let mut named: Vec<String> = Vec::new();
         for track in self.tracks.borrow().iter() {
-            let name = crate::languages::name_of_tag(&track.language)
-                .map(|name| name.to_string())
-                // A track that never said what it is still counts - plenty of
-                // description carries no language tag at all - and the honest
-                // word for it is not a guess at one.
-                .unwrap_or_else(|| "Undetermined".to_string());
+            // A track that never said what it is still counts. Plenty of files
+            // tag nothing at all - an AVI usually does not - and a line that
+            // quietly left those out would claim a file had no soundtrack.
+            let name = crate::languages::name_of_tag(&track.language).unwrap_or(UNKNOWN_LANGUAGE);
             let entry = match crate::probe::is_audio_description(&track.title) {
                 true => format!("{name} (Described)"),
-                false => name,
+                false => name.to_string(),
             };
             if !named.contains(&entry) {
                 named.push(entry);
             }
         }
+        named.truncate(MOST_LANGUAGES);
         named
     }
 
@@ -3059,13 +3173,12 @@ impl App {
                 .split('.')
                 .next()
                 .unwrap_or_default();
-            let Some(name) = crate::languages::name_of_tag(tag) else {
-                continue;
-            };
+            let name = crate::languages::name_of_tag(tag).unwrap_or(UNKNOWN_LANGUAGE);
             if !named.iter().any(|held| held == name) {
                 named.push(name.to_string());
             }
         }
+        named.truncate(MOST_LANGUAGES);
         named
     }
 
@@ -8171,15 +8284,68 @@ fn logo_image(scale: f64) -> gtk::Image {
 ///
 /// This is the plan's open question about `ui_scale` answered: no-scroll and
 /// 3x cannot both hold, and what yields is the artwork and the prose.
-fn heading_budget(page_height: f64, scale: f64) -> f64 {
-    // Seven rows at a row's height, plus the gaps between the three groups.
-    const CHOOSERS: f64 = 7.0 * 39.0 + 3.0 * 28.0;
-    const FOOTER: f64 = 62.0;
-    const MARGINS: f64 = 56.0;
+/// A button face with its mark drawn larger than the words beside it.
+///
+/// The marks are glyphs rather than images, so they take the label's font size
+/// and came out noticeably smaller than the type they sit with - a triangle at
+/// the cap height of the word next to it reads as a bullet rather than as a
+/// play button.
+///
+/// Two labels rather than one with markup in it, and that is the whole reason
+/// this is a box. Sizing part of a label makes the *line* taller, and the
+/// words then sit on a baseline set by the glyph rather than by themselves -
+/// which on a wide button reads as the text having slipped downwards. Two
+/// labels each centred in the row are each upright on their own terms.
+fn marked_label(mark: &str, words: &str) -> gtk::Box {
+    let face = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
 
-    let units = page_height / scale.max(0.01);
-    (units - CHOOSERS - FOOTER - MARGINS).max(0.0)
+    let glyph = gtk::Label::new(Some(mark));
+    glyph.add_css_class("tp-play-mark");
+    glyph.set_valign(gtk::Align::Center);
+    face.append(&glyph);
+
+    if !words.is_empty() {
+        let text = gtk::Label::new(Some(words));
+        text.set_valign(gtk::Align::Center);
+        face.append(&text);
+    }
+    face
 }
+
+/// How wide the media page is allowed to get, in interface units.
+///
+/// A ceiling rather than a shape. The reason to stop widening is that a line
+/// of prose gets too long to read and a row's value drifts too far from its
+/// label - both of which are about width alone, so nothing here consults the
+/// height. Below this the page simply fills the window at any proportion.
+///
+/// **1920 is not an arbitrary round number.** The automatic interface size is
+/// the display's height over 1080, so on any 16:9 screen shown fullscreen this
+/// works out to `1920 * height / 1080`, which is `height * 16/9` - the screen's
+/// own width. A television therefore fills edge to edge, which is what the
+/// page is composed for and what the 16:9 rule this replaced did directly.
+/// Anything wider than 16:9, or any window short of fullscreen, is where the
+/// ceiling starts doing something, and what is left over goes to the backdrop
+/// on either side.
+///
+/// Set at 1600 first, which quietly left a 1920px screen with 320px of
+/// backdrop down the sides at fullscreen - the one case that most wants
+/// filling.
+const PAGE_MAX_UNITS: f64 = 1920.0;
+
+/// Three lines of summary, in interface units, reserved whether the film has
+/// a summary or not.
+///
+/// The one fixed height on the page, and the only one that earns it: a plot
+/// runs from nothing to a paragraph while everything else here is one line or
+/// absent, so it is the only thing that would move the rows underneath as you
+/// step from one film to the next. A film with no summary gets the space as
+/// blank rather than getting it back.
+const PLOT_UNITS: f64 = 84.0;
 
 /// What stands in for a poster when there is none, which is most of the time.
 ///
@@ -8202,6 +8368,8 @@ fn video_file_image(size: f64, dark: bool) -> gtk::Image {
     image.set_pixel_size(size.round().max(1.0) as i32);
     image.set_halign(gtk::Align::Center);
     image.set_valign(gtk::Align::Center);
+    // Expands to centre itself in the frame. The request stops at the poster
+    // column, which sets its own `hexpand` explicitly.
     image.set_hexpand(true);
     image.set_vexpand(true);
     // Decoration beside a title that already names the file.
@@ -8822,9 +8990,38 @@ fn settle_on(row: &gtk::ListBoxRow) {
 fn after_layout(row: &gtk::ListBoxRow) {
     let row = row.clone();
     glib::idle_add_local_once(move || {
+        // Only if the focus is still in this list. The grab below is a second
+        // attempt, for the one case where the first one was too early to take
+        // - and a second attempt that runs unconditionally is a second attempt
+        // at stealing the focus back from wherever it has since gone.
+        //
+        // Arrowing up off the top row twice in quick succession did exactly
+        // that: the first press selected the top row and queued this, the
+        // second moved out to the Play button, and then this fired and pulled
+        // the focus back down to the row. Slowly it was fine, because the idle
+        // had already run before the second press arrived - which is the shape
+        // of every bug that only happens when you are not being careful.
+        if focus_is_outside(&row) {
+            return;
+        }
         row.grab_focus();
         show_row(&row);
     });
+}
+
+/// Whether the focus has left the list this row belongs to.
+///
+/// Nothing focused at all counts as inside: that is the state on the very
+/// first screen of a session, before anything has taken focus, and it is
+/// precisely when the deferred grab is needed.
+fn focus_is_outside(row: &gtk::ListBoxRow) -> bool {
+    let (Some(root), Some(list)) = (row.root(), row.parent()) else {
+        return false;
+    };
+    match root.focus() {
+        Some(focused) => focused != list && !focused.is_ancestor(&list),
+        None => false,
+    }
 }
 
 /// Moves the scroller so a row is on screen, a third of the way down rather
@@ -9325,21 +9522,59 @@ fn style_css(scale: f64, dark: bool) -> String {
             margin-top: {pad_v}px;
         }}
         .tp-button, .tp-play {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
-        /* The one action every screen is pointing at, in the same blue the
-           selected row is drawn in - so what the page is for and what is
-           currently chosen are visibly the same kind of thing. Literal, and
-           with the gradient cleared: the theme paints buttons with one, and a
-           flat color underneath it comes out as a tint of whatever the theme
-           wanted rather than as this color. */
+        /* The one action every screen is pointing at.
+
+           Deliberately *not* the blue the selected row is drawn in, which is
+           what it was first. Two things were wrong with that. A blue button
+           sitting directly above a blue selected row read as two halves of
+           one control rather than as an action and a choice; and when the
+           button took focus it had nothing left to say so with, because it
+           was already wearing the color that means this one is selected. A
+           different hue gives the focus ring something to be seen against,
+           and lets blue go on meaning one thing throughout.
+
+           Blue, and the clash is resolved from the other side: what changed
+           is the *focus* color, which is now a neutral rather than the same
+           accent. Blue means an action throughout, and white means where you
+           currently are. Literal, and with the
+           gradient cleared: the theme paints
+           buttons with one, and a flat color underneath it comes out as a tint
+           of whatever the theme wanted rather than as this color. */
         .tp-play {{
             font-weight: bold;
             background-image: none;
-            background-color: {highlight};
-            color: {on_highlight};
+            background-color: {play_fill};
+            color: {play_ink};
             border-color: transparent;
-            border-radius: {play_radius}px;
+            /* The same corner as a menu row, so the button and the rows it
+               sits over read as parts of one page rather than as two
+               different kinds of thing. */
+            border-radius: {radius}px;
         }}
-        .tp-play:hover {{ background-color: {highlight_hover}; }}
+        /* The mark on the play and restart buttons, half again the size of
+           the words beside it - a triangle at the cap height of the type next
+           to it reads as a bullet rather than as a play button. */
+        .tp-play-mark {{ font-size: {play_mark}px; }}
+        .tp-play:hover {{ background-color: {play_hover}; }}
+        /* Focus said loudly, because this is read from a distance and these
+           buttons no longer sit in a list whose highlight does the saying. A
+           ring around the button rather than a change of fill: the fill is
+           what the button *is*, and swapping one green for another is a
+           difference nobody can see across a room. */
+        /* Drawn as a shadow rather than an outline. `outline` is what a focus
+           ring is normally, and GTK parsed it here without complaint and drew
+           nothing - so it is not something to spend an afternoon on when a
+           spread shadow does the same job and demonstrably works. */
+        .tp-play:focus {{
+            box-shadow: 0 0 0 {focus_ring}px {focus};
+        }}
+        /* The corner marks had no focus state at all, which on a screen meant
+           to be driven by a gamepad from a sofa means arrowing onto one and
+           having nothing tell you. Same ring, drawn round the icon. */
+        .tp-gear:focus {{
+            background-color: rgba(128, 128, 128, 0.22);
+            box-shadow: 0 0 0 {focus_ring}px {focus};
+        }}
         /* Nothing to press it about: a disabled action keeps its shape and
            loses its insistence, rather than staying the loudest thing on a
            page it cannot act on. */
@@ -9375,7 +9610,16 @@ fn style_css(scale: f64, dark: bool) -> String {
             background-color: transparent;
             border-color: transparent;
             box-shadow: none;
+            /* Stated outright, and the same ink the fullscreen mark is drawn
+               in. The gear is a symbolic icon, which GTK recolors from the
+               foreground - including dimming it when the window loses focus -
+               while the mark beside it is a picture and does no such thing. So
+               the pair came apart every time the window went to the back: one
+               faded, the other did not. Fixing the color keeps them together,
+               and neither dims. */
+            color: {icon_ink};
         }}
+        .tp-gear:backdrop {{ color: {icon_ink}; }}
         .tp-gear:hover {{ background-color: rgba(128, 128, 128, 0.22); }}
         /* The frame the poster sits in, which is also what is seen when there
            is no poster. A flat panel a shade off the page rather than an
@@ -9397,6 +9641,10 @@ fn style_css(scale: f64, dark: bool) -> String {
            above the rows. The label's own dimming is set per-span in the
            markup, so this carries only the size. */
         .tp-fact {{ font-size: {small}px; }}
+        /* The name of a reading rather than the reading itself, dimmed so a
+           column of these scans as values with labels rather than as a block
+           of text of one weight. */
+        .tp-fact-name {{ opacity: 0.6; }}
         .tp-empty-prompt {{ font-size: {row}px; opacity: 0.7; }}
         /* Backing out, on every screen that offers it. A literal red for the
            same reason the highlight is literal: a theme name that does not
@@ -9415,7 +9663,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         /* Gray rather than a theme color, so it lifts off the background in
            both light and dark without needing two rules. */
         .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
-        .tp-menu:focus-within > row:selected:hover {{ background-color: {highlight}; }}
+        .tp-menu:focus-within > row:selected:hover {{ background-color: {focus}; }}
         .tp-menu > row.tp-section-start {{ margin-top: {section}px; }}
         /* Which row is in force, as opposed to which row the cursor is on.
            Two different facts that a list has only one highlight for, and
@@ -9443,12 +9691,12 @@ fn style_css(scale: f64, dark: bool) -> String {
            focus, so there is still exactly one thing highlighted on screen. */
         .tp-menu:focus-within > row:selected {{
             background-image: none;
-            background-color: {highlight};
-            color: #ffffff;
+            background-color: {focus};
+            color: {on_focus};
         }}
         .tp-menu:focus-within > row:selected .tp-value,
         .tp-menu:focus-within > row:selected .tp-chevron {{
-            color: #ffffff;
+            color: {on_focus};
             opacity: 0.85;
         }}
         /* A ring rather than a fill. Recoloring a focused button changes what
@@ -9457,7 +9705,7 @@ fn style_css(scale: f64, dark: bool) -> String {
            peers. An inset shadow rather than a border so nothing shifts, and
            rather than an outline so it follows the rounded corners. */
         button:focus {{
-            box-shadow: inset 0 0 0 {mark}px {highlight};
+            box-shadow: inset 0 0 0 {mark}px {focus};
         }}
         /* Chrome-less until pointed at, but the arrow itself stays visible
            so the way back is always apparent. */
@@ -9488,7 +9736,8 @@ fn style_css(scale: f64, dark: bool) -> String {
         }}
         .tp-back:focus {{
             background-image: none;
-            background-color: {highlight};
+            background-color: {focus};
+            color: {on_focus};
             opacity: 1;
         }}
         /* Laid over the picture, so it sets its own colors rather than
@@ -9769,7 +10018,13 @@ fn style_css(scale: f64, dark: bool) -> String {
         section = px(28.0),
         subrow = px(28.0),
         mark = px(4.0),
-        icon = px(ICON_PX),
+        // A shade larger than `ICON_PX`, which is what every other icon in
+        // the interface uses. The gear sits beside the fullscreen mark, and
+        // that mark is a picture with clear space drawn into it - so at the
+        // same nominal size the gear's own glyph came out visibly the smaller
+        // of the two. Matched by eye rather than by number, because what has
+        // to agree is the drawn marks and not the boxes around them.
+        icon = px(ICON_PX + 3.5),
         icon_main = px(38.4),
         crumb_pad = px(6.0),
         leading = px(38.0),
@@ -9789,10 +10044,29 @@ fn style_css(scale: f64, dark: bool) -> String {
         highlight = "#3584e4",
         film_title = px(40.0),
         play_icon = px(46.0),
-        play_radius = px(22.0),
-        // A step darker on hover, which is what the accent does everywhere
-        // else it is used as a fill.
-        highlight_hover = "#2b76d1",
+        play_mark = px(28.0),
+        focus_ring = px(3.0).max(2),
+        // The blue the play and restart buttons are drawn in - the same accent
+        // as everything else the application colors deliberately.
+        play_fill = if dark { "#3584e4" } else { "#1c71d8" },
+        play_hover = if dark { "#4a90e8" } else { "#1a63bd" },
+        play_ink = "#ffffff",
+        // What shows where you are: the selected row, and the ring round a
+        // focused button.
+        //
+        // **Not the accent, and that is the point.** With blue meaning both
+        // "this is the action" and "this is where you are", a blue button
+        // sitting above a blue selected row read as one continuous thing, and
+        // a focused button had nothing left to distinguish itself with. The
+        // highest-contrast neutral against the page says "here" without
+        // competing with any color that means something - white on the dark
+        // theme, and near-black on the light one, where white would be
+        // invisible against a near-white page.
+        focus = if dark { "#ffffff" } else { "#1c1c1c" },
+        on_focus = if dark { "#1c1c1c" } else { "#ffffff" },
+        // The ink both corner marks share. The fullscreen image is drawn in
+        // it as a picture; the gear is told to match.
+        icon_ink = if dark { "#eeeeec" } else { "#2e3436" },
         // The page's own ground. Matched to what each theme's window is
         // already drawn in, since the backdrop paints over the whole page and
         // a mismatch would show as a rectangle behind the content.
@@ -9877,49 +10151,6 @@ mod notices {
             .collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
         assert_eq!(texts[0], "one line and its continuation");
-    }
-}
-
-#[cfg(test)]
-mod media_page {
-    use super::heading_budget;
-
-    /// The ordinary case: a default window at ordinary sizes has room for
-    /// the whole description, which is what the comps show.
-    #[test]
-    fn a_normal_window_affords_everything() {
-        // Title, facts, summary and plot together cost about 180 units.
-        assert!(heading_budget(700.0, 1.0) >= 180.0);
-        assert!(heading_budget(875.0, 1.25) >= 180.0);
-        assert!(heading_budget(1080.0, 1.0) >= 180.0);
-    }
-
-    /// The case the plan left open, and the reason this exists: at 3x on a
-    /// 1440px display there is no room for prose, and the answer is to keep
-    /// the choosers rather than to keep the plot.
-    #[test]
-    fn a_large_interface_on_a_modest_screen_affords_nothing() {
-        assert_eq!(heading_budget(1325.0, 3.0), 0.0);
-        assert_eq!(heading_budget(1296.0, 3.0), 0.0);
-    }
-
-    /// Scale is what decides it, not pixels: the same window affords the
-    /// description at 1x and does not at 3x.
-    #[test]
-    fn the_same_window_says_different_things_at_different_scales() {
-        let window = 1325.0;
-        assert!(heading_budget(window, 1.0) > heading_budget(window, 2.0));
-        assert!(heading_budget(window, 2.0) >= heading_budget(window, 3.0));
-    }
-
-    /// Never negative, whatever it is asked. A budget below zero would be
-    /// compared against costs and behave, but a caller subtracting from it
-    /// would not, and a zero scale is what a half-initialised window reports.
-    #[test]
-    fn a_budget_is_never_negative() {
-        assert_eq!(heading_budget(0.0, 1.0), 0.0);
-        assert_eq!(heading_budget(100.0, 3.0), 0.0);
-        assert_eq!(heading_budget(0.0, 0.0), 0.0);
     }
 }
 

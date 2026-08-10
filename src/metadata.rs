@@ -116,15 +116,23 @@ impl Details {
         })
     }
 
-    /// The picture, as one line: "1080p (H.264)".
-    ///
-    /// The codec is cut back to its name. GStreamer describes a stream as
-    /// fully as it can - "H.264 (High Profile)", "H.265 (Main 10 Profile)" -
-    /// and the profile is a detail for someone debugging a decode rather than
-    /// for a line under a poster, where it doubles the length of the reading
-    /// to say something almost nobody is asking.
+    /// The picture's size, on its own: "1080p".
     pub fn resolution(&self) -> Option<String> {
-        let resolution = self.video.resolution()?;
+        self.video.resolution()
+    }
+
+    /// What encoded it, on its own: "H.264".
+    ///
+    /// Cut back to the name. GStreamer describes a stream as fully as it can -
+    /// "H.264 (High Profile)", "H.265 (Main 10 Profile)" - and the profile is
+    /// a detail for someone debugging a decode rather than for a line under a
+    /// poster, where it doubles the length of the reading to say something
+    /// almost nobody is asking.
+    ///
+    /// Reported separately from the resolution, and on its own line, because
+    /// the two together were the widest reading in a column that is only as
+    /// wide as the poster above it.
+    pub fn codec(&self) -> Option<String> {
         let codec = self
             .video
             .codec
@@ -132,10 +140,7 @@ impl Details {
             .next()
             .unwrap_or_default()
             .trim();
-        Some(match codec.is_empty() {
-            true => resolution,
-            false => format!("{resolution} ({codec})"),
-        })
+        (!codec.is_empty()).then(|| codec.to_string())
     }
 
     /// Frames per second, at the precision the number deserves.
@@ -186,12 +191,22 @@ pub fn resolve(source: &Source, media: &Media) -> Details {
 
     // The three sources in order, each one only consulted for what the one
     // before it left empty.
+    // The film's name if anything knows it, and otherwise the file's own -
+    // without its extension. ".mkv" is not part of what the film is called,
+    // and as the largest text on the page it read as though it were. The rest
+    // of the name is left exactly as it is: release tags and all, because a
+    // name half-cleaned by guesswork looks like metadata and is wrong often
+    // enough to be worse than the raw string. The row below still names the
+    // file in full.
     let title = first_of([
         sidecar.title.as_str(),
         media.tags.title.as_str(),
-        &source.label(),
+        &without_extension(&source.label()),
     ]);
-    let plot = first_of([sidecar.plot.as_str(), media.tags.description.as_str()]);
+    let plot = flowed(&first_of([
+        sidecar.plot.as_str(),
+        media.tags.description.as_str(),
+    ]));
 
     // The container measures the file in hand; the sidecar states what the
     // film runs to, which is the same thing only when the sidecar is about
@@ -216,6 +231,44 @@ pub fn resolve(source: &Source, media: &Media) -> Details {
         container: container(source),
         poster: path.and_then(|path| find_poster(path, &sidecar, media)),
         backdrop: path.and_then(|path| find_backdrop(path, &sidecar)),
+    }
+}
+
+/// Collapses a summary's own line breaks so it flows to whatever width it is
+/// given.
+///
+/// Sidecars wrap their prose. A `<plot>` is written as a paragraph in a text
+/// file and arrives carrying the newlines of that file, which a label renders
+/// as the line breaks they are - so the summary ignored the width available to
+/// it and broke wherever the scraper's editor happened to. It reads as a
+/// column of ragged text down the middle of the page and looks like a layout
+/// fault, which is exactly how this was found.
+///
+/// Every run of whitespace becomes one space, which is what flowing text means
+/// and what the three-line box on the page needs.
+fn flowed(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A filename without its extension, for use as a title.
+///
+/// Only a *plausible* extension is removed. A film's name can perfectly well
+/// end in a short word after a dot - and one that has been through a scene
+/// release ends in things like "1080p.DTS" - so this takes off a final piece
+/// only when it is short and entirely letters or digits, which is what a
+/// container extension looks like and what "2024" or "Part 2" does not.
+fn without_extension(name: &str) -> String {
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return name.to_string();
+    };
+    let looks_like_one = !extension.is_empty()
+        && extension.len() <= 5
+        && extension.chars().all(|c| c.is_ascii_alphanumeric())
+        // A trailing number is a part or a year far more often than a format.
+        && extension.chars().any(|c| c.is_ascii_alphabetic());
+    match looks_like_one && !stem.is_empty() {
+        true => stem.to_string(),
+        false => name.to_string(),
     }
 }
 
@@ -451,17 +504,21 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(d.resolution().as_deref(), Some("1080p (H.264)"));
+        // Two readings on two lines, never one.
+        assert_eq!(d.resolution().as_deref(), Some("1080p"));
+        assert_eq!(d.codec().as_deref(), Some("H.264"));
         // The profile is dropped: what the discoverer actually hands back for
         // the Blu-ray rips in the library here is "H.264 (High Profile)",
         // which is twice the length to say something nobody is asking.
         d.video.codec = "H.264 (High Profile)".to_string();
-        assert_eq!(d.resolution().as_deref(), Some("1080p (H.264)"));
+        assert_eq!(d.codec().as_deref(), Some("H.264"));
         d.video.codec = "H.265 (Main 10 Profile)".to_string();
-        assert_eq!(d.resolution().as_deref(), Some("1080p (H.265)"));
-        // A container that named a size and no codec still gets its line.
+        assert_eq!(d.codec().as_deref(), Some("H.265"));
+        // A container that named a size and no codec still gets its size, and
+        // simply has no codec line.
         d.video.codec = String::new();
         assert_eq!(d.resolution().as_deref(), Some("1080p"));
+        assert_eq!(d.codec(), None);
     }
 
     /// Sources are consulted in order and an empty one is passed over, which
@@ -471,6 +528,38 @@ mod tests {
         assert_eq!(first_of(["", "  ", "tags", "file"]), "tags");
         assert_eq!(first_of(["sidecar", "tags"]), "sidecar");
         assert_eq!(first_of(["", ""]), "");
+    }
+
+    /// The extension is not part of what a film is called, and as the largest
+    /// text on the page it read as though it were.
+    #[test]
+    fn a_filename_loses_its_extension_and_nothing_else() {
+        assert_eq!(without_extension("Alien (1979).avi"), "Alien (1979)");
+        assert_eq!(
+            without_extension("Supergirl (2026) Webdl-1080p.mp4"),
+            "Supergirl (2026) Webdl-1080p"
+        );
+        assert_eq!(
+            without_extension("The Quiet Harbor (2024).mkv"),
+            "The Quiet Harbor (2024)"
+        );
+    }
+
+    /// A dot in a name is not automatically an extension, and cutting at the
+    /// last one regardless would take words off the end of real titles.
+    #[test]
+    fn a_name_that_merely_contains_a_dot_is_left_alone() {
+        assert_eq!(without_extension("Dr. Strangelove"), "Dr. Strangelove");
+        // Ends in digits: a part or a year far more often than a format.
+        assert_eq!(without_extension("Blade Runner 2049"), "Blade Runner 2049");
+        assert_eq!(
+            without_extension("Mission Impossible.2"),
+            "Mission Impossible.2"
+        );
+        // Too long to be a container extension.
+        assert_eq!(without_extension("A Film.Directors"), "A Film.Directors");
+        assert_eq!(without_extension("noextension"), "noextension");
+        assert_eq!(without_extension(""), "");
     }
 
     /// A scraper's URL is not artwork: this never fetches anything.
