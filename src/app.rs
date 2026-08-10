@@ -2707,7 +2707,8 @@ impl App {
                 None => "Play".to_string(),
             },
         );
-        play.add_css_class("tp-play");
+        play.add_css_class("tp-button");
+        play.add_css_class("tp-action");
         play.set_sensitive(can_play);
         plays.append(&play);
         play_buttons.push(play);
@@ -2715,8 +2716,9 @@ impl App {
         if resume_at.is_some() {
             let restart = gtk::Button::new();
             restart.set_child(Some(&marked_face(restart_image(scale), "")));
-            restart.add_css_class("tp-play");
-            restart.add_css_class("tp-play-icon");
+            restart.add_css_class("tp-button");
+            restart.add_css_class("tp-action");
+            restart.add_css_class("tp-action-icon");
             restart.set_sensitive(can_play);
             // The word is gone from the face, so it has to be somewhere: a
             // tooltip for a pointer, and a name for a screen reader, which
@@ -3273,9 +3275,11 @@ impl App {
         // it: with one file to choose and two ways to choose it, a step in
         // between is a step for nothing.
         let browse = gtk::Button::with_label("Browse");
-        browse.add_css_class("tp-play");
+        browse.add_css_class("tp-button");
+        browse.add_css_class("tp-action");
         let address = gtk::Button::with_label("Enter URL");
-        address.add_css_class("tp-play");
+        address.add_css_class("tp-button");
+        address.add_css_class("tp-action");
         buttons.append(&browse);
         buttons.append(&address);
         middle.append(&buttons);
@@ -4503,10 +4507,9 @@ impl App {
             .build();
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
         let open = gtk::Button::with_label("Open");
         open.add_css_class("tp-button");
-        open.add_css_class("tp-play");
+        open.add_css_class("tp-action");
         // Nothing to open until there is something in the field, and an empty
         // one would only fail slowly against a source that does not exist.
         open.set_sensitive(false);
@@ -4636,7 +4639,6 @@ impl App {
 
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
         cancel.set_halign(gtk::Align::Center);
         page.append(&cancel);
         {
@@ -4848,7 +4850,6 @@ impl App {
 
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
-        cancel.add_css_class("tp-cancel");
 
         BrowserPage {
             page,
@@ -5299,7 +5300,7 @@ impl App {
         cancel.add_css_class("tp-button");
         let next = gtk::Button::with_label("Next");
         next.add_css_class("tp-button");
-        next.add_css_class("tp-play");
+        next.add_css_class("tp-action");
         buttons.append(&cancel);
         buttons.append(&next);
         page.append(&buttons);
@@ -5507,15 +5508,28 @@ impl App {
         // Offered only where it could help. Trying another reference track is
         // the answer when the one measured against was a dub and the separate
         // recording was made from the original.
-        let again = gtk::Button::with_label("Try Another Track");
+        let again = gtk::Button::with_label("Try another reference track");
         again.add_css_class("tp-button");
+        again.add_css_class("tp-action");
+
+        // What the second button means depends on what happened. Where the
+        // measurement worked there is nothing to do but accept it; where it
+        // did not, the useful thing is to measure again against a different
+        // track, and this button becomes the way out beside it.
+        let done = gtk::Button::with_label(match retry {
+            true => "Cancel",
+            false => "Finish",
+        });
+        done.add_css_class("tp-button");
+        if !retry {
+            done.add_css_class("tp-action");
+        }
+        // Cancel first, then the action, which is the order every other pair
+        // in the application sits in.
+        buttons.append(&done);
         if retry {
             buttons.append(&again);
         }
-        let done = gtk::Button::with_label("Done");
-        done.add_css_class("tp-button");
-        done.add_css_class("tp-play");
-        buttons.append(&done);
         page.append(&buttons);
 
         {
@@ -5534,14 +5548,20 @@ impl App {
         }
 
         self.remember_origin();
+        // In the order they now sit, so Tab walks the row left to right.
         self.set_nav(None, &[], &[]);
+        self.add_nav_stop(&done);
         if retry {
             self.add_nav_stop(&again);
         }
-        self.add_nav_stop(&done);
         *self.screen.borrow_mut() = Screen::AlignResult;
         self.window.set_child(Some(&self.modal(&page)));
-        done.grab_focus();
+        // Whichever button is the action here: measuring again where that is
+        // still worth doing, and accepting the answer where it is not.
+        match retry {
+            true => again.grab_focus(),
+            false => done.grab_focus(),
+        };
     }
 
     /// Writes an alignment down and puts it into force.
@@ -7009,6 +7029,7 @@ impl App {
 
         let choose = gtk::Button::with_label("Choose");
         choose.add_css_class("tp-button");
+        choose.add_css_class("tp-action");
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(24)
@@ -7390,6 +7411,10 @@ impl App {
 
         let ok = gtk::Button::with_label("OK");
         ok.add_css_class("tp-button");
+        // An action, unlike its twin on the error screen: this screen is the
+        // end of a wizard that has just done something, and OK is the way on
+        // from it rather than a way to dismiss bad news.
+        ok.add_css_class("tp-action");
         ok.set_halign(gtk::Align::Center);
         page.append(&ok);
         {
@@ -7460,19 +7485,19 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        // The red is a warning, so it belongs on whichever button does the
-        // damage. Backing out of something destructive is the safe choice and
-        // should not be the one painted like a hazard.
+        // Backing out is never the hazard, so Cancel is never the red one.
+        // It used to be: red was put on whichever button was left over, so a
+        // confirmation of something harmless painted the way out as the
+        // dangerous choice.
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
         let destructive = confirm.destructive;
         let confirm = gtk::Button::with_label(confirm.label);
         confirm.add_css_class("tp-button");
-        if destructive {
-            confirm.add_css_class("tp-cancel");
-        } else {
-            cancel.add_css_class("tp-cancel");
-        }
+        confirm.add_css_class(match destructive {
+            true => "tp-danger",
+            false => "tp-action",
+        });
         row.append(&cancel);
         row.append(&confirm);
         page.append(&row);
@@ -8114,7 +8139,7 @@ impl App {
         cancel.add_css_class("tp-button");
         let quit = gtk::Button::with_label("Close");
         quit.add_css_class("tp-button");
-        quit.add_css_class("tp-cancel");
+        quit.add_css_class("tp-danger");
         buttons.append(&cancel);
         buttons.append(&quit);
         page.append(&buttons);
@@ -9621,7 +9646,14 @@ fn style_css(scale: f64, dark: bool) -> String {
             font-weight: bold;
             margin-top: {pad_v}px;
         }}
-        .tp-button, .tp-play {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
+        /* Every button in the interface: one size, one padding, one corner.
+           The corner matches a menu row's, so a button and the rows it sits
+           over read as parts of one page. */
+        .tp-button {{
+            font-size: {row}px;
+            padding: {pad_v}px {pad_h}px;
+            border-radius: {radius}px;
+        }}
         /* The one action every screen is pointing at.
 
            Deliberately *not* the blue the selected row is drawn in, which is
@@ -9640,18 +9672,14 @@ fn style_css(scale: f64, dark: bool) -> String {
            gradient cleared: the theme paints
            buttons with one, and a flat color underneath it comes out as a tint
            of whatever the theme wanted rather than as this color. */
-        .tp-play {{
+        .tp-action {{
             font-weight: bold;
             background-image: none;
             background-color: {play_fill};
             color: {play_ink};
             border-color: transparent;
-            /* The same corner as a menu row, so the button and the rows it
-               sits over read as parts of one page rather than as two
-               different kinds of thing. */
-            border-radius: {radius}px;
         }}
-        .tp-play:hover {{ background-color: {play_hover}; }}
+        .tp-action:hover {{ background-color: {play_hover}; }}
         /* Focus said loudly, because this is read from a distance and these
            buttons no longer sit in a list whose highlight does the saying. A
            ring around the button rather than a change of fill: the fill is
@@ -9661,9 +9689,7 @@ fn style_css(scale: f64, dark: bool) -> String {
            ring is normally, and GTK parsed it here without complaint and drew
            nothing - so it is not something to spend an afternoon on when a
            spread shadow does the same job and demonstrably works. */
-        .tp-play:focus {{
-            box-shadow: 0 0 0 {focus_ring}px {focus};
-        }}
+
         /* The corner marks had no focus state at all, which on a screen meant
            to be driven by a gamepad from a sofa means arrowing onto one and
            having nothing tell you. Same ring, drawn round the icon. */
@@ -9674,7 +9700,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         /* Nothing to press it about: a disabled action keeps its shape and
            loses its insistence, rather than staying the loudest thing on a
            page it cannot act on. */
-        .tp-play:disabled {{
+        .tp-action:disabled {{
             background-color: {trough};
             color: inherit;
             opacity: 0.5;
@@ -9682,7 +9708,7 @@ fn style_css(scale: f64, dark: bool) -> String {
         /* Restart, once Resume has taken the words. Square rather than merely
            narrow, so it reads as the mark's button rather than as a button
            whose label went missing. */
-        .tp-play-icon {{ padding: {pad_v}px {pad_v}px; min-width: {play_icon}px; }}
+        .tp-action-icon {{ padding: {pad_v}px {pad_v}px; min-width: {play_icon}px; }}
         /* The media page.
 
            The ground the whole page is drawn on, and - through `color` - the
@@ -9748,12 +9774,12 @@ fn style_css(scale: f64, dark: bool) -> String {
         /* Backing out, on every screen that offers it. A literal red for the
            same reason the highlight is literal: a theme name that does not
            exist makes the whole declaration fail to parse. */
-        .tp-cancel {{
+        .tp-danger {{
             background-image: none;
             background-color: #c01c28;
             color: #ffffff;
         }}
-        .tp-cancel:hover {{ background-color: #a51d2d; }}
+        .tp-danger:hover {{ background-color: #a51d2d; }}
         /* Beside a main action rather than being one: smaller type and far
            less padding than the buttons it sits with, so it reads as a way to
            reach something else rather than as the thing to press. */
@@ -9804,7 +9830,7 @@ fn style_css(scale: f64, dark: bool) -> String {
            peers. An inset shadow rather than a border so nothing shifts, and
            rather than an outline so it follows the rounded corners. */
         button:focus {{
-            box-shadow: inset 0 0 0 {mark}px {focus};
+            box-shadow: 0 0 0 {focus_ring}px {focus};
         }}
         /* Chrome-less until pointed at, but the arrow itself stays visible
            so the way back is always apparent. */
@@ -9833,12 +9859,7 @@ fn style_css(scale: f64, dark: bool) -> String {
             background-color: rgba(128, 128, 128, 0.25);
             opacity: 1;
         }}
-        .tp-back:focus {{
-            background-image: none;
-            background-color: {focus};
-            color: {on_focus};
-            opacity: 1;
-        }}
+        .tp-back:focus {{ opacity: 1; }}
         /* Laid over the picture, so it sets its own colors rather than
            inheriting theme ones that may be light. */
         .tp-controls {{
