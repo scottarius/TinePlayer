@@ -131,6 +131,11 @@ pub struct SubtitleTrack {
     pub index: u32,
     pub language: String,
     pub title: String,
+    /// Set only from a sidecar, which is the one place a forced flag can be
+    /// read from: GStreamer surfaces none. False means "nothing said so",
+    /// not "not forced" - the title is still consulted, in
+    /// [`crate::subtitles::Subtitle::is_forced`].
+    pub forced: bool,
 }
 
 /// What the file contains, from a single pass. Probing is not free, and the
@@ -198,6 +203,9 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
                 .tags()
                 .and_then(|tags| tags.get::<gst::tags::Title>().map(|t| t.get().to_string()))
                 .unwrap_or_default(),
+            // Nothing in the pipeline can say. A sidecar can, and does so
+            // below once the whole list is known.
+            forced: false,
         });
     }
 
@@ -225,11 +233,21 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
         });
     }
 
-    Ok(Media {
+    let mut media = Media {
         audio: tracks,
         subtitles,
         duration_ns: info.duration().map(|d| d.nseconds()).unwrap_or(0),
-    })
+    };
+
+    // What a media library already worked out about this file, where one has
+    // been kept beside it. Only ever adds to what the pipeline found - a
+    // forced flag it cannot see, and a language an MP4 often does not carry -
+    // and only for a local file, since a sidecar is something on disk.
+    if let Some(sidecar) = source.local().and_then(crate::nfo::read) {
+        sidecar.apply(&mut media);
+    }
+
+    Ok(media)
 }
 
 #[cfg(test)]

@@ -124,8 +124,8 @@ impl Playback {
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         source: &Source,
-        primary_track: Option<u32>,
-        secondary_track: Option<u32>,
+        primary_audio: Option<&crate::pipeline::AudioSource>,
+        secondary_audio: Option<&crate::pipeline::AudioSource>,
         subtitle: Option<&crate::subtitles::SubtitleChoice>,
         config: &Config,
         resume_ns: Option<u64>,
@@ -133,7 +133,7 @@ impl Playback {
         kodi_file: String,
         on_ended: impl Fn(Ended) + 'static,
     ) -> Result<Rc<Self>, String> {
-        let pipeline = build_pipeline(source, primary_track, secondary_track, subtitle, config)?;
+        let pipeline = build_pipeline(source, primary_audio, secondary_audio, subtitle, config)?;
 
         // gtk4paintablesink renders into a GdkPaintable rather than creating
         // its own window; handing that to a gtk::Picture is what embeds the
@@ -509,6 +509,33 @@ fn seek_workaround_applies(major: u32, minor: u32) -> bool {
 }
 
 impl Playback {
+    /// Hands a seek straight to each external audio file's own source.
+    ///
+    /// Only needed alongside the Linux workaround above, which is the one case
+    /// where the ordinary route - upstream from the sinks - is closed. The
+    /// same flags as the pipeline seek, so the two branches land in the same
+    /// place by the same rules rather than nearly.
+    fn seek_external_audio(&self, target: gst::ClockTime) {
+        for index in 0.. {
+            let name = format!("{}{index}", crate::pipeline::EXTERNAL_AUDIO_DECODER);
+            let Some(source) = self.pipeline.by_name(&name) else {
+                // Numbered from zero without gaps, so the first miss is the end.
+                break;
+            };
+            let seek = gst::event::Seek::new(
+                1.0,
+                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                gst::SeekType::Set,
+                target,
+                gst::SeekType::None,
+                gst::ClockTime::NONE,
+            );
+            if !source.send_event(seek) {
+                eprintln!("Failed to seek the external audio source {name}");
+            }
+        }
+    }
+
     fn run_seek(&self) {
         let Some(target) = self.seek_target.get() else {
             return;
@@ -538,6 +565,15 @@ impl Playback {
         let result = self
             .pipeline
             .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target);
+
+        // Unconditional, not part of the workaround above. Measured on the Pi
+        // on 2026-08-10: an external file goes silent on the first seek with
+        // the workaround on *and* off, so the seek is not reaching its source
+        // by the ordinary upstream route either way. An embedded track is
+        // unaffected because it shares the video's source, which the seek does
+        // reach. Seeking the same target twice is harmless - both branches are
+        // being sent to the same place.
+        self.seek_external_audio(target);
 
         if workaround {
             for role in ["primary", "secondary"] {

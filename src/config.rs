@@ -487,6 +487,15 @@ pub struct Resume {
     /// recorded, or a source that could not say how long it was.
     #[serde(default)]
     pub duration_ns: u64,
+    /// What aligning this video against a separate audio file worked out, in
+    /// milliseconds, keyed by that file's path.
+    ///
+    /// Kept per pairing rather than per video, because it describes the two
+    /// files together: the same film aligns differently against a different
+    /// description track. Measuring costs seconds of decoding, so it is
+    /// measured once and remembered, and the viewer can ask for it again.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub alignments: std::collections::BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -497,6 +506,16 @@ pub struct TrackChoice {
     /// again, or the same as one of them.
     #[serde(default)]
     pub subtitle: Option<crate::subtitles::SubtitleChoice>,
+    /// A separate audio file chosen for an output, which stands in place of
+    /// any track inside the video.
+    ///
+    /// Stored beside the track rather than instead of it, so clearing the file
+    /// falls back to whatever was chosen before it. Absent in every entry
+    /// written before this existed, which `serde(default)` reads as none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_file: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_file: Option<std::path::PathBuf>,
 }
 
 impl Resume {
@@ -611,17 +630,42 @@ pub fn clear_all_resume() -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| format!("Failed to clear {}: {e}", path.display()))
 }
 
+/// What was worked out about this video and that audio file, if anything.
+pub fn load_alignment(key: &str, audio: &Path) -> Option<f64> {
+    load_resume(key)?
+        .alignments
+        .get(&audio.to_string_lossy().to_string())
+        .copied()
+}
+
+/// Remembers an alignment, or forgets it when asked to align again.
+pub fn save_alignment(key: &str, audio: &Path, millis: Option<f64>) {
+    let audio = audio.to_string_lossy().to_string();
+    update(key, |entry| match millis {
+        Some(millis) => {
+            entry.alignments.insert(audio.clone(), millis);
+        }
+        None => {
+            entry.alignments.remove(&audio);
+        }
+    });
+}
+
 pub fn save_tracks(
     key: &str,
     primary: Option<u32>,
     secondary: Option<u32>,
     subtitle: Option<crate::subtitles::SubtitleChoice>,
+    primary_file: Option<std::path::PathBuf>,
+    secondary_file: Option<std::path::PathBuf>,
 ) {
     update(key, |entry| {
         entry.tracks = Some(TrackChoice {
             primary,
             secondary,
             subtitle,
+            primary_file,
+            secondary_file,
         });
     });
 }

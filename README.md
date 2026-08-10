@@ -84,6 +84,8 @@ from a single pipeline, staying in sync because it is all one clock.
 - Selects tracks and subtitles automatically from your preferred languages
 - Splits any pair of tracks a file carries, including audio description
   alongside the ordinary soundtrack
+- Plays a separate audio file on an output instead of one embedded in the video,
+  and can sync it up with the picture automatically
 - Independent volume for each output, so a described or second-language track
   can sit at a different level from the room's soundtrack
 - Screen reader support throughout, with every menu, list and playback control
@@ -97,7 +99,9 @@ from a single pipeline, staying in sync because it is all one clock.
 
 - A display and two or more connected audio output devices. Any combination
   works: speakers and headphones, a USB headset, an external DAC, and so on.
-- A video file containing two or more audio tracks.
+- A video file containing two or more audio tracks, or one video plus a
+  [separate audio file](docs/usage.md#separate-audio-files) for the second
+  output.
 
 > [!NOTE]
 > Bluetooth audio devices may add 100-200ms of latency and result in the audio

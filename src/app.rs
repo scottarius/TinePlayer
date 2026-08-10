@@ -274,14 +274,26 @@ const SETTINGS_SUBROWS: [i32; 10] = [
     ROW_SUBTITLE_FONT,
 ];
 
+/// How wide the alignment panel is, measured in characters of its own body
+/// text.
+///
+/// Both the floor and the ceiling, so the three steps are one panel changing
+/// what it says rather than three differently sized windows. It has to sit on
+/// the text rather than on the container, because GTK offers no maximum width
+/// on a box - and the text and the track names are the only things in the
+/// panel that could push it wider anyway. Around 74 characters is also about
+/// as long a line as is comfortable to read.
+const ALIGN_PANEL_CHARS: i32 = 74;
+
+/// A floor in unscaled pixels as well, for the case the character measure
+/// cannot cover: a narrow font would otherwise draw a panel too cramped to
+/// read from across a room, which is the distance this is built for.
+const ALIGN_PANEL_MIN: f64 = 520.0;
+
 /// Font families offered in the menu. Generic names Pango always resolves
 /// rather than an enumeration of everything installed, which would run to
 /// hundreds of rows. `subtitle_font` in the config takes any description.
 const SUBTITLE_FONTS: [&str; 5] = ["Sans Bold", "Sans", "Serif Bold", "Serif", "Monospace Bold"];
-
-/// Menu rows that begin a new group: the primary pair and the secondary
-/// pair each get separating space above them.
-const SECTION_STARTS: [i32; 3] = [1, 3, 5];
 
 /// How long scrubbing must be still before the seek is actually performed.
 /// Short enough to feel like it happens on release, long enough to bridge the
@@ -306,6 +318,14 @@ enum Screen {
     VideoSource,
     Opening,
     Chooser,
+    /// The three steps of aligning an audio file, in the one panel that
+    /// carries them: which track to measure against, the measuring, and what
+    /// it found. Separate screens because backing out means different things
+    /// at each - nothing has been decided at the first, a thread is running at
+    /// the second, and the third is only a report.
+    AlignChoose,
+    AlignProgress,
+    AlignResult,
     Confirm,
     About,
     Notices,
@@ -324,6 +344,35 @@ enum Screen {
     ConfirmQuit,
     Error,
     Playing,
+}
+
+/// Which output a choice is about, where the two are otherwise handled alike.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Primary,
+    Secondary,
+}
+
+/// What choosing a row on the main menu does.
+///
+/// Carried beside each row rather than worked out from its position: the
+/// alignment rows come and go with the audio files chosen, so a fixed index
+/// would name a different row depending on what is set.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuAction {
+    Video,
+    Device(Role),
+    Track(Role),
+    Align(Role),
+    Subtitles,
+}
+
+/// What the alignment thread has to say for itself, on its way back to the
+/// main thread.
+enum Step {
+    /// How many of the three windows have finished.
+    Window(usize),
+    Done(crate::align::Verdict),
 }
 
 /// Choices given on the command line, which skip the menu entirely.
@@ -385,6 +434,27 @@ pub struct App {
     tracks: RefCell<Vec<AudioTrack>>,
     primary_track: RefCell<Option<u32>>,
     secondary_track: RefCell<Option<u32>>,
+    /// A separate audio file feeding an output, in place of any track inside
+    /// the video. Takes precedence over that output's track, which is left
+    /// alone so it comes back if the file is cleared.
+    primary_file: RefCell<Option<Source>>,
+    secondary_file: RefCell<Option<Source>>,
+    /// Which output the browser is picking a soundtrack for, or `None` when it
+    /// is picking a video. Held here because stepping into a folder re-enters
+    /// the browser and would otherwise lose the errand it was opened on.
+    browse_audio_for: Cell<Option<Role>>,
+    /// What alignment worked out for each output, in milliseconds, ready to
+    /// add to whatever the viewer has set. Already negated: alignment reports
+    /// how late the audio runs, and a sink is held back by a negative offset.
+    ///
+    /// Zero when nothing has been measured, which is most of the time - so the
+    /// arithmetic below is the same whether there is a baseline or not.
+    primary_baseline: Cell<f64>,
+    secondary_baseline: Cell<f64>,
+    /// The video's running time in seconds, which alignment needs to place its
+    /// three windows across it. Zero when the source could not say, which some
+    /// live streams cannot.
+    duration_s: Cell<f64>,
     /// Everything on offer for the current file: streams inside it, then
     /// subtitle files sitting beside it.
     subtitle_options: RefCell<Vec<Subtitle>>,
@@ -590,6 +660,12 @@ impl App {
             update_badges: RefCell::new(Vec::new()),
             file: RefCell::new(None),
             tracks: RefCell::new(Vec::new()),
+            primary_file: RefCell::new(None),
+            secondary_file: RefCell::new(None),
+            browse_audio_for: Cell::new(None),
+            primary_baseline: Cell::new(0.0),
+            secondary_baseline: Cell::new(0.0),
+            duration_s: Cell::new(0.0),
             primary_track: RefCell::new(None),
             secondary_track: RefCell::new(None),
             subtitle_options: RefCell::new(Vec::new()),
@@ -746,11 +822,26 @@ impl App {
                     }
                 }
             };
+            // A spec naming a file that exists is an audio file to play on
+            // that output, rather than anything to look for inside the video.
+            // Checked before the track specs because none of them can be a
+            // path: a number, a language code and `ad` are all short words,
+            // and a file has to be there on disk to be taken for one.
+            let as_file = |spec: &str| {
+                let source = Source::parse(spec);
+                source.is_available().then_some(source)
+            };
             if let Some(spec) = preset.primary.as_deref() {
-                *app.primary_track.borrow_mut() = resolve(spec);
+                match as_file(spec) {
+                    Some(file) => *app.primary_file.borrow_mut() = Some(file),
+                    None => *app.primary_track.borrow_mut() = resolve(spec),
+                }
             }
             if let Some(spec) = preset.secondary.as_deref() {
-                *app.secondary_track.borrow_mut() = resolve(spec);
+                match as_file(spec) {
+                    Some(file) => *app.secondary_file.borrow_mut() = Some(file),
+                    None => *app.secondary_track.borrow_mut() = resolve(spec),
+                }
             }
 
             // Only touched when asked for, so a video's remembered
@@ -783,6 +874,10 @@ impl App {
                     Err(e) => eprintln!("{e}"),
                 }
             }
+            // An audio file named on the command line arrives after the media
+            // was applied, so whatever alignment was measured for that pairing
+            // has to be read again now that the pairing is known.
+            app.load_baselines();
         }
 
         match (&unopenable, &config_problem) {
@@ -1299,7 +1394,14 @@ impl App {
             // not be opened.
             Screen::Error if self.error_is_fatal.get() => self.window.close(),
             Screen::Opening => self.show_paste_uri(),
-            Screen::PasteUri | Screen::Browser => self.return_to_origin(),
+            // Leaving the middle step abandons the measurement rather than
+            // stepping back into the track list: the thread cannot be stopped,
+            // but its answer is dropped, and nothing has been written.
+            Screen::PasteUri
+            | Screen::Browser
+            | Screen::AlignChoose
+            | Screen::AlignProgress
+            | Screen::AlignResult => self.return_to_origin(),
             Screen::VideoSource | Screen::Settings | Screen::Error | Screen::ConfirmQuit => {
                 self.show_menu()
             }
@@ -2001,9 +2103,7 @@ impl App {
         }
         // Heard straight away, like the delay itself: the point of the switch
         // is comparing with and without while something is playing.
-        if let Some(playback) = self.playback.borrow().as_ref() {
-            playback.set_offset_ms(role, self.config.borrow().applied_offset_ms(role));
-        }
+        self.push_offset_live(role);
         scale.set_sensitive(on);
         value.set_text(&offset_label(self.config.borrow().applied_offset_ms(role)));
         value.set_sensitive(on);
@@ -2085,10 +2185,10 @@ impl App {
         // applies at once, a drag waits to be let go.
         // Heard straight away when a film is playing, so a delay can be placed
         // against the picture rather than guessed at and checked later.
-        if let Slider::Offset(role) = kind
-            && let Some(playback) = self.playback.borrow().as_ref()
-        {
-            playback.set_offset_ms(role, moved);
+        // The configuration above already holds `moved`, so this reads the
+        // same number back rather than adding the baseline to it by hand.
+        if let Slider::Offset(role) = kind {
+            self.push_offset_live(role);
         }
         value.set_text(&match kind {
             Slider::Volume(_) => volume_label(moved / 100.0, false),
@@ -2209,6 +2309,20 @@ impl App {
         self.file.borrow().as_ref().map(Source::key)
     }
 
+    /// The same key for a video that is not the current one yet.
+    ///
+    /// `apply_media` needs this: it reads what was remembered about the file it
+    /// is loading, and `self.file` does not become that file until the end of
+    /// it. Asking `storage_key` there returns the *previous* video's key - or
+    /// none at all on the first file of a session, which is why remembered
+    /// choices were quietly ignored at startup.
+    fn storage_key_for(&self, source: &Source) -> String {
+        match self.kodi_item.borrow().as_ref() {
+            Some(item) => item.key(),
+            None => source.key(),
+        }
+    }
+
     /// What to call the current file on screen: Kodi's library title when it
     /// has one, otherwise the file name.
     fn file_label(&self) -> Option<String> {
@@ -2238,17 +2352,6 @@ impl App {
         let config = self.config.borrow();
         let tracks = self.tracks.borrow();
 
-        let describe_track = |chosen: &Option<u32>| -> String {
-            match chosen {
-                None => "None".to_string(),
-                Some(index) => tracks
-                    .iter()
-                    .find(|t| t.index == *index)
-                    .map(describe_audio_track)
-                    .unwrap_or_else(|| "None".to_string()),
-            }
-        };
-
         // Asked before the rows are built, not after: this is what fetches
         // Kodi's title as well as its resume point, and a row built ahead of
         // it would show the file name until something rebuilt the screen.
@@ -2256,7 +2359,7 @@ impl App {
 
         let has_file = file.is_some();
         let has_secondary = config.secondary_sink.is_some();
-        let mut rows: Vec<(String, String, bool)> = vec![
+        let mut rows: Vec<(String, String, bool, MenuAction)> = vec![
             (
                 "Video".to_string(),
                 self.file_label()
@@ -2264,6 +2367,7 @@ impl App {
                 // Something else chose the video, so there is nothing to pick
                 // here. The row stays, to name what is about to play.
                 !self.external,
+                MenuAction::Video,
             ),
             (
                 "Primary Audio Device".to_string(),
@@ -2272,58 +2376,77 @@ impl App {
                     .clone()
                     .unwrap_or_else(|| "Not set".to_string()),
                 true,
+                MenuAction::Device(Role::Primary),
             ),
             (
                 "Primary Audio Track".to_string(),
                 if has_file {
-                    describe_track(&self.primary_track.borrow())
+                    self.describe_audio(Role::Primary)
                 } else {
                     "—".to_string()
                 },
                 has_file,
-            ),
-            (
-                "Secondary Audio Device".to_string(),
-                config
-                    .secondary_sink
-                    .clone()
-                    .unwrap_or_else(|| "None".to_string()),
-                true,
-            ),
-            (
-                "Secondary Audio Track".to_string(),
-                if has_file && has_secondary {
-                    describe_track(&self.secondary_track.borrow())
-                } else {
-                    "—".to_string()
-                },
-                has_file && has_secondary,
+                MenuAction::Track(Role::Primary),
             ),
         ];
+        rows.extend(self.alignment_row(Role::Primary));
+        rows.push((
+            "Secondary Audio Device".to_string(),
+            config
+                .secondary_sink
+                .clone()
+                .unwrap_or_else(|| "None".to_string()),
+            true,
+            MenuAction::Device(Role::Secondary),
+        ));
+        rows.push((
+            "Secondary Audio Track".to_string(),
+            if has_file && has_secondary {
+                self.describe_audio(Role::Secondary)
+            } else {
+                "—".to_string()
+            },
+            has_file && has_secondary,
+            MenuAction::Track(Role::Secondary),
+        ));
+        if has_secondary {
+            rows.extend(self.alignment_row(Role::Secondary));
+        }
         // Its own section rather than sitting with the audio pair: the
         // subtitle language is an independent choice, and may be a third
         // language again or a repeat of either soundtrack.
-        rows.push(("Subtitles".to_string(), self.describe_subtitle(), has_file));
+        rows.push((
+            "Subtitles".to_string(),
+            self.describe_subtitle(),
+            has_file,
+            MenuAction::Subtitles,
+        ));
 
         let can_play = has_file && config.primary_sink.is_some();
         drop(tracks);
         drop(config);
 
-        for (label, value, enabled) in &rows {
+        for (index, (label, value, enabled, action)) in rows.iter().enumerate() {
             append_named(
                 &list,
                 &menu_row(label, value, *enabled),
                 &row_name(label, value),
             );
-        }
-
-        // Extra space above the rows that begin a group, so the primary and
-        // secondary pairs read as sections. Done with a margin on the row
-        // rather than by inserting separator rows, which would be
-        // focusable and interrupt keyboard navigation.
-        for index in SECTION_STARTS {
-            if let Some(row) = list.row_at_index(index) {
-                row.add_css_class("tp-section-start");
+            let Some(row) = list.row_at_index(index as i32) else {
+                continue;
+            };
+            match action {
+                // Extra space above the rows that begin a group, so the
+                // primary and secondary pairs read as sections. Done with a
+                // margin on the row rather than by inserting separator rows,
+                // which would be focusable and interrupt keyboard navigation.
+                MenuAction::Device(_) | MenuAction::Subtitles => {
+                    row.add_css_class("tp-section-start")
+                }
+                // Indented, because aligning belongs to the audio file named
+                // in the row above rather than to the output.
+                MenuAction::Align(_) => row.add_css_class("tp-subrow"),
+                _ => {}
             }
         }
 
@@ -2439,6 +2562,7 @@ impl App {
 
         {
             let app = self.clone();
+            let actions: Vec<MenuAction> = rows.iter().map(|(_, _, _, action)| *action).collect();
             list.connect_row_activated(move |_, row| {
                 // A row drawn insensitive is stating something rather than
                 // offering it - the video row under Kodi, or a track row with
@@ -2454,14 +2578,23 @@ impl App {
                 }
                 app.sounds.borrow().click();
                 *app.menu_row.borrow_mut() = row.index();
-                match row.index() {
-                    0 => app.choose_video(),
-                    1 => app.show_chooser(Setting::PrimaryDevice),
-                    2 => app.show_chooser(Setting::PrimaryTrack),
-                    3 => app.show_chooser(Setting::SecondaryDevice),
-                    4 => app.show_chooser(Setting::SecondaryTrack),
-                    5 => app.show_chooser(Setting::Subtitles),
-                    _ => {}
+                match actions.get(row.index() as usize) {
+                    Some(MenuAction::Video) => app.choose_video(),
+                    Some(MenuAction::Device(Role::Primary)) => {
+                        app.show_chooser(Setting::PrimaryDevice)
+                    }
+                    Some(MenuAction::Track(Role::Primary)) => {
+                        app.show_chooser(Setting::PrimaryTrack)
+                    }
+                    Some(MenuAction::Device(Role::Secondary)) => {
+                        app.show_chooser(Setting::SecondaryDevice)
+                    }
+                    Some(MenuAction::Track(Role::Secondary)) => {
+                        app.show_chooser(Setting::SecondaryTrack)
+                    }
+                    Some(MenuAction::Align(role)) => app.show_align(*role),
+                    Some(MenuAction::Subtitles) => app.show_chooser(Setting::Subtitles),
+                    None => {}
                 }
             });
         }
@@ -2561,16 +2694,29 @@ impl App {
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
                 entries.push(("None".to_string(), None));
-                let chosen = if setting == Setting::PrimaryTrack {
-                    *self.primary_track.borrow()
+                let role = if setting == Setting::PrimaryTrack {
+                    Role::Primary
                 } else {
-                    *self.secondary_track.borrow()
+                    Role::Secondary
                 };
+                let chosen = *self.track_for(role).borrow();
+                let file = self.file_for(role).borrow().clone();
                 for (position, track) in self.tracks.borrow().iter().enumerate() {
-                    if chosen == Some(track.index) {
+                    if file.is_none() && chosen == Some(track.index) {
                         current = Some(position);
                     }
                     entries.push((describe_audio_track(track), Some(position)));
+                }
+                // Last, after everything inside the video: a separate file is
+                // the answer when what you want is not in there at all, which
+                // is most films with one soundtrack and a description track
+                // downloaded beside them.
+                let audio_file = entries.len() - 1;
+                if let Some(file) = file.as_ref() {
+                    current = Some(audio_file);
+                    entries.push((format!("Audio File: {}", file.label()), Some(audio_file)));
+                } else {
+                    entries.push(("Audio File...".to_string(), Some(audio_file)));
                 }
             }
             Setting::Theme => {
@@ -2766,7 +2912,21 @@ impl App {
             *self.primary_track.borrow(),
             *self.secondary_track.borrow(),
             self.subtitle.borrow().clone(),
+            self.saved_path(Role::Primary),
+            self.saved_path(Role::Secondary),
         );
+    }
+
+    /// The audio file chosen for an output, as something worth writing down.
+    ///
+    /// Only a local path: a file reached by URL is not ours to promise will
+    /// still be there, and rebuilding one from a saved string is a different
+    /// question from finding a file again.
+    fn saved_path(&self, role: Role) -> Option<std::path::PathBuf> {
+        self.file_for(role)
+            .borrow()
+            .as_ref()
+            .and_then(|file| file.local().map(|path| path.to_path_buf()))
     }
 
     /// Returns to whichever screen the chooser was opened from.
@@ -2818,10 +2978,15 @@ impl App {
                         config.primary_sink = picked;
                     } else {
                         config.secondary_sink = picked;
-                        // A secondary track without a device to play it on
-                        // is meaningless, so clear it alongside.
+                        // A secondary track without a device to play it on is
+                        // meaningless, so clear it alongside - and a separate
+                        // audio file the same way, which was missed. Left set,
+                        // it is still a choice the menu shows and the pipeline
+                        // tries to honor, against an output that no longer
+                        // exists.
                         if config.secondary_sink.is_none() {
                             *self.secondary_track.borrow_mut() = None;
+                            *self.secondary_file.borrow_mut() = None;
                             cleared_secondary = true;
                         }
                     }
@@ -2837,6 +3002,8 @@ impl App {
                 // before a newly chosen device took effect.
                 if cleared_secondary {
                     self.remember_tracks();
+                    // The file went with the device, so its alignment goes too.
+                    self.load_baselines();
                 }
 
                 if setting == Setting::PrimaryDevice {
@@ -2919,15 +3086,36 @@ impl App {
                 self.remember_tracks();
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
+                let role = if setting == Setting::PrimaryTrack {
+                    Role::Primary
+                } else {
+                    Role::Secondary
+                };
+                let count = self.tracks.borrow().len();
+                // The row after the last track is the audio file one, which
+                // opens the browser instead of settling anything here.
+                if choice == Some(count) {
+                    self.browse_for_audio(role);
+                    return true;
+                }
+
                 let tracks = self.tracks.borrow();
                 let picked = choice.and_then(|index| tracks.get(index)).map(|t| t.index);
                 drop(tracks);
-                if setting == Setting::PrimaryTrack {
-                    *self.primary_track.borrow_mut() = picked;
-                } else {
-                    *self.secondary_track.borrow_mut() = picked;
-                }
+                *self.track_for(role).borrow_mut() = picked;
+                // Choosing anything inside the video, including None, is
+                // choosing not to use a separate file on that output.
+                *self.file_for(role).borrow_mut() = None;
                 self.remember_tracks();
+                // The pairing is gone, so the alignment measured for it has to
+                // go with it. A baseline left behind is applied to a track
+                // inside the video, which shares the video's timeline and needs
+                // no correction - and a large one silences that output
+                // outright. Measured on the Pi 2026-08-10: -830ms against an
+                // embedded track produced no audio at all, while -300ms and
+                // +830ms both played, so it is pulling the audio further
+                // forward than the pipeline can deliver.
+                self.load_baselines();
             }
         }
         false
@@ -2958,8 +3146,15 @@ impl App {
         // FileChooserNative rather than FileDialog: the latter needs GTK
         // 4.10, above this project's 4.6 baseline. It also gives the real
         // system file dialog on each platform.
+        // Which errand this is on, decided the same way the built-in browser
+        // decides it, so the two always agree about what is being chosen.
+        let for_audio = self.browse_audio_for.get().is_some();
         let chooser = gtk::FileChooserNative::new(
-            Some("Choose a video"),
+            Some(if for_audio {
+                "Choose an audio file"
+            } else {
+                "Choose a video"
+            }),
             Some(&self.window),
             gtk::FileChooserAction::Open,
             Some("Open"),
@@ -2971,8 +3166,13 @@ impl App {
         // about what will actually play. Anything GStreamer can demux works,
         // which is why "All files" stays available below.
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Video files"));
-        for extension in crate::browser::VIDEO_EXTENSIONS {
+        let (name, extensions) = if for_audio {
+            ("Audio files", crate::browser::AUDIO_EXTENSIONS)
+        } else {
+            ("Video files", &crate::browser::VIDEO_EXTENSIONS[..])
+        };
+        filter.set_name(Some(name));
+        for extension in extensions {
             // Case-insensitive by hand: GTK's pattern matching is not, and
             // ".MKV" off a camera or an old disc is common enough to matter.
             filter.add_pattern(&format!("*.{extension}"));
@@ -3003,6 +3203,12 @@ impl App {
             held.borrow_mut().take();
 
             match chosen {
+                // A soundtrack for the video already loaded, rather than a
+                // video to load.
+                Some(path) if for_audio => {
+                    app.set_audio_file(&path);
+                    app.show_menu();
+                }
                 // A file was picked, so the menu is where to go next either
                 // way.
                 Some(path) => {
@@ -3045,6 +3251,7 @@ impl App {
         *self.secondary_track.borrow_mut() = None;
         *self.subtitle.borrow_mut() = None;
         *self.file.borrow_mut() = None;
+        self.duration_s.set(0.0);
     }
 
     /// Takes up a probed source: which tracks to start on, which subtitle,
@@ -3159,9 +3366,9 @@ impl App {
                 .map(|track| track.index)
         };
 
-        let saved = self
-            .storage_key()
-            .and_then(|key| crate::config::load_resume(&key))
+        // Keyed on the video being loaded rather than the one still current,
+        // which is not this one until the end of this function.
+        let saved = crate::config::load_resume(&self.storage_key_for(source))
             .and_then(|resume| resume.tracks);
         let (primary, secondary) = match saved.clone() {
             // A saved None is a real choice ("no audio on that output"), so a
@@ -3189,6 +3396,29 @@ impl App {
             // produces a pipeline that fails to build.
             None
         };
+        // A separate audio file, kept only if it is still where it was. One
+        // that has been deleted, renamed, or is on a drive not mounted today
+        // falls back to the track underneath it rather than failing when play
+        // is pressed - the same rule the subtitle below follows.
+        let still_there = |path: Option<&std::path::PathBuf>| {
+            path.filter(|path| path.exists())
+                .map(|path| Source::File(path.clone()))
+        };
+        *self.primary_file.borrow_mut() = still_there(
+            saved
+                .as_ref()
+                .and_then(|choice| choice.primary_file.as_ref()),
+        );
+        *self.secondary_file.borrow_mut() = if self.config.borrow().secondary_sink.is_some() {
+            still_there(
+                saved
+                    .as_ref()
+                    .and_then(|choice| choice.secondary_file.as_ref()),
+            )
+        } else {
+            None
+        };
+
         // Only kept if it still resolves: an embedded stream the file no
         // longer has, or a subtitle file since deleted, quietly reverts to
         // none rather than failing when play is pressed.
@@ -3223,6 +3453,10 @@ impl App {
         *self.subtitle_options.borrow_mut() = options;
         *self.tracks.borrow_mut() = tracks;
         *self.file.borrow_mut() = Some(source.clone());
+        self.duration_s.set(media.duration_ns as f64 / 1e9);
+        // Now that the video and its audio files are both settled, whatever
+        // was measured about that pairing applies again.
+        self.load_baselines();
 
         // Only a local file is worth reopening: a remote URL can carry an
         // access token that expires, and whatever launched us will hand it over
@@ -3593,9 +3827,18 @@ impl App {
         directory: &std::path::Path,
         select: Option<&std::path::Path>,
     ) {
+        // The same screen chooses a video and a separate soundtrack for one,
+        // differing only in what it lists and what activating a row does.
+        // Which of the two is in hand is held on the application rather than
+        // passed down, because stepping into a folder re-enters here and would
+        // otherwise forget what was being looked for.
+        let mode = match self.browse_audio_for.get() {
+            Some(_) => Browse::Audio,
+            None => Browse::Videos,
+        };
         let directory = crate::browser::rooted(directory);
-        let page = self.browser_page(&directory, Browse::Videos);
-        let entries = browser_entries(&directory, Browse::Videos);
+        let page = self.browser_page(&directory, mode);
+        let entries = browser_entries(&directory, mode);
 
         // The way out alone in the middle. Choosing here is opening a video,
         // which the rows themselves do.
@@ -3617,6 +3860,14 @@ impl App {
                 };
                 match &entry.path {
                     Some(path) if path.is_dir() => app.show_browser(path, None),
+                    // A soundtrack for the video already chosen, rather than a
+                    // video: it replaces whatever track that output was on and
+                    // hands straight back to the menu, where the row now names
+                    // the file.
+                    Some(path) if app.browse_audio_for.get().is_some() => {
+                        app.set_audio_file(path);
+                        app.show_menu();
+                    }
                     Some(path) => {
                         let source = Source::File(path.to_path_buf());
                         match app.set_file(&source) {
@@ -3718,6 +3969,9 @@ impl App {
             browse.connect_clicked(move |_| match mode {
                 Browse::Videos => app.open_file_chooser(&here),
                 Browse::Folders => app.choose_kodi_folder_natively(&here),
+                // The same dialog, filtered to audio: it reads which errand it
+                // is on for itself.
+                Browse::Audio => app.open_file_chooser(&here),
             });
         }
 
@@ -3890,12 +4144,552 @@ impl App {
     /// what you had touched. The system dialog is still reachable, from a
     /// pointer-only button in the footer.
     fn browse_for_file(self: &Rc<Self>) {
+        // Whatever errand the browser was last on, this one is a video.
+        self.browse_audio_for.set(None);
+        self.open_browser();
+    }
+
+    /// The same browser, looking for a soundtrack to put on one output.
+    ///
+    /// Starts where the video is rather than where browsing left off: a
+    /// separate audio track is usually downloaded to sit beside the film, and
+    /// when it is not, the film's folder is still a better place to start from
+    /// than wherever a video was last chosen.
+    fn browse_for_audio(self: &Rc<Self>, role: Role) {
+        self.browse_audio_for.set(Some(role));
+        let beside = self
+            .file
+            .borrow()
+            .as_ref()
+            .and_then(|file| file.local().and_then(|path| path.parent()))
+            .map(|folder| folder.to_path_buf());
+        match beside {
+            Some(folder) => self.show_browser(&folder, None),
+            None => self.open_browser(),
+        }
+    }
+
+    fn open_browser(self: &Rc<Self>) {
         let (remembered, last_video) = {
             let config = self.config.borrow();
             (config.last_folder.clone(), config.last_video.clone())
         };
         let start = crate::browser::start_location(remembered.as_deref(), last_video.as_deref());
         self.show_browser(&start, None);
+    }
+
+    /// What an output is playing, for its row on the menu: the name of a
+    /// separate audio file when one is chosen, and otherwise the track.
+    fn describe_audio(&self, role: Role) -> String {
+        if let Some(file) = self.file_for(role).borrow().as_ref() {
+            return file.label();
+        }
+        let chosen = *self.track_for(role).borrow();
+        let tracks = self.tracks.borrow();
+        match chosen {
+            Some(index) => tracks
+                .iter()
+                .find(|track| track.index == index)
+                .map(describe_audio_track)
+                .unwrap_or_else(|| "None".to_string()),
+            None => "None".to_string(),
+        }
+    }
+
+    /// The alignment row for one output, when there is anything to align.
+    ///
+    /// Only offered against a separate audio file: a track inside the video
+    /// shares the video's timeline and cannot be out of step with it. The rest
+    /// are the things measuring needs and cannot do without - a track inside
+    /// the video to line the file up against, a running time to place the
+    /// three windows across, and a path on disk to file the answer under.
+    fn alignment_row(&self, role: Role) -> Option<(String, String, bool, MenuAction)> {
+        let file = self.file_for(role).borrow();
+        let path = file.as_ref()?.local()?;
+        if self.tracks.borrow().is_empty() || self.duration_s.get() <= 0.0 {
+            return None;
+        }
+        let stored = self
+            .storage_key()
+            .and_then(|key| crate::config::load_alignment(&key, path));
+        Some((
+            // Named for what pressing it would do now. Running it again
+            // replaces the stored answer, which is also the way out when that
+            // answer is wrong.
+            match stored {
+                Some(_) => "Re-align",
+                None => "Auto-align",
+            }
+            .to_string(),
+            match stored {
+                Some(millis) => describe_lateness(millis),
+                None => "Not measured".to_string(),
+            },
+            true,
+            MenuAction::Align(role),
+        ))
+    }
+
+    /// Reads back what alignment worked out for whatever each output is
+    /// playing, so the baseline is in force before the pipeline is built.
+    ///
+    /// Zero for a track inside the video: alignment is about a pairing of two
+    /// files and there is nothing to pair a track with.
+    fn load_baselines(&self) {
+        let key = self.storage_key();
+        for role in [Role::Primary, Role::Secondary] {
+            let stored = key.as_deref().and_then(|key| {
+                let file = self.file_for(role).borrow();
+                let path = file.as_ref()?.local()?;
+                crate::config::load_alignment(key, path)
+            });
+            // Negated on the way in: alignment says how late the audio runs,
+            // and a sink is held back by a negative offset.
+            let cell = match role {
+                Role::Primary => &self.primary_baseline,
+                Role::Secondary => &self.secondary_baseline,
+            };
+            cell.set(-stored.unwrap_or(0.0));
+        }
+    }
+
+    /// The alignment baseline for one output.
+    fn baseline_ms(&self, role: &str) -> f64 {
+        match role {
+            "primary" => self.primary_baseline.get(),
+            _ => self.secondary_baseline.get(),
+        }
+    }
+
+    /// What the sink should actually be held back by: what the viewer asked
+    /// for, plus what alignment worked out. The two are separate quantities -
+    /// one describes the headphones, the other describes the pair of files -
+    /// and only the first is ever shown on the slider.
+    fn offset_for(&self, role: &str) -> f64 {
+        self.config.borrow().applied_offset_ms(role) + self.baseline_ms(role)
+    }
+
+    /// Sends an output's whole delay to the pipeline: what the viewer asked
+    /// for, plus what alignment worked out for the file being played.
+    ///
+    /// The one road to a sink, deliberately. The sum used to be rebuilt by
+    /// hand at each of the four places that change either half, and the one
+    /// behind the sync control during playback rebuilt it wrong - it sent the
+    /// slider's own value, so touching sync threw the alignment away and left
+    /// the audio seconds out. A half-applied offset is worse than none, and
+    /// the way to stop that recurring is to leave nowhere else to apply one.
+    fn push_offset(&self, playback: &Playback, role: &str) {
+        playback.set_offset_ms(role, self.offset_for(role));
+    }
+
+    /// The same, for whatever is playing now, if anything is. Cloned out of
+    /// the cell rather than borrowed across the call, since what it reaches
+    /// takes the same borrows.
+    fn push_offset_live(&self, role: &str) {
+        if let Some(playback) = self.playback.borrow().clone() {
+            self.push_offset(&playback, role);
+        }
+    }
+
+    /// The track chosen for one output, and the file chosen for it, where the
+    /// two outputs are otherwise handled by the same code.
+    fn track_for(&self, role: Role) -> &RefCell<Option<u32>> {
+        match role {
+            Role::Primary => &self.primary_track,
+            Role::Secondary => &self.secondary_track,
+        }
+    }
+
+    fn file_for(&self, role: Role) -> &RefCell<Option<Source>> {
+        match role {
+            Role::Primary => &self.primary_file,
+            Role::Secondary => &self.secondary_file,
+        }
+    }
+
+    /// Puts a chosen audio file on the output the browser was opened for.
+    fn set_audio_file(self: &Rc<Self>, path: &std::path::Path) {
+        let Some(role) = self.browse_audio_for.get() else {
+            return;
+        };
+        let source = Source::File(path.to_path_buf());
+        match role {
+            Role::Primary => *self.primary_file.borrow_mut() = Some(source),
+            Role::Secondary => *self.secondary_file.borrow_mut() = Some(source),
+        }
+        self.browse_audio_for.set(None);
+        // Written down here, not left to playback to save: choosing a
+        // soundtrack and then quitting without pressing play is choosing it,
+        // and every other chooser on this screen remembers itself the same way.
+        self.remember_tracks();
+        // A pairing measured before comes back already lined up.
+        self.load_baselines();
+    }
+
+    // --- Alignment -----------------------------------------------------
+
+    /// The frame the three alignment steps share.
+    ///
+    /// One panel carrying all three in turn, rather than three screens: it is
+    /// one errand, and the film it belongs to should stay visible behind it
+    /// throughout. An overlay rather than a real modal window, for the reason
+    /// the browser is one - a `transient_for` window takes the pointer but not
+    /// the keyboard or the gamepad, both of which are driven from the main
+    /// window and would carry on working the menu hidden behind it.
+    fn align_page(&self, hint: &str) -> gtk::Box {
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(20)
+            // Centered and no taller than its contents, so the panel is the
+            // size of the question rather than the size of the window.
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .margin_top(32)
+            .margin_bottom(32)
+            .margin_start(44)
+            .margin_end(44)
+            .build();
+        // The floor. Without it the panel shrinks around whatever the shortest
+        // step has on it, and the three read as three differently sized
+        // windows rather than one panel changing what it says.
+        page.set_size_request((ALIGN_PANEL_MIN * self.scale.get()).round() as i32, -1);
+
+        let heading = heading_label("Auto-Align");
+        heading.set_halign(gtk::Align::Center);
+        page.append(&heading);
+
+        let hint = gtk::Label::builder()
+            .label(hint)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .justify(gtk::Justification::Center)
+            .halign(gtk::Align::Center)
+            // The ceiling, and with the two set alike the floor as well. A
+            // GtkBox has no maximum width, so the cap has to sit on the text
+            // that would otherwise push it wide - and asking for the same
+            // measure as a minimum is what makes all three steps come out the
+            // same width instead of each shrinking to fit its own sentence.
+            // In characters rather than pixels because that is what wraps, and
+            // it holds at every interface scale without being multiplied.
+            .width_chars(ALIGN_PANEL_CHARS)
+            .max_width_chars(ALIGN_PANEL_CHARS)
+            .css_classes(["tp-hint"])
+            .build();
+        page.append(&hint);
+        page
+    }
+
+    /// Step one: which track inside the video to measure the audio file
+    /// against.
+    ///
+    /// Asked rather than inferred, so the viewer can point it at the original
+    /// soundtrack when the automatic pick would have taken a dub. It arrives
+    /// with a sensible one already selected, so the common answer is a single
+    /// press of Next.
+    fn show_align(self: &Rc<Self>, role: Role) {
+        // Nothing to align without both halves of the pairing.
+        let tracks = self.tracks.borrow().clone();
+        if self.file_for(role).borrow().is_none() || tracks.is_empty() {
+            return;
+        }
+
+        let page = self.align_page(
+            "Choose a reference audio track to align the external audio file with. \
+             Usually the original language, or a language that matches the audio \
+             description.",
+        );
+
+        let (scroller, list) = scrolling_list();
+        name_it(&list, "Reference track");
+        // Only as tall as the tracks need, up to a few rows. A list left to
+        // expand makes the panel the height of the window whether it holds one
+        // track or twelve, which is the opposite of what a short question wants.
+        scroller.set_vexpand(false);
+        scroller.set_propagate_natural_height(true);
+        scroller.set_max_content_height((240.0 * self.scale.get()).round() as i32);
+        page.append(&scroller);
+        for track in &tracks {
+            let text = describe_audio_track(track);
+            let row = chooser_row(&text);
+            row.set_xalign(0.5);
+            // Held to the same measure as the body text. A track carrying a
+            // long title would otherwise widen the whole panel, and it already
+            // ellipsizes rather than wrapping.
+            row.set_max_width_chars(ALIGN_PANEL_CHARS);
+            append_named(&list, &row, &text);
+        }
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        let next = gtk::Button::with_label("Next");
+        next.add_css_class("tp-button");
+        next.add_css_class("tp-play");
+        buttons.append(&cancel);
+        buttons.append(&next);
+        page.append(&buttons);
+
+        // What the list is pointing at when Next is pressed, and what
+        // activating a row means, are the same thing: the row is the choice.
+        let start = {
+            let app = self.clone();
+            let list = list.clone();
+            let tracks = tracks.clone();
+            move || {
+                let index = list.selected_row().map(|row| row.index()).unwrap_or(0);
+                let Some(track) = tracks.get(index.max(0) as usize) else {
+                    return;
+                };
+                app.sounds.borrow().click();
+                app.show_align_progress(role, track.index);
+            }
+        };
+        {
+            let start = start.clone();
+            list.connect_row_activated(move |_, _| start());
+        }
+        next.connect_clicked(move |_| start());
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| app.go_back());
+        }
+
+        self.wire_navigation(&list, &[], &[cancel.clone(), next.clone()]);
+        self.remember_origin();
+        *self.screen.borrow_mut() = Screen::AlignChoose;
+        self.window.set_child(Some(&self.modal(&page)));
+
+        // The first track that is not a description, because a description is
+        // the thing being lined up rather than the thing to line it up with -
+        // it correlates against itself perfectly and says nothing. Falls back
+        // to the first track when description is all the file has.
+        let opening = tracks
+            .iter()
+            .position(|track| !crate::probe::is_audio_description(&track.title))
+            .unwrap_or(0);
+        if let Some(row) = list.row_at_index(opening as i32) {
+            list.select_row(Some(&row));
+            settle_on(&row);
+        }
+    }
+
+    /// Step two: the measuring, which happens on a thread.
+    ///
+    /// Three sixty-second windows out of each of two files is around twelve
+    /// seconds on a desktop and several times that on a Pi, so it cannot run
+    /// on the main loop: the window would stop redrawing and the interface
+    /// would read as having crashed. The thread reports through a channel this
+    /// polls, which is how the rest of the application already waits on work -
+    /// everything the answer touches is `Rc` and has to be applied here.
+    fn show_align_progress(self: &Rc<Self>, role: Role, reference: u32) {
+        let (video, audio) = {
+            let file = self.file.borrow().clone();
+            let audio = self.file_for(role).borrow().clone();
+            match (file, audio) {
+                (Some(video), Some(audio)) => (video, audio),
+                _ => return,
+            }
+        };
+
+        let page =
+            self.align_page("Analyzing audio to align the tracks. This may take a few moments.");
+
+        let bar = gtk::ProgressBar::new();
+        bar.add_css_class("tp-align-bar");
+        page.append(&bar);
+
+        let status = gtk::Label::builder()
+            .label("0%")
+            .halign(gtk::Align::Center)
+            .css_classes(["tp-hint"])
+            .build();
+        page.append(&status);
+
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.set_halign(gtk::Align::Center);
+        page.append(&cancel);
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| app.go_back());
+        }
+
+        self.remember_origin();
+        self.set_nav(None, &[], &[]);
+        self.add_nav_stop(&cancel);
+        *self.screen.borrow_mut() = Screen::AlignProgress;
+        self.window.set_child(Some(&self.modal(&page)));
+        cancel.grab_focus();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let duration = self.duration_s.get();
+        let (video_uri, audio_uri) = (video.uri(), audio.uri());
+        std::thread::spawn(move || {
+            let progress = sender.clone();
+            let verdict = crate::align::align(
+                &video_uri,
+                &audio_uri,
+                duration,
+                reference,
+                // A failed send means nobody is listening any more, which is
+                // what cancelling looks like from here. There is no way to
+                // stop a decode part-way, so the thread runs to the end and
+                // its answer is dropped.
+                move |done| {
+                    let _ = progress.send(Step::Window(done));
+                },
+            );
+            let _ = sender.send(Step::Done(verdict));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            // Cancelled, or moved on some other way, while it was working.
+            if *app.screen.borrow() != Screen::AlignProgress {
+                return glib::ControlFlow::Break;
+            }
+            loop {
+                match receiver.try_recv() {
+                    Ok(Step::Window(done)) => {
+                        // Three steps rather than a smooth climb: a window is
+                        // one decode and cannot report its own progress, so
+                        // anything finer would be invented.
+                        let fraction = done as f64 / crate::align::WINDOWS as f64;
+                        bar.set_fraction(fraction);
+                        status.set_label(&format!("{:.0}%", fraction * 100.0));
+                    }
+                    Ok(Step::Done(verdict)) => {
+                        app.show_align_result(role, verdict);
+                        return glib::ControlFlow::Break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        return glib::ControlFlow::Continue;
+                    }
+                    // The thread is gone without an answer, which leaves
+                    // nothing to report and no reason to keep looking.
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        return glib::ControlFlow::Break;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Step three: what it found, and applying it when there is anything to
+    /// apply.
+    ///
+    /// A hidden baseline must never hide a wrong answer, so every outcome is
+    /// said out loud. The two that change nothing say so plainly and point at
+    /// the sync slider, which is what someone is left with when measuring
+    /// cannot help.
+    fn show_align_result(self: &Rc<Self>, role: Role, verdict: crate::align::Verdict) {
+        use crate::align::Verdict;
+
+        // Never named by output, because the answer is not one: it belongs to
+        // this video and this audio file, and applies wherever that file is
+        // played.
+        let (hint, retry) = match verdict {
+            Verdict::Offset { millis, .. } => {
+                self.apply_alignment(role, millis);
+                let rounded = millis.round();
+                let shift = if rounded > 0.0 {
+                    format!(
+                        "The audio file runs {rounded:.0}ms late, and has been adjusted to \
+                         sync with the video."
+                    )
+                } else if rounded < 0.0 {
+                    format!(
+                        "The audio file runs {:.0}ms early, and has been adjusted to sync \
+                         with the video.",
+                        -rounded
+                    )
+                } else {
+                    "The audio file is already in sync with the video, no adjustment needed."
+                        .to_string()
+                };
+                (shift, false)
+            }
+            // A rate difference is a slope rather than a shift, so no single
+            // offset fixes it and averaging one would be a guess that drifts.
+            Verdict::RateMismatch { .. } => (
+                "The audio file runs at a different speed than the video and cannot be \
+                 automatically adjusted."
+                    .to_string(),
+                true,
+            ),
+            Verdict::Unsure => (
+                "The audio file could not be matched with the video.".to_string(),
+                true,
+            ),
+        };
+
+        let page = self.align_page(&hint);
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        // Offered only where it could help. Trying another reference track is
+        // the answer when the one measured against was a dub and the separate
+        // recording was made from the original.
+        let again = gtk::Button::with_label("Try Another Track");
+        again.add_css_class("tp-button");
+        if retry {
+            buttons.append(&again);
+        }
+        let done = gtk::Button::with_label("Done");
+        done.add_css_class("tp-button");
+        done.add_css_class("tp-play");
+        buttons.append(&done);
+        page.append(&buttons);
+
+        {
+            let app = self.clone();
+            again.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_align(role);
+            });
+        }
+        {
+            let app = self.clone();
+            done.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.go_back();
+            });
+        }
+
+        self.remember_origin();
+        self.set_nav(None, &[], &[]);
+        if retry {
+            self.add_nav_stop(&again);
+        }
+        self.add_nav_stop(&done);
+        *self.screen.borrow_mut() = Screen::AlignResult;
+        self.window.set_child(Some(&self.modal(&page)));
+        done.grab_focus();
+    }
+
+    /// Writes an alignment down and puts it into force.
+    ///
+    /// Stored against the two paths together, so the same pairing never pays
+    /// for the measuring twice, and read straight back rather than set here -
+    /// `load_baselines` owns the sign convention, and two places deciding it
+    /// would eventually disagree.
+    fn apply_alignment(&self, role: Role, millis: f64) {
+        let stored = {
+            let file = self.file_for(role).borrow();
+            file.as_ref()
+                .and_then(Source::local)
+                .map(|path| path.to_path_buf())
+        };
+        if let Some((key, path)) = self.storage_key().zip(stored) {
+            crate::config::save_alignment(&key, &path, Some(millis));
+        }
+        self.load_baselines();
     }
 
     // --- Settings ------------------------------------------------------
@@ -6045,16 +6839,43 @@ impl App {
         self.stop_playback();
 
         // Belt and braces against the pipeline being asked for an output that
-        // was never configured, whatever left the track set.
+        // was never configured, whatever left the choice set.
+        //
+        // The file as well as the track, which it did not used to cover: an
+        // audio file on the secondary output with no secondary device asked
+        // for a sink that cannot be built, and the whole pipeline failed - so
+        // a film with a perfectly good primary output would not play at all.
+        let has_secondary_device = self.config.borrow().secondary_sink.is_some();
         let primary = *self.primary_track.borrow();
-        let secondary = if self.config.borrow().secondary_sink.is_some() {
+        let secondary = if has_secondary_device {
             *self.secondary_track.borrow()
         } else {
             None
         };
+        let secondary_file = if has_secondary_device {
+            self.secondary_file.borrow().clone()
+        } else {
+            None
+        };
+        // A separate audio file wins for that output. The track it displaces
+        // is still remembered below, so clearing the file falls back to it.
+        let audio_for = |file: Option<Source>, track: Option<u32>| match file {
+            Some(file) => Some(crate::pipeline::AudioSource::File(file)),
+            None => track.map(crate::pipeline::AudioSource::Track),
+        };
+        let primary_audio = audio_for(self.primary_file.borrow().clone(), primary);
+        let secondary_audio = audio_for(secondary_file, secondary);
+
         let subtitle = self.subtitle.borrow().clone();
         if let Some(key) = self.storage_key() {
-            crate::config::save_tracks(&key, primary, secondary, subtitle.clone());
+            crate::config::save_tracks(
+                &key,
+                primary,
+                secondary,
+                subtitle.clone(),
+                self.saved_path(Role::Primary),
+                self.saved_path(Role::Secondary),
+            );
         }
 
         let app = self.clone();
@@ -6079,8 +6900,8 @@ impl App {
 
         let result = Playback::start(
             &path,
-            primary,
-            secondary,
+            primary_audio.as_ref(),
+            secondary_audio.as_ref(),
             subtitle.as_ref(),
             &self.config.borrow(),
             resume,
@@ -6098,6 +6919,14 @@ impl App {
 
         match result {
             Ok(playback) => {
+                // The pipeline set each sink from the configuration alone,
+                // which is all it knows about. Any alignment baseline is added
+                // here, once, before a frame has played.
+                for role in ["primary", "secondary"] {
+                    if self.baseline_ms(role) != 0.0 {
+                        self.push_offset(&playback, role);
+                    }
+                }
                 // Named by device rather than by role: "primary" and
                 // "secondary" mean something to the configuration and nothing
                 // to somebody trying to turn the headphones down.
@@ -6176,10 +7005,7 @@ impl App {
                             config.set_offset_ms(role, ms);
                             config.set_offset_on(role, on);
                         }
-                        if let Some(playback) = app.playback.borrow().as_ref() {
-                            playback
-                                .set_offset_ms(role, app.config.borrow().applied_offset_ms(role));
-                        }
+                        app.push_offset_live(role);
                         app.save_volume_soon();
                     });
                 }
@@ -6567,6 +7393,15 @@ fn list_page_with(
     header.append(heading);
     page.append(&header);
 
+    let (scroller, list) = scrolling_list();
+    page.append(&scroller);
+
+    (page, list, back, slot)
+}
+
+/// The scrolling list every screen built around one shares, wired the way
+/// navigation here expects to find it.
+fn scrolling_list() -> (gtk::ScrolledWindow, gtk::ListBox) {
     let list = gtk::ListBox::new();
     list.add_css_class("tp-menu");
     // Browse keeps exactly one row selected as focus moves, which is what
@@ -6584,9 +7419,7 @@ fn list_page_with(
     // this the stop is the scroller and every key goes to it instead.
     scroller.set_focusable(false);
     list.set_focusable(true);
-    page.append(&scroller);
-
-    (page, list, back, slot)
+    (scroller, list)
 }
 
 /// The application mark, decoded from the PNG compiled into the binary.
@@ -7334,6 +8167,22 @@ fn describe_audio_track(track: &AudioTrack) -> String {
     text
 }
 
+/// A stored alignment as a statement rather than as a signed number.
+///
+/// Which way the audio runs is the whole of what it says, and "+830ms" does
+/// not say it. This is read by someone checking a correction they cannot see
+/// the effect of, so it has to be unambiguous without a convention to look up.
+fn describe_lateness(millis: f64) -> String {
+    let rounded = millis.round();
+    if rounded > 0.0 {
+        format!("Audio {rounded:.0}ms late")
+    } else if rounded < 0.0 {
+        format!("Audio {:.0}ms early", -rounded)
+    } else {
+        "In step".to_string()
+    }
+}
+
 /// A menu row: what the setting is on the left, its current value and a
 /// chevron on the right.
 fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
@@ -7370,6 +8219,9 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Browse {
     Videos,
+    /// A separate soundtrack for the video already chosen: the same screen,
+    /// listing audio files instead.
+    Audio,
     Folders,
 }
 
@@ -7378,6 +8230,13 @@ impl Browse {
     /// so the files inside it would be a list of things that cannot be picked.
     fn folders_only(self) -> bool {
         self == Browse::Folders
+    }
+
+    fn wants(self) -> crate::browser::Kind {
+        match self {
+            Browse::Audio => crate::browser::Kind::Audio,
+            _ => crate::browser::Kind::Video,
+        }
     }
 }
 
@@ -7465,7 +8324,7 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
             notice: false,
         });
     }
-    for entry in crate::browser::read(directory) {
+    for entry in crate::browser::read(directory, mode.wants()) {
         if mode.folders_only() && !entry.is_dir {
             continue;
         }
@@ -7893,6 +8752,30 @@ fn style_css(scale: f64, dark: bool) -> String {
         .tp-subtitles-button:disabled {{ opacity: 0.2; }}
         .tp-progress {{ min-height: {bar}px; }}
         .tp-progress progress {{ background-color: {highlight}; }}
+        /* The alignment panel's bar, thicker than the playback scrubber: it
+           is the only thing moving on that screen, and it is read from across
+           a room rather than aimed at with a pointer. Its own class, so the
+           scrubber and the settings sliders keep the weight they were given.
+           The height has to sit on both nodes - a GtkProgressBar draws the
+           fill inside the trough, and raising only one leaves a thick bar with
+           a thin fill rattling around in it. */
+        .tp-align-bar, .tp-align-bar trough, .tp-align-bar progress {{
+            min-height: {align_bar}px;
+            border-radius: {align_bar_radius}px;
+        }}
+        /* Styled in full rather than by borrowing `tp-bar`, whose dim fill is
+           meant for a slider with a handle on it to point at. There is no
+           handle here, so the fill is the whole of what is being read and it
+           takes the highlight colour. `background-image: none` first, or the
+           theme's gradient sits over any colour set under it. */
+        .tp-align-bar trough {{
+            background-color: {trough};
+            background-image: none;
+        }}
+        .tp-align-bar progress {{
+            background-color: {highlight};
+            background-image: none;
+        }}
         /* Settings bars, drawn to be found rather than to be tasteful. The
            theme's own colours put a faint handle on a faint trough, which on
            a dark background is a bar that has to be looked for.
@@ -8049,6 +8932,8 @@ fn style_css(scale: f64, dark: bool) -> String {
         back_icon = px(22.0),
         row_icon = px(18.0),
         bar = px(6.0),
+        align_bar = px(14.0),
+        align_bar_radius = px(7.0),
         // A literal color rather than a theme name: GTK's named colors
         // differ between themes and libadwaita, and an undefined one makes
         // the whole declaration fail to parse - which silently leaves the

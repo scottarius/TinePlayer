@@ -5,6 +5,7 @@
 // to it so the command-line flags still report anything useful.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod align;
 mod app;
 mod appearance;
 mod awake;
@@ -18,6 +19,7 @@ mod kodi;
 mod kodi_setup;
 mod languages;
 mod media_keys;
+mod nfo;
 mod pipeline;
 mod player;
 mod probe;

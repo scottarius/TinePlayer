@@ -93,6 +93,7 @@ crate is offered under either license, at your choice.
 | futures-executor | 0.3.33 | MIT OR Apache-2.0 |
 | futures-io | 0.3.33 | MIT OR Apache-2.0 |
 | futures-macro | 0.3.33 | MIT OR Apache-2.0 |
+| futures-sink | 0.3.33 | MIT OR Apache-2.0 |
 | futures-task | 0.3.33 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
 | gdk-pixbuf | 0.20.10 | MIT |
@@ -121,6 +122,8 @@ crate is offered under either license, at your choice.
 | gst-plugin-gtk4 | 0.13.7 | MPL-2.0 |
 | gst-plugin-version-helper | 0.8.4 | MIT |
 | gstreamer | 0.23.7 | MIT OR Apache-2.0 |
+| gstreamer-app | 0.23.5 | MIT OR Apache-2.0 |
+| gstreamer-app-sys | 0.23.5 | MIT |
 | gstreamer-audio | 0.23.6 | MIT OR Apache-2.0 |
 | gstreamer-audio-sys | 0.23.6 | MIT |
 | gstreamer-base | 0.23.6 | MIT OR Apache-2.0 |
@@ -161,6 +164,7 @@ crate is offered under either license, at your choice.
 | minreq | 2.14.1 | ISC |
 | muldiv | 1.0.1 | MIT |
 | nix | 0.31.3 | MIT |
+| num-complex | 0.4.6 | MIT OR Apache-2.0 |
 | num-integer | 0.1.46 | MIT OR Apache-2.0 |
 | num-rational | 0.4.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
@@ -176,11 +180,13 @@ crate is offered under either license, at your choice.
 | paste | 1.0.15 | MIT OR Apache-2.0 |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
 | pkg-config | 0.3.33 | MIT OR Apache-2.0 |
+| primal-check | 0.3.4 | MIT OR Apache-2.0 |
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
+| rustfft | 6.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.21.12 | Apache-2.0 OR ISC OR MIT |
 | rustls-native-certs | 0.6.3 | Apache-2.0 OR ISC OR MIT |
@@ -202,6 +208,7 @@ crate is offered under either license, at your choice.
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | slab | 0.4.12 | MIT |
 | smallvec | 1.15.2 | MIT OR Apache-2.0 |
+| strength_reduce | 0.2.4 | MIT OR Apache-2.0 |
 | strsim | 0.11.1 | MIT |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.3 | MIT OR Apache-2.0 |
@@ -215,6 +222,7 @@ crate is offered under either license, at your choice.
 | toml_edit | 0.25.13+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
+| transpose | 0.2.3 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unsafe-libyaml | 0.2.11 | MIT |
 | untrusted | 0.9.0 | ISC |

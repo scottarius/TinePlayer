@@ -1,8 +1,15 @@
 # Where to Get Multi-track Videos
 
-TinePlayer plays two audio tracks at once, which means it needs a video file
-that carries more than one. This page is about finding files that do, checking
-what a file has, and building one yourself when it doesn't.
+TinePlayer plays two audio tracks at once. This page is about finding video
+files that carry more than one, checking what a file has, and building one
+yourself when it doesn't.
+
+> [!TIP]
+> A video does not have to carry both. An output can play a
+> [separate audio file](usage.md#separate-audio-files) instead, which is often
+> far easier than producing a multi-track video - and **Auto-align** lines it
+> up with the picture for you. Everything below is still worth reading if you
+> want one file that holds everything.
 
 ## Checking Files for Multiple Tracks
 
