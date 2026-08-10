@@ -2647,8 +2647,8 @@ impl App {
         // the second keeps only its mark. It is the same button either way;
         // what changes is how much room it argues for.
         let play = gtk::Button::new();
-        play.set_child(Some(&marked_label(
-            "▶",
+        play.set_child(Some(&marked_face(
+            play_image(scale),
             &match resume_at {
                 Some(position) => format!(
                     "  RESUME {}",
@@ -2676,7 +2676,7 @@ impl App {
 
         if resume_at.is_some() {
             let restart = gtk::Button::new();
-            restart.set_child(Some(&marked_label("↻", "")));
+            restart.set_child(Some(&marked_face(restart_image(scale), "")));
             restart.add_css_class("tp-play");
             restart.add_css_class("tp-play-icon");
             restart.set_sensitive(can_play);
@@ -3337,7 +3337,11 @@ impl App {
             });
         }
 
-        let gear = gtk::Button::from_icon_name("emblem-system-symbolic");
+        let gear = gtk::Button::new();
+        gear.set_child(Some(&settings_image(
+            CORNER_MARK_PX * self.scale.get(),
+            self.dark.get(),
+        )));
         gear.add_css_class("tp-gear");
         gear.set_focus_on_click(false);
         gear.set_tooltip_text(Some("Settings"));
@@ -7791,7 +7795,6 @@ impl App {
                 let controls = Controls::new(
                     playback.widget(),
                     self.scale.get(),
-                    self.dark.get(),
                     self.window.is_fullscreen(),
                     self.locked_fullscreen,
                     &outputs,
@@ -8293,29 +8296,24 @@ fn logo_image(scale: f64) -> gtk::Image {
 ///
 /// This is the plan's open question about `ui_scale` answered: no-scroll and
 /// 3x cannot both hold, and what yields is the artwork and the prose.
-/// A button face with its mark drawn larger than the words beside it.
+/// A button face: a drawn mark, and the words beside it.
 ///
-/// The marks are glyphs rather than images, so they take the label's font size
-/// and came out noticeably smaller than the type they sit with - a triangle at
-/// the cap height of the word next to it reads as a bullet rather than as a
-/// play button.
-///
-/// Two labels rather than one with markup in it, and that is the whole reason
-/// this is a box. Sizing part of a label makes the *line* taller, and the
-/// words then sit on a baseline set by the glyph rather than by themselves -
-/// which on a wide button reads as the text having slipped downwards. Two
-/// labels each centred in the row are each upright on their own terms.
-fn marked_label(mark: &str, words: &str) -> gtk::Box {
+/// A box rather than a label with a mark in the text, and both halves are
+/// centered on their own terms. The marks were glyphs to begin with, which
+/// meant they took the label's font size and came out smaller than the type
+/// they sat with; sizing them up through markup then made the whole *line*
+/// taller, so the words sat on a baseline set by the mark and read as having
+/// slipped downwards. An image beside a label has neither problem, and the
+/// mark is drawn at whatever size suits rather than at whatever the text is.
+fn marked_face(mark: gtk::Image, words: &str) -> gtk::Box {
     let face = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
         .build();
 
-    let glyph = gtk::Label::new(Some(mark));
-    glyph.add_css_class("tp-play-mark");
-    glyph.set_valign(gtk::Align::Center);
-    face.append(&glyph);
+    mark.set_valign(gtk::Align::Center);
+    face.append(&mark);
 
     if !words.is_empty() {
         let text = gtk::Label::new(Some(words));
@@ -8416,13 +8414,7 @@ fn heading_label(text: &str) -> gtk::Label {
 /// there is nothing for a second version to adapt to.
 pub fn subtitles_image(scale: f64) -> gtk::Image {
     const ICON: &[u8] = include_bytes!("../data/ui/subtitles.png");
-
-    let image = gtk::Image::new();
-    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
-        image.set_paintable(Some(&texture));
-    }
-    image.set_pixel_size((26.0 * scale).round() as i32);
-    image
+    marked_image(ICON, 26.0 * scale)
 }
 
 /// The mark on the button that puts an output back in sync.
@@ -8438,23 +8430,27 @@ pub fn subtitles_image(scale: f64) -> gtk::Image {
 /// the control strip draws its own dark background whatever the theme is.
 /// The size of the strip's icons, before scaling: the transport buttons, the
 /// gear, and the buttons in the volume panel.
-const ICON_PX: f64 = 24.0;
+pub const ICON_PX: f64 = 24.0;
 
 pub fn sync_image(scale: f64) -> gtk::Image {
     const ICON: &[u8] = include_bytes!("../data/ui/sync.png");
-
-    let image = gtk::Image::new();
-    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
-        image.set_paintable(Some(&texture));
-    }
-    // The size the panel's other icons come out at, set here because
-    // `-gtk-icon-size` sizes icon names and this is a paintable, so the CSS
-    // that catches the mute button passes over this one. A pixel or two out
-    // and the button beside it is a different width, which moves the start of
-    // the bar and leaves the two bars different lengths.
-    image.set_pixel_size((ICON_PX * scale).round() as i32);
-    image
+    marked_image(ICON, SYNC_MARK_PX * scale)
 }
+
+/// The sync mark's size before scaling, which is deliberately not [`ICON_PX`]
+/// like everything else in that panel.
+///
+/// Larger, so that it *looks* the same size. The speaker above it is a themed
+/// icon whose glyph fills its box, while this is a drawn mark with clear space
+/// around it - so at the same nominal size the stopwatch came out visibly the
+/// smaller of the two.
+///
+/// The number is arithmetic rather than taste: the mark's ink fills 83% of its
+/// canvas, the speaker draws 29px, and 29 / 0.83 / 1.25 lands here. Eyeballing
+/// the screenshot first gave 32, which would have overshot to 34px - so if the
+/// artwork is ever redrawn with different margins, measure the ink rather than
+/// nudging this by feel.
+const SYNC_MARK_PX: f64 = 28.0;
 
 /// The fullscreen mark, in the direction it will take you.
 ///
@@ -8465,6 +8461,10 @@ pub fn sync_image(scale: f64) -> gtk::Image {
 /// Drawn twice in each direction, once in each theme's foreground color,
 /// because an embedded image cannot be recoloured the way a symbolic icon is.
 /// A single compromise gray read poorly against both.
+///
+/// **`dark` is about the surface, not about the theme.** The control strip
+/// draws its own near-black background under either theme, so it asks for the
+/// dark-theme mark always - see [`marked_image`].
 pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
     const ENTER_LIGHT: &[u8] = include_bytes!("../data/ui/fullscreen-light.png");
     const ENTER_DARK: &[u8] = include_bytes!("../data/ui/fullscreen-dark.png");
@@ -8477,11 +8477,68 @@ pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image 
         (false, true) => ENTER_DARK,
         (false, false) => ENTER_LIGHT,
     };
+    marked_image(bytes, CORNER_MARK_PX * scale)
+}
+
+/// The gear, for the settings screen.
+///
+/// A pair like the fullscreen marks, and for the same reason: it sits on the
+/// page under either theme. It used to be `emblem-system-symbolic` from the
+/// icon theme, which GTK recolors from the foreground - including dimming it
+/// when the window loses focus, while the drawn mark beside it did not, so the
+/// two came apart every time the window went to the back.
+/// `size` is in real pixels and is the caller's to decide, because the gear
+/// appears at two sizes: beside the fullscreen mark on the media page, where
+/// the two have to agree, and among the transport icons on the control strip,
+/// where it has to agree with those instead.
+pub fn settings_image(size: f64, dark: bool) -> gtk::Image {
+    const LIGHT: &[u8] = include_bytes!("../data/ui/settings-light.png");
+    const DARK: &[u8] = include_bytes!("../data/ui/settings-dark.png");
+
+    marked_image(if dark { DARK } else { LIGHT }, size)
+}
+
+/// How large the two marks in the media page's corner are drawn, before
+/// scaling. One number for both, so they cannot drift apart.
+const CORNER_MARK_PX: f64 = 26.0;
+
+/// The triangle on the play button, and the arrow on restart.
+///
+/// White under either theme, because both sit on the blue button rather than
+/// on the page. The play mark is deliberately not the one the control strip
+/// uses: that one is the theme's own transport icon, and this is the button a
+/// whole page is pointing at.
+pub fn play_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/play.png");
+    marked_image(ICON, PLAY_MARK_PX * scale)
+}
+
+pub fn restart_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/restart.png");
+    marked_image(ICON, PLAY_MARK_PX * scale)
+}
+
+/// How large the marks on the play and restart buttons are drawn, before
+/// scaling. Bigger than the strip's icons: these are the one action the page
+/// exists to offer, and they are read from across a room.
+const PLAY_MARK_PX: f64 = 26.0;
+
+/// An image from bytes compiled into the binary, at a size in real pixels.
+///
+/// The size is set here rather than in the stylesheet because `-gtk-icon-size`
+/// sizes icon *names*, and every mark in this application is a paintable - so
+/// the CSS that catches a themed icon passes silently over these. A pixel or
+/// two out and a button is a different width, which in the volume panel moves
+/// the start of a bar and leaves the two bars visibly different lengths.
+fn marked_image(bytes: &'static [u8], size: f64) -> gtk::Image {
     let image = gtk::Image::new();
-    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
-        image.set_paintable(Some(&texture));
+    match gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
+        Ok(texture) => image.set_paintable(Some(&texture)),
+        // Said out loud: a mark that silently fails to appear looks like a
+        // button with nothing on it, which is not a clue anyone can act on.
+        Err(e) => eprintln!("Could not load an interface mark: {e}"),
     }
-    image.set_pixel_size((26.0 * scale).round() as i32);
+    image.set_pixel_size(size.round().max(1.0) as i32);
     image
 }
 
@@ -9561,10 +9618,6 @@ fn style_css(scale: f64, dark: bool) -> String {
                different kinds of thing. */
             border-radius: {radius}px;
         }}
-        /* The mark on the play and restart buttons, half again the size of
-           the words beside it - a triangle at the cap height of the type next
-           to it reads as a bullet rather than as a play button. */
-        .tp-play-mark {{ font-size: {play_mark}px; }}
         .tp-play:hover {{ background-color: {play_hover}; }}
         /* Focus said loudly, because this is read from a distance and these
            buttons no longer sit in a list whose highlight does the saying. A
@@ -9620,16 +9673,13 @@ fn style_css(scale: f64, dark: bool) -> String {
             background-color: transparent;
             border-color: transparent;
             box-shadow: none;
-            /* Stated outright, and the same ink the fullscreen mark is drawn
-               in. The gear is a symbolic icon, which GTK recolors from the
-               foreground - including dimming it when the window loses focus -
-               while the mark beside it is a picture and does no such thing. So
-               the pair came apart every time the window went to the back: one
-               faded, the other did not. Fixing the color keeps them together,
-               and neither dims. */
-            color: {icon_ink};
         }}
-        .tp-gear:backdrop {{ color: {icon_ink}; }}
+        /* No color, and none needed. The gear was a symbolic icon, which GTK
+           recolors from the foreground - including dimming it when the window
+           loses focus, while the drawn mark beside it did not, so the pair came
+           apart every time the window went to the back. It is a drawn mark
+           itself now, in the same ink, so the two behave alike without being
+           told to. */
         .tp-gear:hover {{ background-color: rgba(128, 128, 128, 0.22); }}
         /* The frame the poster sits in, which is also what is seen when there
            is no poster. A flat panel a shade off the page rather than an
@@ -9977,7 +10027,6 @@ fn style_css(scale: f64, dark: bool) -> String {
                 {on_highlight} 0, {on_highlight} {badge_r}px, transparent {badge_r}px);
         }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
-        .tp-gear image {{ -gtk-icon-size: {icon}px; }}
         .tp-row-icon {{ -gtk-icon-size: {row_icon}px; opacity: 0.65; }}
         .tp-back image {{ -gtk-icon-size: {back_icon}px; }}
         .{video} {{ background-color: black; }}
@@ -10054,7 +10103,6 @@ fn style_css(scale: f64, dark: bool) -> String {
         highlight = "#3584e4",
         film_title = px(40.0),
         play_icon = px(46.0),
-        play_mark = px(28.0),
         focus_ring = px(3.0).max(2),
         // The blue the play and restart buttons are drawn in - the same accent
         // as everything else the application colors deliberately.
@@ -10076,7 +10124,6 @@ fn style_css(scale: f64, dark: bool) -> String {
         on_focus = if dark { "#1c1c1c" } else { "#ffffff" },
         // The ink both corner marks share. The fullscreen image is drawn in
         // it as a picture; the gear is told to match.
-        icon_ink = if dark { "#eeeeec" } else { "#2e3436" },
         // The page's own ground. Matched to what each theme's window is
         // already drawn in, since the backdrop paints over the whole page and
         // a mismatch would show as a rectangle behind the content.
