@@ -117,11 +117,24 @@ impl Details {
     }
 
     /// The picture, as one line: "1080p (H.264)".
+    ///
+    /// The codec is cut back to its name. GStreamer describes a stream as
+    /// fully as it can - "H.264 (High Profile)", "H.265 (Main 10 Profile)" -
+    /// and the profile is a detail for someone debugging a decode rather than
+    /// for a line under a poster, where it doubles the length of the reading
+    /// to say something almost nobody is asking.
     pub fn resolution(&self) -> Option<String> {
         let resolution = self.video.resolution()?;
-        Some(match self.video.codec.is_empty() {
+        let codec = self
+            .video
+            .codec
+            .split(" (")
+            .next()
+            .unwrap_or_default()
+            .trim();
+        Some(match codec.is_empty() {
             true => resolution,
-            false => format!("{resolution} ({})", self.video.codec),
+            false => format!("{resolution} ({codec})"),
         })
     }
 
@@ -439,6 +452,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(d.resolution().as_deref(), Some("1080p (H.264)"));
+        // The profile is dropped: what the discoverer actually hands back for
+        // the Blu-ray rips in the library here is "H.264 (High Profile)",
+        // which is twice the length to say something nobody is asking.
+        d.video.codec = "H.264 (High Profile)".to_string();
+        assert_eq!(d.resolution().as_deref(), Some("1080p (H.264)"));
+        d.video.codec = "H.265 (Main 10 Profile)".to_string();
+        assert_eq!(d.resolution().as_deref(), Some("1080p (H.265)"));
         // A container that named a size and no codec still gets its line.
         d.video.codec = String::new();
         assert_eq!(d.resolution().as_deref(), Some("1080p"));

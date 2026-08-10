@@ -8,8 +8,10 @@
 mod align;
 mod app;
 mod appearance;
+mod artwork;
 mod awake;
 mod browser;
+mod column;
 mod config;
 mod controls;
 mod devices;
