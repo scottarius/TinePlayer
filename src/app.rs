@@ -502,6 +502,10 @@ pub struct App {
     /// Bumped whenever a different file is loaded, so artwork still arriving
     /// from a thread for the previous one is dropped rather than drawn.
     art_generation: Cell<u64>,
+    /// The rebuild waiting for a drag-resize to stop, and the poster height
+    /// the page on screen was built at. See [`App::rebuild_when_resize_ends`].
+    resize_settle: RefCell<Option<glib::SourceId>>,
+    built_poster: Cell<f64>,
     tracks: RefCell<Vec<AudioTrack>>,
     primary_track: RefCell<Option<u32>>,
     secondary_track: RefCell<Option<u32>>,
@@ -739,6 +743,8 @@ impl App {
             poster_art: RefCell::new(None),
             backdrop_art: RefCell::new(None),
             art_generation: Cell::new(0),
+            resize_settle: RefCell::new(None),
+            built_poster: Cell::new(0.0),
             tracks: RefCell::new(Vec::new()),
             primary_file: RefCell::new(None),
             secondary_file: RefCell::new(None),
@@ -827,6 +833,18 @@ impl App {
         window.connect_realize(move |window| {
             let Some(app) = weak.upgrade() else { return };
             app.follow_automatic_scale(window);
+            // The surface is what reports the window's size as it is dragged,
+            // and it does not exist until here. Connected to rather than the
+            // window's own properties because it survives every rebuild of the
+            // page, so this handler is attached exactly once.
+            if let Some(surface) = window.surface() {
+                let weak = Rc::downgrade(&app);
+                surface.connect_layout(move |_, _, _| {
+                    if let Some(app) = weak.upgrade() {
+                        app.rebuild_when_resize_ends();
+                    }
+                });
+            }
         });
         // And again whenever the window fills the screen or stops doing so,
         // since that is what the automatic size depends on.
@@ -2451,6 +2469,27 @@ impl App {
             return (self.build_empty_page().upcast(), None);
         }
         let (page, list) = self.build_media_page();
+        if std::env::var("TINE_MEASURE").is_ok() {
+            let page2 = page.clone();
+            glib::idle_add_local_once(move || {
+                let v = gtk::Orientation::Vertical;
+                eprintln!("MEASURE overlay {:?}", page2.measure(v, -1));
+                let mut stack: Vec<(gtk::Widget, usize)> =
+                    page2.first_child().map(|c| vec![(c, 0usize)]).unwrap_or_default();
+                while let Some((w, depth)) = stack.pop() {
+                    let (min, nat, _, _) = w.measure(v, -1);
+                    if min > 300 && depth < 7 {
+                        eprintln!("MEASURE {:indent$}{} min={} nat={}", "",
+                            w.type_().name(), min, nat, indent = depth * 2);
+                    }
+                    let mut child = w.first_child();
+                    while let Some(c) = child {
+                        child = c.next_sibling();
+                        if depth < 7 { stack.push((c, depth + 1)); }
+                    }
+                }
+            });
+        }
         (page.upcast(), Some(list))
     }
 
@@ -2667,6 +2706,7 @@ impl App {
         );
         play.add_css_class("tp-button");
         play.add_css_class("tp-action");
+        play.add_css_class("tp-tall");
         play.set_sensitive(can_play);
         plays.append(&play);
         play_buttons.push(play);
@@ -2677,6 +2717,7 @@ impl App {
             restart.add_css_class("tp-button");
             restart.add_css_class("tp-action");
             restart.add_css_class("tp-action-icon");
+            restart.add_css_class("tp-tall");
             restart.set_sensitive(can_play);
             // The word is gone from the face, so it has to be somewhere: a
             // tooltip for a pointer, and a name for a screen reader, which
@@ -2690,6 +2731,12 @@ impl App {
 
         let (fullscreen, gear) = self.corner_buttons();
         let open = self.browse_button();
+        // Square, and as tall as the play button beside them. The marks are
+        // built the same way on the empty page, where there is no tall button
+        // to match, so this is asked for here rather than where they are made.
+        for mark in [Some(&open), Some(&gear), fullscreen.as_ref()].into_iter().flatten() {
+            mark.add_css_class("tp-tall");
+        }
         // A little clear air between the pair that plays the film and the
         // marks that do not, so the row reads as two groups rather than a run
         // of equal buttons.
@@ -2704,6 +2751,7 @@ impl App {
             buttons.append(fullscreen);
         }
         let close = self.close_button();
+        close.add_css_class("tp-tall");
         buttons.append(&close);
 
         // The page in order: what the film is, what to do about it, and then
@@ -2834,6 +2882,65 @@ impl App {
         }
     }
 
+    /// How tall the poster should be for the window as it stands: a share of
+    /// the page, within hard bounds at both ends.
+    ///
+    /// The ceiling matters for more than composition. This is a size
+    /// *request*, which is a minimum its window must honor, so a poster sized
+    /// from the window's own height is a loop: the taller the window, the more
+    /// height its contents insist on. Capping it breaks that - past this size
+    /// the poster stops following the window, and the window stays free to be
+    /// made smaller again.
+    ///
+    /// The floor is absolute rather than scaled for the opposite reason:
+    /// scaled, it grows with the interface exactly when there is least room
+    /// for it.
+    fn poster_height(&self, scale: f64) -> f64 {
+        (self.page_height(scale) * POSTER_SHARE).clamp(120.0, 620.0 * scale)
+    }
+
+    /// Rebuilds the media page once a drag-resize has stopped moving.
+    ///
+    /// GTK has no "the resize finished" signal - `layout` arrives on every
+    /// frame of a drag, and rebuilding the page on each one would be both slow
+    /// and unpleasant to watch, the poster jumping under the pointer. So the
+    /// rebuild is put on a short timer that each new size cancels and restarts,
+    /// and only the last one in a drag survives to fire.
+    ///
+    /// Without this the poster only resized on maximize and restore, which
+    /// have their own handler and change the height in one step. Dragging a
+    /// window smaller left the page built for the size it used to be, which is
+    /// the sort of thing that looks like a bug rather than a decision.
+    ///
+    /// The guard is the poster's own height rather than the window's: past the
+    /// ceiling in [`App::poster_height`] the window can grow as much as it
+    /// likes without the page looking any different, and rebuilding then would
+    /// throw away the viewer's place in the list for nothing.
+    fn rebuild_when_resize_ends(self: &Rc<Self>) {
+        /// Long enough to sit out a drag, short enough that letting go and
+        /// seeing the page settle reads as one action rather than two.
+        const SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
+        if *self.screen.borrow() != Screen::Menu {
+            return;
+        }
+        if let Some(pending) = self.resize_settle.borrow_mut().take() {
+            pending.remove();
+        }
+        let app = self.clone();
+        let source = glib::timeout_add_local_once(SETTLE, move || {
+            *app.resize_settle.borrow_mut() = None;
+            if *app.screen.borrow() != Screen::Menu {
+                return;
+            }
+            if app.poster_height(app.scale.get()) == app.built_poster.get() {
+                return;
+            }
+            app.show_menu();
+        });
+        *self.resize_settle.borrow_mut() = Some(source);
+    }
+
     /// The poster, and the facts about the file under it.
     ///
     /// The two belong together and to nothing else on the page: one is what
@@ -2858,20 +2965,10 @@ impl App {
         // The alternative is another custom widget, and this is a proportion
         // rather than a constraint: being a little out until the next rebuild
         // costs nothing that anyone can see.
-        let page_height = self.page_height(scale);
-        // Half the page, within hard bounds at both ends.
-        //
-        // The ceiling matters for more than composition. This is a size
-        // *request*, which is a minimum its window must honor, so a poster
-        // sized from the window's own height is a loop: the taller the window,
-        // the more height its contents insist on. Capping it breaks that -
-        // past this size the poster stops following the window, and the window
-        // stays free to be made smaller again.
-        //
-        // The floor is absolute rather than scaled for the opposite reason:
-        // scaled, it grows with the interface exactly when there is least room
-        // for it.
-        let height = (page_height * 0.5).clamp(120.0, 560.0 * scale);
+        let height = self.poster_height(scale);
+        // Recorded so a resize can tell whether rebuilding the page would
+        // change anything. Past the ceiling below it would not.
+        self.built_poster.set(height);
         // Two by three, which every poster in every library is drawn to.
         let width = height * 2.0 / 3.0;
 
@@ -6288,7 +6385,7 @@ impl App {
     }
 
     /// Redraws the interface at the size the bar is now at.
-    fn apply_scale(&self, steps: f64) {
+    fn apply_scale(self: &Rc<Self>, steps: f64) {
         let scale = scale_from_steps(steps);
         if scale != self.scale.get() {
             self.restyle(scale);
@@ -6305,7 +6402,7 @@ impl App {
     ///
     /// A size set by hand is that size in both, which is what asking for one
     /// means.
-    fn follow_automatic_scale(&self, window: &gtk::ApplicationWindow) {
+    fn follow_automatic_scale(self: &Rc<Self>, window: &gtk::ApplicationWindow) {
         if self.config.borrow().ui_scale.is_some() {
             return;
         }
@@ -6322,9 +6419,32 @@ impl App {
     }
 
     /// Re-renders every size in the interface at a new scale.
-    fn restyle(&self, scale: f64) {
+    fn restyle(self: &Rc<Self>, scale: f64) {
         self.scale.set(scale);
         self.styles.load_from_data(&style_css(scale));
+
+        // The stylesheet is only half of a size. Everything drawn rather than
+        // styled takes its size in Rust at the moment the page is built - the
+        // poster, the marks on the buttons, every margin, the width the page
+        // is held to - and none of that moves when the stylesheet is
+        // reloaded. Restyling alone therefore left the two halves disagreeing:
+        // type at the new size inside a page laid out for the old one.
+        //
+        // It shows worst where the change is largest. A 4K television picks
+        // 2x, so a page built at 1x and restyled kept a half-size poster and
+        // half-size margins under full-size text, and the whole composition
+        // sat in the top of the screen with the bottom third empty.
+        //
+        // Rebuilding is cheap here and this happens on a monitor change or a
+        // fullscreen toggle, not on a drag.
+        if *self.screen.borrow() == Screen::Menu {
+            let app = self.clone();
+            glib::idle_add_local_once(move || {
+                if *app.screen.borrow() == Screen::Menu {
+                    app.show_menu();
+                }
+            });
+        }
     }
 
     /// What is running, who wrote what it is built on, and under what terms.
@@ -8396,6 +8516,14 @@ fn marked_face(mark: gtk::Image, words: &str) -> gtk::Box {
 /// filling.
 const PAGE_MAX_UNITS: f64 = 1920.0;
 
+/// How much of the page's height the poster takes.
+///
+/// Wider than it was, and the width is the point: the poster and the column
+/// beside it share one line, so a broader poster is what sets how wide the
+/// summary runs. The extra depth on both sides is what fills a 16:9 screen
+/// rather than leaving a band along the bottom.
+const POSTER_SHARE: f64 = 0.58;
+
 /// Three lines of summary, in interface units, reserved whether the film has
 /// a summary or not.
 ///
@@ -8404,7 +8532,7 @@ const PAGE_MAX_UNITS: f64 = 1920.0;
 /// absent, so it is the only thing that would move the rows underneath as you
 /// step from one film to the next. A film with no summary gets the space as
 /// blank rather than getting it back.
-const PLOT_UNITS: f64 = 84.0;
+const PLOT_UNITS: f64 = 90.0;
 
 /// What stands in for a poster when there is none, which is most of the time.
 ///
@@ -9696,6 +9824,12 @@ fn style_css(scale: f64) -> String {
            narrow, so it reads as the mark's button rather than as a button
            whose label went missing. */
         .tp-action-icon {{ padding: {pad_v}px {pad_v}px; min-width: {play_icon}px; }}
+        /* Half again the height, on the media page's pair alone. They are the
+           one thing the page is for, and on a television they are pressed from
+           across a room - so they are worth more than the height a line of
+           text happens to need. Declared after `.tp-action-icon` so the
+           restart button takes this padding rather than that one. */
+        .tp-tall {{ padding-top: {tall_v}px; padding-bottom: {tall_v}px; }}
         /* The media page.
 
            The ground the whole page is drawn on, and - through `color` - the
@@ -9747,12 +9881,12 @@ fn style_css(scale: f64) -> String {
             font-size: {film_title}px;
             font-weight: bold;
         }}
-        .tp-film-facts {{ font-size: {hint}px; opacity: 0.65; }}
-        .tp-film-plot {{ font-size: {hint}px; opacity: 0.92; }}
+        .tp-film-facts {{ font-size: {film_facts}px; opacity: 0.65; }}
+        .tp-film-plot {{ font-size: {film_plot}px; opacity: 0.92; }}
         /* The label-and-reading lines: under the poster, and the languages
            above the rows. The label's own dimming is set per-span in the
            markup, so this carries only the size. */
-        .tp-fact {{ font-size: {small}px; }}
+        .tp-fact {{ font-size: {fact}px; }}
         /* The name of a reading rather than the reading itself, dimmed so a
            column of these scans as values with labels rather than as a block
            of text of one weight. */
@@ -10070,6 +10204,11 @@ fn style_css(scale: f64) -> String {
                 {on_highlight} 0, {on_highlight} {badge_r}px, transparent {badge_r}px);
         }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}
+        /* Only where it sits beside the tall pair, and the same height as it.
+           `tall_pad` across is what `tall_v` down was before the height came
+           back ten percent - it is kept because the widths were to stay put,
+           which leaves these marginally wider than tall rather than square. */
+        .tp-gear.tp-tall {{ padding: {tall_v}px {tall_pad}px; }}
         .tp-row-icon {{ -gtk-icon-size: {row_icon}px; opacity: 0.65; }}
         .tp-back image {{ -gtk-icon-size: {back_icon}px; }}
         .{video} {{ background-color: black; }}
@@ -10134,7 +10273,16 @@ fn style_css(scale: f64) -> String {
         modal = px(48.0),
         modal_pad = px(16.0),
         highlight = "#3584e4",
-        film_title = px(40.0),
+        film_title = px(48.0),
+        film_facts = px(24.0),
+        film_plot = px(22.0),
+        fact = px(20.0),
+        // Half again as tall as the type inside it would otherwise leave it,
+        // less ten percent. Vertical and horizontal are separate numbers
+        // because that ten percent came off the height alone: the marks in the
+        // button bar keep the width that had them square.
+        tall_v = px(17.0),
+        tall_pad = px(20.0),
         play_icon = px(46.0),
         focus_ring = px(3.0).max(2),
         // The blue the play and restart buttons are drawn in - the same accent
