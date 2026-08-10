@@ -85,7 +85,7 @@ Everything is reachable with a keyboard or a gamepad. A mouse is not required, b
 
 On macOS the shortcuts below work with either <kbd>Cmd</kbd> or <kbd>Ctrl</kbd>.
 
-### In the menus
+### In the Menus
 
 | Key | Gamepad | Action                                |
 | --- | --- |---------------------------------------|
@@ -100,7 +100,7 @@ On macOS the shortcuts below work with either <kbd>Cmd</kbd> or <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>,</kbd> | - | Open Settings, from main menu         |
 | <kbd>Ctrl</kbd>+<kbd>Q</kbd> or <kbd>Ctrl</kbd>+<kbd>W</kbd> | - | Close the player, from anywhere including playback |
 
-### During playback
+### During Playback
 
 | Key | Gamepad                                                    | Action                                                                                            |
 | --- |------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
@@ -127,7 +127,7 @@ come back on any interaction.
 skip back, pause, skip forward, subtitles, volume and
 fullscreen.](screenshots/control-bar.png)
 
-### Volume and sync
+### Volume and Sync
 
 The volume button opens a panel above the controls, holding audio settings
 for each output. When open, the controls will not auto-hide until closed.
@@ -145,11 +145,39 @@ It can be adjusted and fine-tuned here while the video is playing, per output.
 A positive value holds that output back, for sound arriving ahead of the picture;
 a negative one moves it earlier.
 
+Sync applies to the output device rather than the file, so it keeps its setting
+between different videos. Also, it is added on top of any adjustments
+[Auto-align](#separate-audio-files) has done for playing back separate audio files.
+
 The sync icon toggles that output's delay on and off while keeping whatever the delay is
 set to
 
 Both are saved and persist between runs. See
 [Audio Sync](configuration.md#audio-sync).
+
+## Separate Audio Files
+
+An output can play an external audio file instead of a track inside the video.
+It works for anything separately sourced: a described version for a viewer who
+is blind or has low vision, a dub in another language, a commentary track, or
+restored audio for an old film.
+
+To choose one, open **Primary Audio Track** or **Secondary Audio Track** and
+pick **Audio File...** below the tracks.
+
+### Auto-align Audio
+
+A separately sourced soundtrack is routinely out by seconds, because it was cut
+against a different master or carries a different amount of leader. **Auto-align**
+measures the difference and corrects it, so this does not have to be found by
+ear.
+
+An **Auto-align** row appears under an output if it is set to an external audio
+file. You can select this to analyze the audio and automatically apply adjustments
+to the sync.
+
+If auto-align fails, try a different reference track, or line the two up by
+ear with [Sync](#volume-and-sync).
 
 ## Subtitles
 
@@ -254,9 +282,13 @@ experience.
 | `ad`      | the first [described](configuration.md#audio-description) track        |
 | `en:ad`   | the first described track in that language                             |
 | `0`       | no audio on this output                                                |
+| A path    | that [separate audio file](#separate-audio-files) on this output       |
 
 A language on its own never selects a described track, matching what the
 setting does: description is only ever played by asking for it.
+
+Anything that exists on disk is read as a file. Any auto-alignment already measured for
+that audio file is applied.
 
 ### Choosing Subtitles on the Command Line
 
