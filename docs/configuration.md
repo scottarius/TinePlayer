@@ -5,8 +5,8 @@ which offers only values that make sense and lists the audio devices this
 machine actually has. For driving the player itself, see
 [Using TinePlayer](usage.md).
 
-![TinePlayer's settings screen: theme, interface size with its automatic
-switch, and each output's language, description, volume and audio
+![TinePlayer's settings screen: interface size with its automatic switch, and
+each output's language, description, volume and audio
 sync.](screenshots/settings-menu.png)
 
 The same settings are stored in `config.yaml`, which can be edited directly. TinePlayer reads it at startup, so
@@ -20,7 +20,6 @@ It lives in the per-user config directory:
 
 | Setting                                                  | Key                  | Default     | Description                                                                                                                                    |
 |----------------------------------------------------------|----------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| Theme                                                    | `theme`              | `auto`      | `auto`, `light` or `dark`                                                                                                                      |
 | [Interface Size](#interface-size)                        | `ui_scale`           | Unset       | Interface scale, such as `1.5`, from `0.33` to `3` <br/>If unset it defaults to 1.0 and auto-scales to the display resolution in fullscreen    |
 | Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
 | Check for updates                                        | `check_for_updates`  | `true`      | Asks GitHub once a day whether a newer TinePlayer has been released, `true` or `false` <br/>Nothing is ever downloaded or installed            |
@@ -62,7 +61,6 @@ A fully commented version of the whole file is at
 from that than build one up.
 
 ```yaml
-theme: dark
 ui_scale: 1.5
 sounds: true
 check_for_updates: true

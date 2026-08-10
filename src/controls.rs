@@ -347,15 +347,7 @@ impl Controls {
         name_it(&position, "Position");
 
         let fullscreen = gtk::Button::new();
-        // `true`, not `dark`. The mark is chosen for the surface it sits on,
-        // and this strip paints its own near-black background under either
-        // theme - so on the light theme it was asking for the dark-ink mark
-        // and drawing it onto black.
-        fullscreen.set_child(Some(&crate::app::fullscreen_image(
-            fullscreen_now,
-            scale,
-            true,
-        )));
+        fullscreen.set_child(Some(&crate::app::fullscreen_image(fullscreen_now, scale)));
         fullscreen.add_css_class("tp-transport-button");
         name_it(&fullscreen, "Toggle fullscreen");
         // Hidden rather than dimmed when fullscreen is fixed for this run:
@@ -509,7 +501,7 @@ impl Controls {
         // Away from the transport controls, beside the other things that are
         // not about what playback is doing: it leaves playback rather than
         // changing it.
-        let settings_icon = crate::app::settings_image(crate::app::ICON_PX * scale, true);
+        let settings_icon = crate::app::settings_image(crate::app::ICON_PX * scale);
         settings_icon.add_css_class("tp-transport");
         let settings = gtk::Button::new();
         settings.set_child(Some(&settings_icon));
@@ -1594,12 +1586,8 @@ impl Controls {
             return;
         }
         *self.fullscreen_state.borrow_mut() = fullscreen;
-        // `true` for the same reason it is true where this button is built:
-        // the strip is dark whatever the theme is.
         self.fullscreen
-            .set_child(Some(&crate::app::fullscreen_image(
-                fullscreen, self.scale, true,
-            )));
+            .set_child(Some(&crate::app::fullscreen_image(fullscreen, self.scale)));
     }
 
     /// Refreshes the readout. Cheap enough to call on a timer, since it is

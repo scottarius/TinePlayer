@@ -93,7 +93,6 @@ enum Setting {
     SecondaryDevice,
     SecondaryTrack,
     Subtitles,
-    Theme,
     PrimaryLanguage,
     SecondaryLanguage,
     SubtitleLanguage,
@@ -244,7 +243,7 @@ pub const READING_CHARS: i32 = 7;
 
 /// The rows the settings screen always has. The version row below the
 /// update switch is extra, and only there while the switch is on.
-const SETTINGS_ROWS: usize = 24;
+const SETTINGS_ROWS: usize = 23;
 
 /// Every row of the settings screen, in the order it is built.
 ///
@@ -255,33 +254,32 @@ const SETTINGS_ROWS: usize = 24;
 /// count still adds up, and the symptom is a row that quietly opens the wrong
 /// screen. Inserting a row means changing one constant rather than renumbering
 /// every literal after it.
-const ROW_THEME: i32 = 0;
-const ROW_INTERFACE_SCALE: i32 = 1;
-const ROW_SOUNDS: i32 = 2;
-const ROW_PRIMARY_DEVICE: i32 = 3;
-const ROW_PRIMARY_LANGUAGE: i32 = 4;
-const ROW_PRIMARY_DESCRIPTION: i32 = 5;
-const ROW_PRIMARY_VOLUME: i32 = 6;
-const ROW_PRIMARY_SYNC: i32 = 7;
-const ROW_SECONDARY_DEVICE: i32 = 8;
-const ROW_SECONDARY_LANGUAGE: i32 = 9;
-const ROW_SECONDARY_DESCRIPTION: i32 = 10;
-const ROW_SECONDARY_VOLUME: i32 = 11;
-const ROW_SECONDARY_SYNC: i32 = 12;
-const ROW_SUBTITLE_LANGUAGE: i32 = 13;
-const ROW_SUBTITLE_SIZE: i32 = 14;
-const ROW_SUBTITLE_FONT: i32 = 15;
-const ROW_RESUME_THRESHOLD: i32 = 16;
-const ROW_WATCHED_THRESHOLD: i32 = 17;
-const ROW_CLEAR_DATA: i32 = 18;
-const ROW_KODI: i32 = 19;
-const ROW_ABOUT: i32 = 20;
-const ROW_NOTICES: i32 = 21;
+const ROW_INTERFACE_SCALE: i32 = 0;
+const ROW_SOUNDS: i32 = 1;
+const ROW_PRIMARY_DEVICE: i32 = 2;
+const ROW_PRIMARY_LANGUAGE: i32 = 3;
+const ROW_PRIMARY_DESCRIPTION: i32 = 4;
+const ROW_PRIMARY_VOLUME: i32 = 5;
+const ROW_PRIMARY_SYNC: i32 = 6;
+const ROW_SECONDARY_DEVICE: i32 = 7;
+const ROW_SECONDARY_LANGUAGE: i32 = 8;
+const ROW_SECONDARY_DESCRIPTION: i32 = 9;
+const ROW_SECONDARY_VOLUME: i32 = 10;
+const ROW_SECONDARY_SYNC: i32 = 11;
+const ROW_SUBTITLE_LANGUAGE: i32 = 12;
+const ROW_SUBTITLE_SIZE: i32 = 13;
+const ROW_SUBTITLE_FONT: i32 = 14;
+const ROW_RESUME_THRESHOLD: i32 = 15;
+const ROW_WATCHED_THRESHOLD: i32 = 16;
+const ROW_CLEAR_DATA: i32 = 17;
+const ROW_KODI: i32 = 18;
+const ROW_ABOUT: i32 = 19;
+const ROW_NOTICES: i32 = 20;
 /// Where the update switch sits, and the row naming a new version under it.
-const UPDATE_SWITCH_ROW: i32 = 22;
+const UPDATE_SWITCH_ROW: i32 = 21;
 /// The version this is, and what the check made of it. Always built, unlike
 /// the check itself, which can be turned off.
-const UPDATE_STATUS_ROW: i32 = 23;
+const UPDATE_STATUS_ROW: i32 = 22;
 
 /// Every row, in the order they are built, which is what the constants above
 /// are positions in. Inserting a row means renumbering everything below it,
@@ -289,7 +287,6 @@ const UPDATE_STATUS_ROW: i32 = 23;
 /// rather than failing - which is how the secondary output's switch came to
 /// be built over its Preferred Language row.
 const SETTINGS_ORDER: [i32; SETTINGS_ROWS] = [
-    ROW_THEME,
     ROW_INTERFACE_SCALE,
     ROW_SOUNDS,
     ROW_PRIMARY_DEVICE,
@@ -629,9 +626,6 @@ pub struct App {
     /// Whether the open chooser was reached from the settings screen, so
     /// that finishing with it returns where it came from.
     from_settings: Cell<bool>,
-    /// Whether the dark theme is in force, so switching away from it can be
-    /// recognized.
-    dark: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -710,7 +704,7 @@ impl App {
             play,
             remembered,
         } = launch;
-        let dark = appearance::apply_theme(config.theme);
+        appearance::force_dark();
         suppress_error_bell();
 
         // Sized from the tallest monitor to begin with, since no window exists
@@ -718,7 +712,7 @@ impl App {
         let styles = install_styles();
         let monitor = appearance::tallest_monitor();
         let scale = appearance::resolve_scale(config.ui_scale, monitor.as_ref());
-        styles.load_from_data(&style_css(scale, dark));
+        styles.load_from_data(&style_css(scale));
         if config.ui_scale.is_none()
             && scale != 1.0
             && let Some(monitor) = monitor.as_ref()
@@ -793,7 +787,6 @@ impl App {
             nav_header_entry: RefCell::new(None),
             controls: RefCell::new(None),
             from_settings: Cell::new(false),
-            dark: Cell::new(dark),
             styles: styles.clone(),
             scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
@@ -2956,7 +2949,7 @@ impl App {
             // in the library this was written against, 28 carry artwork. The
             // mark is sized from the frame rather than from the interface, so
             // it keeps its place inside it at every window size.
-            None => frame.append(&video_file_image(width * 0.42, self.dark.get())),
+            None => frame.append(&video_file_image(width * 0.42)),
         }
         column.append(&frame);
 
@@ -3350,7 +3343,6 @@ impl App {
         fullscreen.set_child(Some(&fullscreen_image(
             self.window.is_fullscreen(),
             self.scale.get(),
-            self.dark.get(),
         )));
         fullscreen.add_css_class("tp-gear");
         fullscreen.set_focus_on_click(false);
@@ -3366,19 +3358,15 @@ impl App {
         {
             let weak = fullscreen.downgrade();
             let scale = self.scale.get();
-            let dark = self.dark.get();
             self.window.connect_fullscreened_notify(move |window| {
                 if let Some(button) = weak.upgrade() {
-                    button.set_child(Some(&fullscreen_image(window.is_fullscreen(), scale, dark)));
+                    button.set_child(Some(&fullscreen_image(window.is_fullscreen(), scale)));
                 }
             });
         }
 
         let gear = gtk::Button::new();
-        gear.set_child(Some(&settings_image(
-            CORNER_MARK_PX * self.scale.get(),
-            self.dark.get(),
-        )));
+        gear.set_child(Some(&settings_image(CORNER_MARK_PX * self.scale.get())));
         gear.add_css_class("tp-gear");
         gear.set_focus_on_click(false);
         gear.set_tooltip_text(Some("Settings"));
@@ -3480,7 +3468,6 @@ impl App {
             Setting::SecondaryDevice => "Secondary Audio Device",
             Setting::SecondaryTrack => "Secondary Audio Track",
             Setting::Subtitles => "Subtitles",
-            Setting::Theme => "Theme",
             Setting::PrimaryLanguage => "Primary Language Preference",
             Setting::SecondaryLanguage => "Secondary Language Preference",
             Setting::SubtitleLanguage => "Subtitle Preference",
@@ -3560,16 +3547,6 @@ impl App {
                     entries.push((format!("Audio File: {}", file.label()), Some(audio_file)));
                 } else {
                     entries.push(("Audio File...".to_string(), Some(audio_file)));
-                }
-            }
-            Setting::Theme => {
-                current = Some(match self.config.borrow().theme {
-                    crate::config::Theme::Auto => 0,
-                    crate::config::Theme::Light => 1,
-                    crate::config::Theme::Dark => 2,
-                });
-                for (position, name) in ["System", "Light", "Dark"].into_iter().enumerate() {
-                    entries.push((name.to_string(), Some(position)));
                 }
             }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
@@ -3857,36 +3834,6 @@ impl App {
                     *self.sounds.borrow_mut() = Sounds::new(enabled, device);
                 }
             }
-            Setting::Theme => {
-                let theme = match choice {
-                    Some(1) => crate::config::Theme::Light,
-                    Some(2) => crate::config::Theme::Dark,
-                    _ => crate::config::Theme::Auto,
-                };
-                {
-                    let mut config = self.config.borrow_mut();
-                    config.theme = theme;
-                    let _ = config.save();
-                }
-                let was_dark = self.dark.get();
-                let now_dark = appearance::apply_theme(theme);
-                self.dark.set(now_dark);
-
-                // GTK's Windows build will move to the dark theme but never
-                // back, whatever is done to the settings. Everything worth
-                // keeping is already written to disk, so restarting is
-                // seamless, but it should still be asked for rather than
-                // done out of the blue.
-                if cfg!(target_os = "windows") && was_dark && !now_dark {
-                    let app = self.clone();
-                    self.show_confirm(
-                        "Switching to the light theme needs a restart.\nRestart now?",
-                        "Restart",
-                        move || app.relaunch(),
-                    );
-                    return true;
-                }
-            }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
                 let picked = choice
                     .and_then(|index| crate::languages::LANGUAGES.get(index))
@@ -3962,25 +3909,6 @@ impl App {
             }
         }
         false
-    }
-
-    /// Starts a fresh copy and closes this one. Playback cannot be running
-    /// here, since the settings are only reachable from the menu, and the
-    /// file, tracks, position and window state are all already saved.
-    fn relaunch(&self) {
-        match std::env::current_exe() {
-            Ok(exe) => {
-                if let Err(e) = std::process::Command::new(exe).spawn() {
-                    eprintln!("Could not restart: {e}");
-                    return;
-                }
-            }
-            Err(e) => {
-                eprintln!("Could not find the executable to restart: {e}");
-                return;
-            }
-        }
-        self.window.close();
     }
 
     // --- File selection ------------------------------------------------
@@ -4445,9 +4373,6 @@ impl App {
         let scrim = gtk::Box::builder().css_classes(["tp-scrim"]).build();
 
         page.add_css_class("tp-modal");
-        if self.dark.get() {
-            page.add_css_class("tp-modal-dark");
-        }
 
         let overlay = gtk::Overlay::new();
         overlay.add_css_class(MODAL_STACK);
@@ -5598,15 +5523,6 @@ impl App {
             };
             [
                 (
-                    "Theme".to_string(),
-                    match config.theme {
-                        crate::config::Theme::Auto => "System".to_string(),
-                        crate::config::Theme::Light => "Light".to_string(),
-                        crate::config::Theme::Dark => "Dark".to_string(),
-                    },
-                    true,
-                ),
-                (
                     "Interface Size".to_string(),
                     match config.ui_scale {
                         Some(scale) => format!("{scale}x"),
@@ -5973,7 +5889,6 @@ impl App {
                 // row it was opened from, as the main menu does.
                 *app.settings_row.borrow_mut() = row.index();
                 match row.index() {
-                    ROW_THEME => app.open_setting(Setting::Theme),
                     ROW_INTERFACE_SCALE => app.work_switch_row(ROW_INTERFACE_SCALE),
                     ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
                     ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
@@ -6329,8 +6244,7 @@ impl App {
     /// Re-renders every size in the interface at a new scale.
     fn restyle(&self, scale: f64) {
         self.scale.set(scale);
-        self.styles
-            .load_from_data(&style_css(scale, self.dark.get()));
+        self.styles.load_from_data(&style_css(scale));
     }
 
     /// What is running, who wrote what it is built on, and under what terms.
@@ -8418,13 +8332,11 @@ const PLOT_UNITS: f64 = 84.0;
 /// [`logo_image`] gives: GStreamer's Windows distribution ships no gdk-pixbuf
 /// loaders, so nothing there can decode an SVG at runtime. The two versions
 /// carry the same ink as the fullscreen marks beside them.
-fn video_file_image(size: f64, dark: bool) -> gtk::Image {
-    const LIGHT: &[u8] = include_bytes!("../data/ui/video-file-light.png");
-    const DARK: &[u8] = include_bytes!("../data/ui/video-file-dark.png");
+fn video_file_image(size: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/video-file.png");
 
     let image = gtk::Image::new();
-    let bytes = if dark { DARK } else { LIGHT };
-    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(bytes)) {
+    if let Ok(texture) = gdk::Texture::from_bytes(&glib::Bytes::from_static(ICON)) {
         image.set_paintable(Some(&texture));
     }
     // Drawn well inside the frame rather than filling it: the mark is saying
@@ -8523,17 +8435,13 @@ const SYNC_MARK_PX: f64 = 28.0;
 /// **`dark` is about the surface, not about the theme.** The control strip
 /// draws its own near-black background under either theme, so it asks for the
 /// dark-theme mark always - see [`marked_image`].
-pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image {
-    const ENTER_LIGHT: &[u8] = include_bytes!("../data/ui/fullscreen-light.png");
-    const ENTER_DARK: &[u8] = include_bytes!("../data/ui/fullscreen-dark.png");
-    const LEAVE_LIGHT: &[u8] = include_bytes!("../data/ui/restore-light.png");
-    const LEAVE_DARK: &[u8] = include_bytes!("../data/ui/restore-dark.png");
+pub fn fullscreen_image(fullscreen: bool, scale: f64) -> gtk::Image {
+    const ENTER: &[u8] = include_bytes!("../data/ui/fullscreen.png");
+    const LEAVE: &[u8] = include_bytes!("../data/ui/restore.png");
 
-    let bytes = match (fullscreen, dark) {
-        (true, true) => LEAVE_DARK,
-        (true, false) => LEAVE_LIGHT,
-        (false, true) => ENTER_DARK,
-        (false, false) => ENTER_LIGHT,
+    let bytes = match fullscreen {
+        true => LEAVE,
+        false => ENTER,
     };
     marked_image(bytes, CORNER_MARK_PX * scale)
 }
@@ -8549,11 +8457,10 @@ pub fn fullscreen_image(fullscreen: bool, scale: f64, dark: bool) -> gtk::Image 
 /// appears at two sizes: beside the fullscreen mark on the media page, where
 /// the two have to agree, and among the transport icons on the control strip,
 /// where it has to agree with those instead.
-pub fn settings_image(size: f64, dark: bool) -> gtk::Image {
-    const LIGHT: &[u8] = include_bytes!("../data/ui/settings-light.png");
-    const DARK: &[u8] = include_bytes!("../data/ui/settings-dark.png");
+pub fn settings_image(size: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/settings.png");
 
-    marked_image(if dark { DARK } else { LIGHT }, size)
+    marked_image(ICON, size)
 }
 
 /// How large the two marks in the media page's corner are drawn, before
@@ -9554,7 +9461,7 @@ fn install_styles() -> gtk::CssProvider {
     provider
 }
 
-fn style_css(scale: f64, dark: bool) -> String {
+fn style_css(scale: f64) -> String {
     let px = |base: f64| (base * scale).round() as i32;
 
     format!(
@@ -9947,15 +9854,11 @@ fn style_css(scale: f64, dark: bool) -> String {
            colors rather than theme names, for the reason given by the
            highlight color below. */
         .tp-modal {{
-            background-color: #fafafa;
-            border: 1px solid rgba(0, 0, 0, 0.2);
+            background-color: #1e1e1e;
+            border: 1px solid rgba(255, 255, 255, 0.14);
             border-radius: {radius}px;
             margin: {modal}px;
             padding: {modal_pad}px;
-        }}
-        .tp-modal-dark {{
-            background-color: #1e1e1e;
-            border-color: rgba(255, 255, 255, 0.14);
         }}
         /* Taller than a stock entry: this is the one thing on its panel, and
            it is read from the same distance as everything else. */
@@ -10116,20 +10019,10 @@ fn style_css(scale: f64, dark: bool) -> String {
         // Bright on dark; on light a white knob held in by its ring rather
         // than a dark disc, which read as heavy against a white row and
         // heavier still in a column of them.
-        knob = if dark { "#dcdcdc" } else { "#ffffff" },
-        fill = if dark { "#b9b9b9" } else { "#8e8e8e" },
-        trough = if dark {
-            "rgba(255, 255, 255, 0.13)"
-        } else {
-            "rgba(0, 0, 0, 0.11)"
-        },
-        // On light the ring is what makes a white knob visible at all, so
-        // it carries the contrast the knob itself no longer does.
-        knob_edge = if dark {
-            "rgba(0, 0, 0, 0.55)"
-        } else {
-            "rgba(0, 0, 0, 0.38)"
-        },
+        knob = "#dcdcdc",
+        fill = "#b9b9b9",
+        trough = "rgba(255, 255, 255, 0.13)",
+        knob_edge = "rgba(0, 0, 0, 0.55)",
         edge = px(1.0).max(1),
         switch_w = px(64.0),
         switch_h = px(32.0),
@@ -10166,8 +10059,8 @@ fn style_css(scale: f64, dark: bool) -> String {
         focus_ring = px(3.0).max(2),
         // The blue the play and restart buttons are drawn in - the same accent
         // as everything else the application colors deliberately.
-        play_fill = if dark { "#3584e4" } else { "#1c71d8" },
-        play_hover = if dark { "#4a90e8" } else { "#1a63bd" },
+        play_fill = "#3584e4",
+        play_hover = "#4a90e8",
         play_ink = "#ffffff",
         // What shows where you are: the selected row, and the ring round a
         // focused button.
@@ -10180,21 +10073,17 @@ fn style_css(scale: f64, dark: bool) -> String {
         // competing with any color that means something - white on the dark
         // theme, and near-black on the light one, where white would be
         // invisible against a near-white page.
-        focus = if dark { "#ffffff" } else { "#1c1c1c" },
-        on_focus = if dark { "#1c1c1c" } else { "#ffffff" },
+        focus = "#ffffff",
+        on_focus = "#1c1c1c",
         // The ink both corner marks share. The fullscreen image is drawn in
         // it as a picture; the gear is told to match.
         // The page's own ground. Matched to what each theme's window is
         // already drawn in, since the backdrop paints over the whole page and
         // a mismatch would show as a rectangle behind the content.
-        page_bg = if dark { "#242424" } else { "#fafafa" },
+        page_bg = "#242424",
         // The poster's frame, a shade off the page in whichever direction
         // there is room to go.
-        panel = if dark {
-            "rgba(255, 255, 255, 0.07)"
-        } else {
-            "rgba(0, 0, 0, 0.06)"
-        },
+        panel = "rgba(255, 255, 255, 0.07)",
         video = crate::player::VIDEO_CSS_CLASS,
     )
 }

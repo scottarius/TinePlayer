@@ -1,10 +1,8 @@
 //! Adapting the interface to the machine it is running on: how large to draw
-//! it, and whether to draw it dark.
+//! it, and keeping it dark.
 
 use gtk::gdk;
 use gtk::prelude::*;
-
-use crate::config::Theme;
 
 /// The display height the interface's sizes were chosen against. Anything
 /// taller is scaled proportionally, so the menu occupies the same share of
@@ -86,128 +84,35 @@ pub fn resolve_scale(configured: Option<f64>, monitor: Option<&gdk::Monitor>) ->
     monitor.map(scale_for).unwrap_or(MIN_SCALE)
 }
 
-/// Applies light or dark, resolving `Theme::Auto` against the desktop.
+/// Draws the interface dark, and keeps it there.
 ///
-/// Auto means dark unless the desktop explicitly asks for light. Falling back
-/// to dark rather than light is deliberate: this interface is usually on a
-/// television in a darkened room, where a full-screen light menu between
-/// films is genuinely unpleasant, and the desktops most likely to fail the
-/// query are the minimal ones a media machine runs.
-pub fn apply_theme(theme: Theme) -> bool {
-    let dark = match theme {
-        Theme::Light => false,
-        Theme::Dark => true,
-        Theme::Auto => !system_prefers_light(),
-    };
+/// There is no light theme and nothing to resolve against the desktop. That is
+/// a deliberate narrowing rather than tidying for its own sake: two themes
+/// meant every colour, every icon and every focus state existed twice and had
+/// to be judged twice, and the light one was never the case this application
+/// is for - a full-screen light menu between films, on a television in a
+/// darkened room, is genuinely unpleasant.
+///
+/// The desktop is no longer asked what it prefers, and the Windows registry
+/// and D-Bus portal probes that asked are gone with it.
+///
+/// If a high-contrast mode is ever wanted it belongs here, as a *third*
+/// deliberate scheme rather than as the light theme brought back: what that
+/// needs is maximum separation between foreground and background, which is
+/// not what a light theme is.
+pub fn force_dark() {
     let Some(settings) = gtk::Settings::default() else {
-        return dark;
+        return;
     };
-    settings.set_gtk_application_prefer_dark_theme(dark);
+    settings.set_gtk_application_prefer_dark_theme(true);
 
-    // Measured on both platforms: clearing the preference returns Linux to
-    // light immediately, and does nothing at all on Windows, where the theme
-    // stays dark however it is prodded. Reassigning the theme name is enough
-    // on Linux; Windows needs the process restarting, which the caller
-    // offers. The intermediate name has to be one nothing could be called,
-    // since GTK's own default theme is literally named "Default".
+    // Reassigning the theme name is what makes GTK act on the preference
+    // rather than only recording it. The intermediate name has to be one
+    // nothing could be called, since GTK's own default theme is literally
+    // named "Default".
     let name = settings.gtk_theme_name();
     settings.set_gtk_theme_name(Some("tineplayer-force-reload"));
     settings.set_gtk_theme_name(name.as_deref());
-
-    dark
-}
-
-/// Whether the desktop explicitly asks for a light interface. Anything else,
-/// including being unable to ask at all, is not a request for light.
-#[cfg(target_os = "windows")]
-fn system_prefers_light() -> bool {
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
-
-    // AppsUseLightTheme is the per-application setting, as distinct from
-    // SystemUsesLightTheme, which is the taskbar and Start menu. Windows lets
-    // them differ, and this one is what other applications follow.
-    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0"
-        .encode_utf16()
-        .collect();
-    let name: Vec<u16> = "AppsUseLightTheme\0".encode_utf16().collect();
-
-    let mut value: u32 = 1;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            name.as_ptr(),
-            RRF_RT_REG_DWORD,
-            std::ptr::null_mut(),
-            (&mut value as *mut u32).cast(),
-            &mut size,
-        )
-    };
-    // A missing key means the question could not be answered, not that light
-    // was asked for, so it does not count as a preference either way.
-    status == 0 && value != 0
-}
-
-#[cfg(not(target_os = "windows"))]
-fn system_prefers_light() -> bool {
-    // 2 is the only value that actually requests light. 0 ("no preference")
-    // and an unreachable portal both leave the decision to us.
-    portal_color_scheme() == Some(2)
-}
-
-/// Reads `org.freedesktop.appearance color-scheme` from the desktop portal:
-/// 0 no preference, 1 prefer dark, 2 prefer light.
-///
-/// Asked over D-Bus rather than through GSettings because the portal is the
-/// cross-desktop answer, and works when GNOME's schemas are not installed at
-/// all - as on the Raspberry Pi's labwc session.
-#[cfg(not(target_os = "windows"))]
-fn portal_color_scheme() -> Option<u32> {
-    use gtk::gio;
-
-    let proxy = gio::DBusProxy::for_bus_sync(
-        gio::BusType::Session,
-        gio::DBusProxyFlags::NONE,
-        None,
-        "org.freedesktop.portal.Desktop",
-        "/org/freedesktop/portal/desktop",
-        "org.freedesktop.portal.Settings",
-        gio::Cancellable::NONE,
-    )
-    .ok()?;
-
-    let args = ("org.freedesktop.appearance", "color-scheme").to_variant();
-    // ReadOne is the current method; Read is its deprecated predecessor, still
-    // all that older portals offer (the Pi's included). They differ in how
-    // deeply the reply is nested, so rather than encode that per method, the
-    // wrappers are simply peeled off until a value appears.
-    for method in ["ReadOne", "Read"] {
-        let Ok(reply) = proxy.call_sync(
-            method,
-            Some(&args),
-            gio::DBusCallFlags::NONE,
-            2000,
-            gio::Cancellable::NONE,
-        ) else {
-            continue;
-        };
-
-        // The type is checked before each unwrap rather than relying on
-        // as_variant returning None: it asserts internally, so calling it on
-        // the final non-variant value logs a GLib critical.
-        let mut value = reply.child_value(0);
-        while value.is_type(gtk::glib::VariantTy::VARIANT) {
-            let Some(inner) = value.as_variant() else {
-                break;
-            };
-            value = inner;
-        }
-        if let Some(scheme) = value.get::<u32>() {
-            return Some(scheme);
-        }
-    }
-    None
 }
 
 #[cfg(test)]
