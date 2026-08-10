@@ -382,7 +382,6 @@ enum Screen {
     PasteUri,
     VideoSource,
     Opening,
-    Chooser,
     /// The three steps of aligning an audio file, in the one panel that
     /// carries them: which track to measure against, the measuring, and what
     /// it found. Separate screens because backing out means different things
@@ -645,9 +644,6 @@ pub struct App {
     /// Settings when you meant Play is a button's width of travel every time.
     nav_header_entry: RefCell<Option<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
-    /// Whether the open chooser was reached from the settings screen, so
-    /// that finishing with it returns where it came from.
-    from_settings: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -811,7 +807,6 @@ impl App {
             nav_header: RefCell::new(Vec::new()),
             nav_header_entry: RefCell::new(None),
             controls: RefCell::new(None),
-            from_settings: Cell::new(false),
             styles: styles.clone(),
             scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
@@ -1524,7 +1519,6 @@ impl App {
         let screen = *self.screen.borrow();
         match screen {
             Screen::Playing => self.leave_playback(),
-            Screen::Chooser => self.leave_chooser(),
             Screen::Confirm | Screen::About | Screen::Notices | Screen::Kodi => {
                 self.show_settings()
             }
@@ -3761,21 +3755,6 @@ impl App {
 
     // --- Choosers ------------------------------------------------------
 
-    /// Enumerates the output devices here and now, filling the cache.
-    ///
-    /// For the screens that replace the whole window: the pause is spent on a
-    /// page transition that is happening anyway, and a full page with a
-    /// placeholder in it is worse than a full page that took a moment.
-    fn scan_devices(&self) {
-        if let Ok(devices) = list_audio_output_devices() {
-            *self.device_names.borrow_mut() = devices
-                .iter()
-                .map(|device| device.display_name().to_string())
-                .collect();
-        }
-        self.device_scan.set(true);
-    }
-
     /// Enumerates the output devices on a thread, and calls `then` on the main
     /// thread if the answer differs from what the cache already held.
     ///
@@ -4153,10 +4132,19 @@ impl App {
                 // rebuilds the page underneath, which destroys the row this is
                 // anchored to - and doing that while it is still up is how a
                 // widget ends up parented to something that no longer exists.
+                //
+                // Rebuilt rather than patched because a choice can change more
+                // than the row it was made on: picking a second output fills
+                // in the rows below it, and clearing one empties them.
                 let app = app.clone();
+                let over = *app.screen.borrow();
                 glib::idle_add_local_once(move || {
-                    if !app.apply_choice(setting, choice) {
-                        app.show_menu();
+                    if app.apply_choice(setting, choice) {
+                        return;
+                    }
+                    match over {
+                        Screen::Settings => app.show_settings(),
+                        _ => app.show_menu(),
                     }
                 });
             });
@@ -4199,78 +4187,6 @@ impl App {
         }
     }
 
-    fn show_chooser(self: &Rc<Self>, setting: Setting) {
-        let title = match setting {
-            Setting::PrimaryDevice => "First Output Device",
-            Setting::PrimaryTrack => "First Audio Track",
-            Setting::SecondaryDevice => "Second Output Device",
-            Setting::SecondaryTrack => "Second Audio Track",
-            Setting::Subtitles => "Subtitles",
-            Setting::PrimaryLanguage => "First Language Preference",
-            Setting::SecondaryLanguage => "Second Language Preference",
-            Setting::SubtitleLanguage => "Subtitle Preference",
-            Setting::SubtitleFont => "Subtitle Font",
-        };
-        // Found here and now, unlike the popover's. This screen replaces the
-        // window, so the pause is spent during a transition that is happening
-        // anyway - and a full page holding "Searching for outputs..." is a
-        // worse thing to look at than a full page that took a moment to build.
-        if matches!(setting, Setting::PrimaryDevice | Setting::SecondaryDevice) {
-            self.scan_devices();
-        }
-        let (page, list, back, _header) = list_page(title, true);
-
-        let (entries, current) = self.chooser_entries(setting);
-
-        for (text, _) in &entries {
-            append_named(&list, &chooser_row(text), text);
-        }
-
-        {
-            let app = self.clone();
-            let entries = entries.clone();
-            list.connect_row_activated(move |_, row| {
-                app.sounds.borrow().click();
-                let Some((_, choice)) = entries.get(row.index() as usize) else {
-                    return;
-                };
-                if !app.apply_choice(setting, *choice) {
-                    app.leave_chooser();
-                }
-            });
-        }
-        {
-            let app = self.clone();
-            back.connect_clicked(move |_| app.leave_chooser());
-        }
-
-        // Up from the first row reaches the back arrow, so leaving is a
-        // navigable step rather than only a button press.
-        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
-
-        *self.screen.borrow_mut() = Screen::Chooser;
-        self.window.set_child(Some(&page));
-        // Opens on whatever is already selected, and grabbing focus scrolls
-        // it into view, which matters for the language list.
-        let opening = entries
-            .iter()
-            .position(|(_, choice)| *choice == current)
-            .unwrap_or(0) as i32;
-        if let Some(row) = list.row_at_index(opening) {
-            // The setting in force, marked as such: scrolling a long list -
-            // the languages especially - otherwise loses track of which one
-            // is actually set the moment the cursor moves off it.
-            row.add_css_class("tp-current");
-            list.select_row(Some(&row));
-            settle_on(&row);
-        }
-    }
-
-    /// Arrow keys don't move focus out of a ListBox, so the boundary
-    /// between the list and the button below it has to be bridged by hand -
-    /// otherwise the button is unreachable without a pointer. Movements
-    /// that would go past either end are swallowed, which also stops GTK
-    /// reporting them as failed navigation.
     fn wire_navigation(
         self: &Rc<Self>,
         list: &gtk::ListBox,
@@ -4345,15 +4261,6 @@ impl App {
             .borrow()
             .as_ref()
             .and_then(|file| file.local().map(|path| path.to_path_buf()))
-    }
-
-    /// Returns to whichever screen the chooser was opened from.
-    fn leave_chooser(self: &Rc<Self>) {
-        if self.from_settings.replace(false) {
-            self.show_settings();
-        } else {
-            self.show_menu();
-        }
     }
 
     /// What the menu shows against the Subtitles row.
@@ -6484,18 +6391,18 @@ impl App {
                 match row.index() {
                     ROW_INTERFACE_SCALE => app.work_switch_row(ROW_INTERFACE_SCALE),
                     ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
-                    ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
-                    ROW_PRIMARY_LANGUAGE => app.open_setting(Setting::PrimaryLanguage),
+                    ROW_PRIMARY_DEVICE => app.show_selector(Setting::PrimaryDevice, row),
+                    ROW_PRIMARY_LANGUAGE => app.show_selector(Setting::PrimaryLanguage, row),
                     ROW_PRIMARY_DESCRIPTION => app.work_switch_row(ROW_PRIMARY_DESCRIPTION),
                     ROW_PRIMARY_VOLUME => app.work_switch_row(ROW_PRIMARY_VOLUME),
                     ROW_PRIMARY_SYNC => app.work_switch_row(ROW_PRIMARY_SYNC),
-                    ROW_SECONDARY_DEVICE => app.open_setting(Setting::SecondaryDevice),
-                    ROW_SECONDARY_LANGUAGE => app.open_setting(Setting::SecondaryLanguage),
+                    ROW_SECONDARY_DEVICE => app.show_selector(Setting::SecondaryDevice, row),
+                    ROW_SECONDARY_LANGUAGE => app.show_selector(Setting::SecondaryLanguage, row),
                     ROW_SECONDARY_DESCRIPTION => app.work_switch_row(ROW_SECONDARY_DESCRIPTION),
                     ROW_SECONDARY_VOLUME => app.work_switch_row(ROW_SECONDARY_VOLUME),
                     ROW_SECONDARY_SYNC => app.work_switch_row(ROW_SECONDARY_SYNC),
-                    ROW_SUBTITLE_LANGUAGE => app.open_setting(Setting::SubtitleLanguage),
-                    ROW_SUBTITLE_FONT => app.open_setting(Setting::SubtitleFont),
+                    ROW_SUBTITLE_LANGUAGE => app.show_selector(Setting::SubtitleLanguage, row),
+                    ROW_SUBTITLE_FONT => app.show_selector(Setting::SubtitleFont, row),
                     ROW_CLEAR_DATA => app.confirm_clear_data(),
                     ROW_KODI => app.show_kodi(),
                     ROW_ABOUT => app.show_about(),
@@ -6519,13 +6426,6 @@ impl App {
             list.select_row(Some(&row));
             settle_on(&row);
         }
-    }
-
-    /// Opens a chooser and remembers to come back here rather than to the
-    /// main menu.
-    fn open_setting(self: &Rc<Self>, setting: Setting) {
-        self.from_settings.set(true);
-        self.show_chooser(setting);
     }
 
     /// Turns the described-audio preference on or off for one output.
