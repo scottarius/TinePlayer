@@ -21,13 +21,17 @@ use crate::subtitles::{Subtitle, SubtitleChoice};
 /// too - which the media page is.
 const MODAL_STACK: &str = "tp-modal-stack";
 
-/// How many languages either summary line will name before it stops.
+/// How many languages either summary line names before it counts the rest.
 ///
 /// The line has one line's worth of room and must not wrap: the rows below it
 /// sit at a fixed height, so anything that grows here would push them down.
 /// Six is past the point where a list is being read rather than scanned, and a
 /// file with more than six subtitle languages is a disc rip whose exact
 /// inventory is a chooser away.
+///
+/// Whatever is left over is said rather than dropped - "+5 more". Stopping at
+/// six in silence reads as a complete list, which on a file carrying eleven is
+/// not merely crowded but wrong.
 const MOST_LANGUAGES: usize = 6;
 
 /// What a track that never stated its language is called on the page.
@@ -39,7 +43,41 @@ const MOST_LANGUAGES: usize = 6;
 /// else something is missing.
 const UNKNOWN_LANGUAGE: &str = "Unknown";
 
-/// What either summary line says when the file carries no such track at all.
+/// One summary line's markup: the label, the languages that fit, and a count
+/// of the ones that did not.
+///
+/// Both lines are built from this, which is the point of its being a function:
+/// audio and subtitles differ only in what they are handed, and a rule applied
+/// in one place cannot drift out of step with the other. In practice the audio
+/// line rarely reaches the limit and the subtitle line often does, so the
+/// truncation would otherwise go untested on the side that shows it least.
+///
+/// What was left off is counted and said outright. Stopping at the limit in
+/// silence reads as a complete list, so a file with eleven subtitle languages
+/// appeared to have six - worse than a long line, because it is wrong rather
+/// than merely crowded. The count is dimmed like the label, so it reads as a
+/// note about the list rather than as another language in it.
+fn summary_markup(name: &str, languages: &[String]) -> String {
+    let shown = match languages.is_empty() {
+        true => NO_TRACKS.to_string(),
+        false => languages
+            .iter()
+            .take(MOST_LANGUAGES)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    let more = match languages.len().saturating_sub(MOST_LANGUAGES) {
+        0 => String::new(),
+        extra => format!(", <span alpha='60%'>+{extra} more</span>"),
+    };
+    format!(
+        "<span alpha='60%'>{name}:</span> {}{more}",
+        glib::markup_escape_text(&shown),
+    )
+}
+
+/// What a summary line says when the file carries no such track at all.
 ///
 /// Distinct from `Unknown`, and the difference is worth keeping: one means
 /// there is a track and nobody said what language it is in, the other means
@@ -2651,10 +2689,10 @@ impl App {
             play_image(scale),
             &match resume_at {
                 Some(position) => format!(
-                    "  RESUME {}",
+                    "  Resume ({})",
                     crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
                 ),
-                None => "  PLAY".to_string(),
+                None => "  Play".to_string(),
             },
         )));
         // The face is two labels, so the button has no text of its own for a
@@ -2691,14 +2729,14 @@ impl App {
         buttons.append(&plays);
 
         let (fullscreen, gear) = self.corner_buttons();
+        // A little clear air between the pair that plays the film and the
+        // pair that does not, so the row reads as two groups rather than four
+        // equal buttons.
+        gear.set_margin_start(px(16.0));
+        buttons.append(&gear);
         if let Some(fullscreen) = fullscreen.as_ref() {
-            // A little clear air between the pair that plays the film and the
-            // pair that does not, so the row reads as two groups rather than
-            // four equal buttons.
-            fullscreen.set_margin_start(px(16.0));
             buttons.append(fullscreen);
         }
-        buttons.append(&gear);
 
         // The page in order: what the film is, what to do about it, and then
         // the choices - which are the only part that scrolls.
@@ -2709,8 +2747,8 @@ impl App {
         // Up from the first row reaches them, and Down from them returns.
         // Ordered as they appear, so left and right walk along the row.
         let mut header = play_buttons.clone();
-        header.extend(fullscreen);
         header.push(gear);
+        header.extend(fullscreen);
 
         {
             let app = self.clone();
@@ -2986,7 +3024,6 @@ impl App {
     fn file_facts(&self) -> Vec<(String, String)> {
         let details = self.details.borrow();
         [
-            ("Filesize", details.filesize()),
             // Two lines rather than "1080p (H.264)". Together they are the
             // longest reading in the column, and the column is only as wide
             // as the poster - so as one line they were the thing that decided
@@ -2999,6 +3036,9 @@ impl App {
                 "Container",
                 Some(details.container.clone()).filter(|c| !c.is_empty()),
             ),
+            // Last, under the readings that describe the picture. It is the
+            // one line here that says nothing about how the film will look.
+            ("File size", details.filesize()),
         ]
         .into_iter()
         .filter_map(|(name, value)| value.map(|value| (name.to_string(), value)))
@@ -3121,13 +3161,8 @@ impl App {
             // Cut rather than wrapped: a second line here would push the rows
             // down on exactly the files that carry the most languages.
             line.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            line.set_markup(&format!(
-                "<span alpha='60%'>{name}:</span> {}",
-                glib::markup_escape_text(&match languages.is_empty() {
-                    true => NO_TRACKS.to_string(),
-                    false => languages.join(", "),
-                }),
-            ));
+
+            line.set_markup(&summary_markup(name, &languages));
             summary.append(&line);
         }
         block.push(summary.upcast());
@@ -3158,7 +3193,6 @@ impl App {
                 named.push(entry);
             }
         }
-        named.truncate(MOST_LANGUAGES);
         named
     }
 
@@ -3187,7 +3221,6 @@ impl App {
                 named.push(name.to_string());
             }
         }
-        named.truncate(MOST_LANGUAGES);
         named
     }
 
@@ -3271,15 +3304,15 @@ impl App {
             .halign(gtk::Align::End)
             .build();
         let (fullscreen, gear) = self.corner_buttons();
+        footer.append(&gear);
         if let Some(fullscreen) = fullscreen.as_ref() {
             footer.append(fullscreen);
         }
-        footer.append(&gear);
         content.append(&footer);
 
         let mut stops: Vec<gtk::Button> = vec![browse.clone(), address];
-        stops.extend(fullscreen);
         stops.push(gear);
+        stops.extend(fullscreen);
         self.set_nav(None, &[], &stops);
         // Deferred until the page is actually in the window. This is built
         // before `show_menu` installs it, and focus cannot be taken by a
@@ -9681,6 +9714,12 @@ fn style_css(scale: f64, dark: bool) -> String {
            itself now, in the same ink, so the two behave alike without being
            told to. */
         .tp-gear:hover {{ background-color: rgba(128, 128, 128, 0.22); }}
+        /* No focus ring on the playback controls. Every button there already
+           says where the cursor is by filling with the accent - see
+           `.tp-selected` - so the shared ring was a second mark for the same
+           fact, drawn inside the fill and reading as an outline around it. The
+           menus keep theirs, where there is no fill to say it instead. */
+        .tp-transport-button:focus {{ box-shadow: none; }}
         /* The frame the poster sits in, which is also what is seen when there
            is no poster. A flat panel a shade off the page rather than an
            outline: at a distance a thin border on a dark ground disappears,
@@ -10208,6 +10247,64 @@ mod notices {
             .collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
         assert_eq!(texts[0], "one line and its continuation");
+    }
+}
+
+#[cfg(test)]
+mod summary_lines {
+    use super::{MOST_LANGUAGES, summary_markup};
+
+    fn languages(count: usize) -> Vec<String> {
+        (0..count).map(|i| format!("Lang{i}")).collect()
+    }
+
+    /// The rule applies to whichever line is handed too many, not to the one
+    /// that happens to show it most. The subtitle line is usually the long
+    /// one, so an audio line built by different code would go untested.
+    #[test]
+    fn either_line_counts_what_it_left_out() {
+        for name in ["Audio", "Subtitles"] {
+            let line = summary_markup(name, &languages(MOST_LANGUAGES + 5));
+            assert!(line.contains("+5 more"), "{name} did not count the rest");
+            assert!(line.starts_with(&format!("<span alpha='60%'>{name}:</span>")));
+        }
+    }
+
+    /// Exactly at the limit is a complete list, and saying "+0 more" about it
+    /// would be both noise and a lie.
+    #[test]
+    fn nothing_left_over_is_said_about() {
+        let line = summary_markup("Audio", &languages(MOST_LANGUAGES));
+        assert!(!line.contains("more"));
+        assert!(line.contains("Lang0"));
+        assert!(line.contains(&format!("Lang{}", MOST_LANGUAGES - 1)));
+    }
+
+    /// Only as many as fit are named, whatever it was given.
+    #[test]
+    fn never_names_more_than_the_limit() {
+        let line = summary_markup("Subtitles", &languages(40));
+        assert_eq!(line.matches("Lang").count(), MOST_LANGUAGES);
+        assert!(line.contains(&format!("+{} more", 40 - MOST_LANGUAGES)));
+    }
+
+    /// A file with no such track says so, rather than showing an empty line
+    /// where a list should be.
+    #[test]
+    fn nothing_at_all_says_so() {
+        let line = summary_markup("Subtitles", &[]);
+        assert!(line.contains(super::NO_TRACKS));
+        assert!(!line.contains("more"));
+    }
+
+    /// Track titles come from files and can hold anything. An unescaped
+    /// ampersand is not a stray character here - it makes the markup invalid,
+    /// and GTK draws nothing at all for the whole line.
+    #[test]
+    fn a_language_named_with_markup_cannot_break_the_line() {
+        let line = summary_markup("Audio", &["Ol' <b>Bill</b> & Ben".to_string()]);
+        assert!(line.contains("&amp;"));
+        assert!(line.contains("&lt;b&gt;"));
     }
 }
 
