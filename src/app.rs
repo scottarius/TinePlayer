@@ -294,7 +294,6 @@ enum Screen {
     AlignResult,
     Confirm,
     Notices,
-    Kodi,
     /// The screens of the Kodi wizard. None of them writes anything: only
     /// Configure on the summary does.
     KodiChoose,
@@ -395,7 +394,12 @@ enum Item {
     SubtitlePreference,
     SubtitleSize,
     SubtitleFont,
-    Kodi,
+    /// A Kodi already set up, by its place in the list the pane was built
+    /// from. Unlike every other row here there may be none of these, or
+    /// several - which is why the category is asked how many before it can say
+    /// what it holds.
+    KodiSetup(usize),
+    KodiAdd,
     Notices,
 }
 
@@ -476,10 +480,15 @@ impl Category {
 
     /// What the right-hand pane shows, and the heading each group opens with.
     ///
+    /// `kodis` is how many Kodi installations are already set up, which only
+    /// Integrations uses. Passed in rather than looked up here so this stays a
+    /// plain function of its inputs, and so a test can ask what a category
+    /// holds without an application to ask it of.
+    ///
     /// The headings are what make Outputs readable: it holds two rows called
     /// Volume and two called Audio Sync, and until now they were told apart
     /// only by which half of the list they were in.
-    fn items(self) -> Vec<(Option<&'static str>, Item)> {
+    fn items(self, kodis: usize) -> Vec<(Option<&'static str>, Item)> {
         match self {
             Category::General => vec![
                 (Some("INTERFACE"), Item::InterfaceScale),
@@ -512,7 +521,16 @@ impl Category {
                 (None, Item::SubtitleSize),
                 (None, Item::SubtitleFont),
             ],
-            Category::Integrations => vec![(None, Item::Kodi)],
+            Category::Integrations => {
+                // The list that used to be a screen of its own: what is set
+                // up, then the way to add another.
+                let mut rows: Vec<(Option<&'static str>, Item)> = (0..kodis)
+                    .map(|index| (None, Item::KodiSetup(index)))
+                    .collect();
+                rows.push((None, Item::KodiAdd));
+                rows[0].0 = Some("KODI");
+                rows
+            }
             // The text itself is not a row - see `about_body`, which the
             // pane draws above these.
             Category::About => vec![(None, Item::Notices)],
@@ -729,6 +747,10 @@ pub struct App {
     /// does: its text used to be a screen of its own, two steps away from the
     /// row that named it.
     settings_body: RefCell<Option<gtk::Box>>,
+    /// The Kodi installations the Integrations pane was last built from, so a
+    /// row can say what it is and act on it without scanning the disk again
+    /// for every label it draws.
+    kodi_setups: RefCell<Vec<crate::kodi_setup::Setup>>,
     /// Whether the settings row about to be activated was clicked rather than
     /// chosen with a key or a gamepad. A switch row responds to a press on
     /// the switch itself, not to a click anywhere along the row - but Enter
@@ -941,6 +963,7 @@ impl App {
             settings_list: RefCell::new(None),
             settings_categories: RefCell::new(None),
             settings_body: RefCell::new(None),
+            kodi_setups: RefCell::new(Vec::new()),
             clicked_row: Cell::new(false),
             settling_switch: Cell::new(false),
             key_held: Cell::new(false),
@@ -1681,12 +1704,14 @@ impl App {
         let screen = *self.screen.borrow();
         match screen {
             Screen::Playing => self.leave_playback(),
-            Screen::Confirm | Screen::Notices | Screen::Kodi => self.show_settings(),
+            Screen::Confirm | Screen::Notices => self.show_settings(),
             // Every wizard screen leaves the wizard rather than stepping back
             // through it. Nothing has been written until Configure, so this
             // is the same as pressing Cancel, which is what Escape should
             // mean on a screen whose other button says Cancel.
-            Screen::KodiChoose | Screen::KodiConfirm | Screen::KodiDone => self.show_kodi(),
+            Screen::KodiChoose | Screen::KodiConfirm | Screen::KodiDone => {
+                self.return_to_integrations()
+            }
             Screen::KodiFolder => self.show_kodi_choose(),
             Screen::KodiHow => self.show_kodi_choose(),
             Screen::KodiHandover => self.show_kodi_how(),
@@ -6522,7 +6547,13 @@ impl App {
             Item::SubtitlePreference => "Subtitle Preference".to_string(),
             Item::SubtitleSize => "Subtitle Size".to_string(),
             Item::SubtitleFont => "Subtitle Font".to_string(),
-            Item::Kodi => "Kodi".to_string(),
+            Item::KodiSetup(index) => self
+                .kodi_setups
+                .borrow()
+                .get(index)
+                .map(|setup| setup.label())
+                .unwrap_or_default(),
+            Item::KodiAdd => "Add Configuration".to_string(),
             Item::Notices => "Third-Party Notices".to_string(),
         }
     }
@@ -6560,11 +6591,12 @@ impl App {
                 .subtitle_font
                 .clone()
                 .unwrap_or_else(|| crate::pipeline::DEFAULT_SUBTITLE_FONT.to_string()),
-            // Deliberately blank. Saying what Kodi is set to means finding
-            // every Kodi on the machine and reading its configuration file,
-            // and this row is passed by everyone who came here for something
-            // else. The answer is on the screen it opens.
-            Item::Kodi => String::new(),
+            Item::KodiSetup(index) => self
+                .kodi_setups
+                .borrow()
+                .get(index)
+                .map(|setup| setup.state.describe().to_string())
+                .unwrap_or_default(),
             Item::UpdateStatus => {
                 drop(config);
                 self.version_status()
@@ -6625,7 +6657,6 @@ impl App {
             Item::ClearData => {
                 "Delete remembered video preferences, track choices, and resume positions."
             }
-            Item::Kodi => "Lets Kodi hand videos to TinePlayer to play.",
             _ => return None,
         })
     }
@@ -6762,7 +6793,16 @@ impl App {
                 app.settings_switches.borrow_mut().clear();
                 app.settings_sliders.borrow_mut().clear();
 
-                let entries = app.settings_category.get().items();
+                // Found once per build of the pane, not once per row: it
+                // walks the disk looking for Kodi, and every label and value
+                // on those rows is read back out of this.
+                if app.settings_category.get() == Category::Integrations {
+                    *app.kodi_setups.borrow_mut() = app.configured_kodis();
+                }
+                let entries = app
+                    .settings_category
+                    .get()
+                    .items(app.kodi_setups.borrow().len());
                 *app.pane_items.borrow_mut() = entries.iter().map(|(_, item)| *item).collect();
 
                 for (index, (_, item)) in entries.iter().enumerate() {
@@ -7177,7 +7217,17 @@ impl App {
         }
         match item {
             Item::ClearData => self.confirm_clear_data(),
-            Item::Kodi => self.show_kodi(),
+            Item::KodiAdd => self.start_kodi_wizard(),
+            Item::KodiSetup(index) => {
+                let userdata = self
+                    .kodi_setups
+                    .borrow()
+                    .get(index)
+                    .map(|setup| setup.userdata().to_path_buf());
+                if let Some(userdata) = userdata {
+                    self.confirm_kodi_remove(userdata);
+                }
+            }
             Item::Notices => self.show_notices(),
             Item::UpdateStatus => self.open_release_page(),
             _ => {}
@@ -7987,60 +8037,16 @@ impl App {
         true
     }
 
-    /// Registering with Kodi, which Kodi itself gives no way to do.
+    /// Puts the settings screen back with Integrations showing.
     ///
-    /// The list of what is set up, and the way to add more. Only configured
-    /// instances appear here: an unconfigured Kodi is something to add, not
-    /// something with a state worth reporting, and listing every Kodi on the
-    /// machine alongside the one you set up buries it.
-    fn show_kodi(self: &Rc<Self>) {
-        let (page, list, back, _slot) = list_page("Kodi", true);
-
-        let configured = self.configured_kodis();
-        let mut rows: Vec<(String, String)> = configured
-            .iter()
-            .map(|setup| (setup.label(), setup.state.describe().to_string()))
-            .collect();
-        rows.push(("Add Configuration".to_string(), String::new()));
-
-        for (label, value) in &rows {
-            append_named(
-                &list,
-                &menu_row(label, value, true),
-                &row_name(label, value),
-            );
-        }
-
-        {
-            let app = self.clone();
-            let paths: Vec<std::path::PathBuf> = configured
-                .iter()
-                .map(|setup| setup.userdata().to_path_buf())
-                .collect();
-            let add_row = rows.len() - 1;
-            list.connect_row_activated(move |_, row| {
-                app.sounds.borrow().click();
-                let index = row.index() as usize;
-                if index == add_row {
-                    app.start_kodi_wizard();
-                } else if let Some(userdata) = paths.get(index) {
-                    app.confirm_kodi_remove(userdata.clone());
-                }
-            });
-        }
-        {
-            let app = self.clone();
-            back.connect_clicked(move |_| {
-                app.sounds.borrow().click();
-                app.show_settings();
-            });
-        }
-
+    /// What every step of the Kodi wizard used to return to was a screen of
+    /// its own listing what was set up. That list is the Integrations pane
+    /// now, so finishing or backing out of the wizard comes back here.
+    fn return_to_integrations(self: &Rc<Self>) {
+        self.settings_category.set(Category::Integrations);
+        self.in_settings_pane.set(true);
         *self.kodi_draft.borrow_mut() = None;
-        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
-        *self.screen.borrow_mut() = Screen::Kodi;
-        self.window.set_child(Some(&page));
-        Self::open_on_first_usable(&list, &back);
+        self.show_settings();
     }
 
     /// Every Kodi on this machine, including any folder named by hand that we
@@ -8084,7 +8090,7 @@ impl App {
         let app = self.clone();
         let back = {
             let app = self.clone();
-            move || app.show_kodi()
+            move || app.return_to_integrations()
         };
         self.show_kodi_dialog(
             &format!("Remove configuration from\n{}?", setup.label()),
@@ -8111,11 +8117,11 @@ impl App {
                             config.kodi_paths.retain(|path| path != &userdata);
                             let _ = config.save();
                         }
-                        app.show_kodi();
+                        app.return_to_integrations();
                     }
                     Err(e) => app.show_kodi_error(&e, {
                         let app = app.clone();
-                        move || app.show_kodi()
+                        move || app.return_to_integrations()
                     }),
                 }
             },
@@ -8197,7 +8203,7 @@ impl App {
             let app = self.clone();
             back.connect_clicked(move |_| {
                 app.sounds.borrow().click();
-                app.show_kodi();
+                app.return_to_integrations();
             });
         }
 
@@ -8593,7 +8599,7 @@ impl App {
         use crate::kodi_setup::Registration;
 
         if self.draft_userdata().is_none() {
-            return self.show_kodi();
+            return self.return_to_integrations();
         }
         let (page, list, back, _slot) = list_page("How to Configure", true);
 
@@ -8651,7 +8657,7 @@ impl App {
     /// hand afterwards as well.
     fn show_kodi_handover(self: &Rc<Self>) {
         if self.draft_userdata().is_none() {
-            return self.show_kodi();
+            return self.return_to_integrations();
         }
         let (page, list, back, _slot) = list_page("When TinePlayer Starts", true);
 
@@ -8760,7 +8766,7 @@ impl App {
     /// Everything that is about to happen, before any of it happens.
     fn show_kodi_summary(self: &Rc<Self>) {
         let Some((userdata, want)) = self.draft_parts() else {
-            return self.show_kodi();
+            return self.return_to_integrations();
         };
         let play = self
             .kodi_draft
@@ -8822,7 +8828,7 @@ impl App {
     /// The only place anything is written.
     fn apply_kodi_draft(self: &Rc<Self>) {
         let Some((userdata, want)) = self.draft_parts() else {
-            return self.show_kodi();
+            return self.return_to_integrations();
         };
         let setup = crate::kodi_setup::setup_at(userdata.clone());
         // The path the summary named, not a freshly computed one: the file
@@ -8883,7 +8889,7 @@ impl App {
             let app = self.clone();
             ok.connect_clicked(move |_| {
                 app.sounds.borrow().click();
-                app.show_kodi();
+                app.return_to_integrations();
             });
         }
 
@@ -12347,6 +12353,11 @@ mod readings {
 mod settings_rows {
     use super::*;
 
+    /// How many Kodi installations these tests pretend are set up. Two, so
+    /// that the repeated rows are actually repeated - with one there is no
+    /// difference between "a row per installation" and "a row".
+    const KODIS: usize = 2;
+
     /// Every setting is somewhere, and nowhere twice.
     ///
     /// This is what the old numbering could not promise. Rows were positions
@@ -12359,7 +12370,7 @@ mod settings_rows {
     fn every_item_appears_in_exactly_one_category() {
         let all: Vec<Item> = Category::ALL
             .iter()
-            .flat_map(|category| category.items())
+            .flat_map(|category| category.items(KODIS))
             .map(|(_, item)| item)
             .collect();
         for item in &all {
@@ -12367,10 +12378,11 @@ mod settings_rows {
             assert_eq!(count, 1, "an item appears {count} times");
         }
         // Written out rather than derived, so adding a setting and forgetting
-        // to place it fails here instead of at a glance. Twenty-six rather
-        // than the twenty-one variants of `Item`: the five an output has are
-        // placed once for each output.
-        assert_eq!(all.len(), 25);
+        // to place it fails here instead of at a glance. It is not the number
+        // of `Item` variants: the five an output has are placed once for each
+        // output, and Integrations holds one row per Kodi found plus the row
+        // that adds another.
+        assert_eq!(all.len(), 25 + KODIS);
     }
 
     /// The version sits under the switch that decides whether anything is
@@ -12379,7 +12391,7 @@ mod settings_rows {
     #[test]
     fn the_version_follows_the_update_switch() {
         let general: Vec<Item> = Category::General
-            .items()
+            .items(KODIS)
             .into_iter()
             .map(|(_, item)| item)
             .collect();
@@ -12392,7 +12404,7 @@ mod settings_rows {
     /// General rather than among the everyday toggles.
     #[test]
     fn clearing_data_comes_last() {
-        let general = Category::General.items();
+        let general = Category::General.items(KODIS);
         assert_eq!(general.last().map(|(_, item)| *item), Some(Item::ClearData));
     }
 
@@ -12402,7 +12414,10 @@ mod settings_rows {
     /// activating it would then do nothing at all.
     #[test]
     fn every_switch_row_has_something_to_switch() {
-        for (_, item) in Category::ALL.iter().flat_map(|category| category.items()) {
+        for (_, item) in Category::ALL
+            .iter()
+            .flat_map(|category| category.items(KODIS))
+        {
             if item.has_switch() {
                 assert!(
                     item.setting().is_none(),
