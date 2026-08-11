@@ -255,4 +255,4 @@ Every Rust library compiled into TinePlayer, direct and transitive, is listed
 with its license in **[THIRD-PARTY.md](./THIRD-PARTY.md)**. Nearly all are MIT
 or Apache-2.0, and their notices travel with the application as those licenses
 ask: the same list is readable in the application itself, under **Settings →
-About TinePlayer → Third Party Notices**.
+About TinePlayer → Third-Party Notices**.
