@@ -10646,8 +10646,23 @@ fn style_css(scale: f64) -> String {
            to get out of the way. A GtkListBox and a GtkScrolledWindow both
            paint the theme's view background by default, which came out as an
            opaque slab over the backdrop in the shape of the list. */
-        .tp-menu, .tp-menu > row {{ background-color: transparent; }}
-        .tp-media scrolledwindow, .tp-media viewport {{ background-color: transparent; }}
+        /* Transparent only where something is meant to show through: the
+           media page, which has the film's backdrop behind it, and a selector,
+           which draws its own panel. Everywhere else a list keeps the theme's
+           own background, which is what sets it apart from the page around it.
+           
+           Written unscoped to begin with, and that took the ground out from
+           under every list in the application - the browser's two columns
+           merged into the page behind them, and there was no longer anything
+           to say where one ended. */
+        .tp-media .tp-menu, .tp-media .tp-menu > row,
+        .tp-selector .tp-menu, .tp-selector .tp-menu > row {{
+            background-color: transparent;
+        }}
+        .tp-media scrolledwindow, .tp-media viewport,
+        .tp-selector scrolledwindow, .tp-selector viewport {{
+            background-color: transparent;
+        }}
         /* The two marks in the corner are affordances rather than actions:
            no fill and no border until the pointer is on them, so they carry
            no weight beside the button the page is actually pointing at. */
