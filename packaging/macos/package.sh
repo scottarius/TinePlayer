@@ -36,6 +36,12 @@ echo
 echo "=== Filling it ==="
 "$here/contents.sh"
 
+# Before the disk image rather than after, so a bundle that would ship broken
+# never becomes one. Both faults it looks for are silent - see verify.sh.
+echo
+echo "=== Verifying the bundle ==="
+"$here/verify.sh"
+
 echo
 echo "=== Building the disk image ==="
 "$here/dmg.sh"
