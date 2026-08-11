@@ -696,6 +696,15 @@ pub struct App {
     /// Which category the settings screen is showing, kept so leaving and
     /// coming back lands where it was left rather than at the top.
     settings_category: Cell<Category>,
+    /// Whether the keyboard is in the settings themselves rather than in the
+    /// column of categories.
+    ///
+    /// The screen is entered a step at a time: the categories take the keys
+    /// first, Enter hands them to the settings beside them, and Escape hands
+    /// them back before it leaves the screen. Left and right cannot do that
+    /// job here - they belong to the bars on half these rows, and a row
+    /// without one would have moved the focus off the pane instead.
+    in_settings_pane: Cell<bool>,
     /// What the right-hand pane is showing, by row. The one place a row's
     /// position is turned back into what it is.
     pane_items: RefCell<Vec<Item>>,
@@ -713,6 +722,9 @@ pub struct App {
     /// The settings list itself, so a row can be redrawn without rebuilding
     /// the screen around it.
     settings_list: RefCell<Option<gtk::ListBox>>,
+    /// The column of categories beside it, so the keyboard can be handed back
+    /// to it from outside the function that built it.
+    settings_categories: RefCell<Option<gtk::ListBox>>,
     /// Whether the settings row about to be activated was clicked rather than
     /// chosen with a key or a gamepad. A switch row responds to a press on
     /// the switch itself, not to a click anywhere along the row - but Enter
@@ -916,12 +928,14 @@ impl App {
             nav_stops: RefCell::new(Vec::new()),
             settings_sliders: RefCell::new(Vec::new()),
             settings_category: Cell::new(Category::General),
+            in_settings_pane: Cell::new(false),
             pane_items: RefCell::new(Vec::new()),
             about_scroll: RefCell::new(None),
             copy_root: RefCell::new(None),
             kodi_draft: RefCell::new(None),
             settings_switches: RefCell::new(Vec::new()),
             settings_list: RefCell::new(None),
+            settings_categories: RefCell::new(None),
             clicked_row: Cell::new(false),
             settling_switch: Cell::new(false),
             key_held: Cell::new(false),
@@ -1277,7 +1291,7 @@ impl App {
                 // mutably.
                 let screen = *app.screen.borrow();
                 if matches!(screen, Screen::Menu | Screen::VideoSource) {
-                    app.show_settings();
+                    app.enter_settings();
                 }
             });
         }
@@ -1364,6 +1378,14 @@ impl App {
                 // and to nothing otherwise.
                 gdk::Key::Left if app.settings_slider(-1) => glib::Propagation::Stop,
                 gdk::Key::Right if app.settings_slider(1) => glib::Propagation::Stop,
+                // And nothing at all otherwise, anywhere on that screen.
+                //
+                // Left unhandled the key falls through to GTK's own
+                // directional search, which finds whichever pane is to the
+                // side and moves the focus into it - stepping between the two
+                // by a route that Enter and Escape were meant to replace. A
+                // row with no bar on it has nothing for these keys to do.
+                gdk::Key::Left | gdk::Key::Right if app.on_settings() => glib::Propagation::Stop,
                 // Always goes back one level, so it never quits by surprise
                 // from somewhere the user was only browsing.
                 // Only while the button row is held: elsewhere in playback
@@ -1679,6 +1701,9 @@ impl App {
             | Screen::AlignChoose
             | Screen::AlignProgress
             | Screen::AlignResult => self.return_to_origin(),
+            // Out of the settings and back to the categories, and only then
+            // out of the screen. Two steps because it is entered in two.
+            Screen::Settings if self.in_settings_pane.get() => self.hold_settings_categories(),
             Screen::VideoSource | Screen::Settings | Screen::Error | Screen::ConfirmQuit => {
                 self.show_menu()
             }
@@ -2079,6 +2104,14 @@ impl App {
             // child_focus cannot reach a list, because the rows are not
             // focusable and the list being a focus stop is our arrangement
             // rather than something GTK's directional search knows about.
+            // The bars answer these where there is one, and nothing else on
+            // that screen does - see the key handler for why silence matters.
+            Action::Left if self.on_settings() => {
+                self.settings_slider(-1);
+            }
+            Action::Right if self.on_settings() => {
+                self.settings_slider(1);
+            }
             Action::Left => {
                 if !self.settings_slider(-1) && !self.move_between_lists(-1) {
                     self.window.child_focus(gtk::DirectionType::Left);
@@ -2319,7 +2352,7 @@ impl App {
         // number against whatever screen came next. Backing out to the media
         // page and pressing Left moved the interface size, because the row
         // selected there had the same number as the row the size sits on.
-        if *self.screen.borrow() != Screen::Settings {
+        if *self.screen.borrow() != Screen::Settings || !self.in_settings_pane.get() {
             return false;
         }
         let Some(index) = self
@@ -3875,7 +3908,7 @@ impl App {
             let app = self.clone();
             gear.connect_clicked(move |_| {
                 app.sounds.borrow().click();
-                app.show_settings();
+                app.enter_settings();
             });
         }
         *self.update_badges.borrow_mut() = vec![gear.clone()];
@@ -6570,6 +6603,16 @@ impl App {
         }
     }
 
+    /// Opens the settings screen from outside it, at the categories.
+    ///
+    /// Coming back from a chooser or from About calls `show_settings` directly
+    /// and keeps whichever half of the screen the keyboard was in; arriving
+    /// from the menu starts where the screen starts.
+    fn enter_settings(self: &Rc<Self>) {
+        self.in_settings_pane.set(false);
+        self.show_settings();
+    }
+
     /// Settings, as a column of categories and the rows of whichever one is
     /// chosen.
     ///
@@ -6804,18 +6847,117 @@ impl App {
             back.connect_clicked(move |_| app.show_menu());
         }
 
-        // The column of categories goes in the order ahead of the list it sits
-        // left of, which is what makes left and right move between them - the
-        // same arrangement the browser's drives column uses.
-        *self.nav_side_list.borrow_mut() = Some(categories.clone());
+        // Enter hands the keyboard to the settings beside the category.
+        {
+            let app = self.clone();
+            categories.connect_row_activated(move |_, _| {
+                app.sounds.borrow().click();
+                app.hold_settings_pane();
+            });
+        }
+
+        // Both lists are wired for the arrows, and which of them the arrows
+        // are actually driving is settled below by `set_nav`. Deliberately not
+        // `nav_side_list`, which is how the browser puts its drives column in
+        // the order beside its listing: that is what makes left and right step
+        // between two lists, and left and right are spoken for here.
         self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
         self.wire_arrows(categories.upcast_ref());
         announce_selection(&categories);
+        *self.settings_categories.borrow_mut() = Some(categories.clone());
+
+        // Tab moves the focus without going through either handler above, so
+        // each pane says so for itself when the focus arrives. Without this the
+        // arrows carried on driving the pane that was left behind.
+        for (widget, pane) in [(categories.clone(), false), (list.clone(), true)] {
+            let app = self.clone();
+            let controller = gtk::EventControllerFocus::new();
+            controller.connect_enter(move |_| {
+                if *app.screen.borrow() == Screen::Settings && app.in_settings_pane.get() != pane {
+                    app.settings_stage(pane);
+                }
+            });
+            widget.add_controller(controller);
+        }
+
         *self.screen.borrow_mut() = Screen::Settings;
         self.window.set_child(Some(&page));
+        // Back where it was left. Coming out of a chooser returns to the row
+        // that opened it, which is in the pane; arriving fresh starts in the
+        // categories.
+        match self.in_settings_pane.get() {
+            true => self.hold_settings_pane(),
+            false => self.hold_settings_categories(),
+        }
+    }
+
+    /// Whether the settings screen is the one on display.
+    fn on_settings(&self) -> bool {
+        *self.screen.borrow() == Screen::Settings
+    }
+
+    /// Says which of the two panes the arrows are driving, without moving the
+    /// focus itself.
+    ///
+    /// Split from the two below because the focus can arrive on its own: Tab
+    /// steps between the panes, and the pane it lands on has to start taking
+    /// the arrow keys without being asked to grab a focus it already has.
+    ///
+    /// Both lists stay in the tab order either way, which is what Tab moves
+    /// through. That is also why left and right are kept away from
+    /// `move_between_lists`, which walks the very same list of stops: it is the
+    /// tab order and the left-right order at once everywhere else, and here
+    /// those two need different answers.
+    fn settings_stage(&self, pane: bool) {
+        let (Some(list), Some(categories)) = (
+            self.settings_list.borrow().clone(),
+            self.settings_categories.borrow().clone(),
+        ) else {
+            return;
+        };
+        let Some(back) = self.nav_header.borrow().first().cloned() else {
+            return;
+        };
+        self.in_settings_pane.set(pane);
+        match pane {
+            true => self.set_nav(Some(&list), std::slice::from_ref(&back), &[]),
+            false => self.set_nav(Some(&categories), std::slice::from_ref(&back), &[]),
+        }
+        // Rewritten after `set_nav`, which builds the order from the one list
+        // it was given. Tab should reach both, in the order they are read.
+        *self.nav_stops.borrow_mut() = vec![back.upcast(), categories.upcast(), list.upcast()];
+    }
+
+    /// Gives the keyboard to the settings themselves.
+    fn hold_settings_pane(self: &Rc<Self>) {
+        let Some(list) = self.settings_list.borrow().clone() else {
+            return;
+        };
+        // Nothing to step into: a category with no rows would take the keys
+        // and answer nothing, and Escape would be the only way out.
+        if list.row_at_index(0).is_none() {
+            return;
+        }
+        self.settings_stage(true);
         let remembered = (*self.settings_row.borrow()).min(last_row_index(&list));
         if let Some(row) = list.row_at_index(remembered) {
             list.select_row(Some(&row));
+            settle_on(&row);
+        }
+    }
+
+    /// Gives it back to the column of categories.
+    fn hold_settings_categories(self: &Rc<Self>) {
+        let Some(categories) = self.settings_categories.borrow().clone() else {
+            return;
+        };
+        self.settings_stage(false);
+        if let Some(row) = Category::ALL
+            .iter()
+            .position(|category| *category == self.settings_category.get())
+            .and_then(|index| categories.row_at_index(index as i32))
+        {
+            categories.select_row(Some(&row));
             settle_on(&row);
         }
     }
@@ -7882,6 +8024,12 @@ impl App {
     /// anywhere else: left and right are for the panes of the browser, not a
     /// second way to reach the buttons.
     fn move_between_lists(self: &Rc<Self>, delta: isize) -> bool {
+        // Not on the settings screen, whose two lists are in the tab order
+        // together and are stepped between with Enter and Escape. Left and
+        // right there belong to the bars on the rows.
+        if *self.screen.borrow() == Screen::Settings {
+            return false;
+        }
         let stops = self.nav_stops.borrow().clone();
         let Some(focused) = gtk::prelude::GtkWindowExt::focus(&self.window) else {
             return false;
