@@ -159,13 +159,27 @@ pub fn build_pipeline(
     // Stored as a name, so the folder comes from the video itself. A source
     // with no folder - anything opened by URL - has no subtitle files beside
     // it to have chosen in the first place.
-    if let (Some(SubtitleChoice::External(name)), Some(overlay)) = (subtitle, overlay.as_ref()) {
-        let beside = source
-            .local()
-            .and_then(|video| video.parent())
-            .map(|folder| folder.join(name))
-            .ok_or_else(|| format!("Can't find {name}: it sits beside a local video"))?;
-        attach_external_subtitle(&pipeline, overlay, &beside)?;
+    if let Some(overlay) = overlay.as_ref() {
+        let file = match subtitle {
+            // A name, which means the folder the video is in. A source with no
+            // folder - anything opened by URL - has no subtitle files beside
+            // it to have chosen in the first place.
+            Some(SubtitleChoice::External(name)) => Some(
+                source
+                    .local()
+                    .and_then(|video| video.parent())
+                    .map(|folder| folder.join(name))
+                    .ok_or_else(|| format!("Can't find {name}: it sits beside a local video"))?,
+            ),
+            // A path, which means itself. Chosen by hand from somewhere else
+            // on disk, or named on the command line, and so not tied to where
+            // the video happens to live.
+            Some(SubtitleChoice::File(path)) => Some(path.clone()),
+            _ => None,
+        };
+        if let Some(file) = file {
+            attach_external_subtitle(&pipeline, overlay, &file)?;
+        }
     }
 
     // Grouped by where the audio comes from, so that one decoded stream can

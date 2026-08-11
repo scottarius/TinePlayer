@@ -13,7 +13,7 @@ use crate::probe::SubtitleTrack;
 /// Formats GStreamer can parse from a plain file. Blu-ray `.sup` and the
 /// VOBSUB `.sub`/`.idx` pair are deliberately absent: both are bitmap
 /// formats with no decoder in the shipped GStreamer.
-const EXTENSIONS: [&str; 4] = ["srt", "ass", "ssa", "vtt"];
+pub const EXTENSIONS: [&str; 4] = ["srt", "ass", "ssa", "vtt"];
 
 /// One entry in the subtitle chooser.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,12 +29,23 @@ pub enum Subtitle {
         name: String,
         label: String,
     },
+    /// A file chosen by hand, from anywhere on disk. Kept apart from
+    /// `External`, which is a name and means "beside the video": the two look
+    /// alike and resolve differently, and collapsing them would make every
+    /// subtitle found beside a video into an absolute path that breaks the
+    /// moment the library is mounted somewhere else.
+    File {
+        path: std::path::PathBuf,
+        label: String,
+    },
 }
 
 impl Subtitle {
     pub fn label(&self) -> &str {
         match self {
-            Subtitle::Embedded { label, .. } | Subtitle::External { label, .. } => label,
+            Subtitle::Embedded { label, .. }
+            | Subtitle::External { label, .. }
+            | Subtitle::File { label, .. } => label,
         }
     }
 
@@ -42,6 +53,7 @@ impl Subtitle {
         match self {
             Subtitle::Embedded { index, .. } => SubtitleChoice::Embedded(*index),
             Subtitle::External { name, .. } => SubtitleChoice::External(name.clone()),
+            Subtitle::File { path, .. } => SubtitleChoice::File(path.clone()),
         }
     }
 }
@@ -56,6 +68,9 @@ impl Subtitle {
 pub enum SubtitleChoice {
     Embedded(u32),
     External(String),
+    /// A file anywhere on disk, chosen by hand or named on the command line.
+    /// Stored whole, unlike `External`: there is no folder to imply it from.
+    File(std::path::PathBuf),
 }
 
 /// Everything on offer for a video: what is inside it, then what sits beside
@@ -81,6 +96,21 @@ pub fn options(video: Option<&Path>, embedded: &[SubtitleTrack]) -> Vec<Subtitle
         options.extend(external(video));
     }
     options
+}
+
+/// An entry for a subtitle file chosen by hand, labelled by its own name.
+///
+/// The label is the file name rather than the language tag `external` reads
+/// out of one: a file picked from somewhere else is not named to the
+/// convention, and guessing a language from it would be guessing.
+pub fn chosen_file(path: &Path) -> Subtitle {
+    Subtitle::File {
+        path: path.to_path_buf(),
+        label: path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string()),
+    }
 }
 
 /// Subtitle files sitting next to the video and named after it.
@@ -337,12 +367,25 @@ pub fn resolve(
             });
     }
 
+    // A path to a file that exists is taken as itself, wherever it points.
+    // Checked before the name matching below, which deliberately keeps to the
+    // video's own folder: an argument naming a file outside that folder can
+    // only mean that file, and answering with a same-named one from beside the
+    // video would be answering a different question.
+    let named_path = Path::new(spec);
+    if named_path.is_file() {
+        return Ok(Some(SubtitleChoice::File(named_path.to_path_buf())));
+    }
+
     // Only the last component, so neither a relative nor an absolute path can
     // send this outside the video's folder.
     let wanted = spec.rsplit(['/', '\\']).next().unwrap_or(spec);
 
     if let Some(named) = options.iter().find(|option| match option {
         Subtitle::External { name, .. } => name.eq_ignore_ascii_case(wanted),
+        Subtitle::File { path, .. } => path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(wanted)),
         Subtitle::Embedded { .. } => false,
     }) {
         return Ok(Some(named.choice()));
