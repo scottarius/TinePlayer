@@ -28,6 +28,33 @@ for tool in meson ninja cargo git pkg-config; do
     fi
 done
 
+# Runs a build step quietly, and says everything it said if it fails.
+#
+# These print several hundred lines each when they work, which buries the one
+# thing worth reading. Discarding it outright was worse: the first run of this
+# on a GitHub runner failed with `exit code 1` and not one word about why,
+# because meson writes its errors to stdout and stdout was going to /dev/null.
+# A build script that hides why it failed costs more than the noise it saves.
+step() {
+    local what="$1"
+    shift
+    local log
+    log="$(mktemp)"
+    printf '  %s... ' "$what"
+    if "$@" >"$log" 2>&1; then
+        echo "ok"
+        rm -f "$log"
+    else
+        local status=$?
+        echo "FAILED"
+        echo "--- $what, last 40 lines ---" >&2
+        tail -40 "$log" >&2
+        echo "--- end ---" >&2
+        rm -f "$log"
+        exit $status
+    fi
+}
+
 # --- Which GTK ----------------------------------------------------------
 #
 # The same version Homebrew has, rather than the newest.
@@ -87,13 +114,20 @@ if [[ -z "$tag" ]]; then
     exit 1
 fi
 echo "Building accesskit-c $tag"
-git -C "$ak_src" checkout -q "$tag"
+step "checkout $tag" git -C "$ak_src" checkout -q --force "$tag"
 
 # --- Build ---------------------------------------------------------------
+# Build directory *and* source directory, both named. `meson setup <dir>` takes
+# its one argument as the build directory only when the current directory is
+# the source; run from anywhere else it reads that argument as the source and
+# fails with "Neither source directory ... contain a build file meson.build".
+# Every run of this by hand happened to `cd` in first, so it worked
+# interactively and failed the first time it ran as a script.
 rm -rf "$ak_src/build"
-meson setup "$ak_src/build" --prefix="$prefix" --buildtype=release >/dev/null
-meson compile -C "$ak_src/build" >/dev/null
-meson install -C "$ak_src/build" >/dev/null
+step "configure accesskit-c" meson setup "$ak_src/build" "$ak_src" \
+    --prefix="$prefix" --buildtype=release
+step "compile accesskit-c" meson compile -C "$ak_src/build"
+step "install accesskit-c" meson install -C "$ak_src/build"
 
 # The paperwork, beside the library it belongs to. `licenses.sh` collects
 # license text by asking Homebrew which formula owns each bundled file, and
@@ -108,14 +142,14 @@ done
 echo "accesskit-c $tag" > "$licenses/VERSION"
 
 rm -rf "$gtk_src/_build"
-PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
-meson setup "$gtk_src/_build" \
+export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+step "configure GTK" meson setup "$gtk_src/_build" "$gtk_src" \
     --prefix="$prefix" --buildtype=release \
     -Daccesskit=enabled \
     -Dbuild-examples=false -Dbuild-tests=false -Dbuild-demos=false \
     -Dbuild-testsuite=false -Dintrospection=disabled -Dman-pages=false \
     -Ddocumentation=false -Dmedia-gstreamer=disabled -Dvulkan=disabled \
-    -Dx11-backend=false -Dmacos-backend=true >/dev/null
+    -Dx11-backend=false -Dmacos-backend=true
 
 # Asserted rather than assumed. meson reports a missing optional dependency as
 # a line in a summary nobody reads, and the build then succeeds without the
@@ -126,8 +160,8 @@ if ! grep -q "AccessKit support: true" "$gtk_src/_build/meson-logs/meson-log.txt
     exit 1
 fi
 
-meson compile -C "$gtk_src/_build" >/dev/null
-meson install -C "$gtk_src/_build" >/dev/null
+step "compile GTK" meson compile -C "$gtk_src/_build"
+step "install GTK" meson install -C "$gtk_src/_build"
 
 gtk_licenses="$prefix/share/licenses/gtk4-accesskit"
 mkdir -p "$gtk_licenses"
