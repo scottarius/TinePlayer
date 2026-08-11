@@ -9661,7 +9661,12 @@ fn after_layout(row: &gtk::ListBoxRow, ticket: u64) {
         if focus_is_outside(&row) {
             return;
         }
-        row.grab_focus();
+        // Only if it has not already taken. A focus grab inside a scroller
+        // makes GTK scroll the row into view, so repeating one that already
+        // succeeded sets a second scroll going against the one below.
+        if !row.has_focus() {
+            row.grab_focus();
+        }
         show_row(&row);
     });
 }
@@ -9681,9 +9686,22 @@ fn focus_is_outside(row: &gtk::ListBoxRow) -> bool {
     }
 }
 
-/// Moves the scroller so a row is on screen, a third of the way down rather
-/// than jammed against an edge: a row against the top of the frame looks like
-/// the first row, which is exactly the confusion being avoided.
+/// Moves the scroller so a row is fully on screen, by the smallest amount
+/// that does it.
+///
+/// The minimum on purpose, and it used to place the row a third of the way
+/// down the frame instead - which looks better in isolation and is the wrong
+/// rule here, because this is not the only thing scrolling. Focusing a row
+/// inside a scroller makes GTK bring it into view too, by the smallest amount.
+/// Two rules that disagree about where a row belongs produce whichever answer
+/// ran last: arrowing down kept the row at the bottom edge on the presses
+/// where GTK's scroll had already satisfied this one, and threw the row up
+/// near the top on the presses where it had not. Nothing about the input
+/// differed, so it read as random.
+///
+/// Agreeing with GTK is what makes it predictable, and it is also the better
+/// behaviour while arrowing: the row stays where it is and the list moves one
+/// row under it, rather than the page jumping every time the edge is reached.
 fn show_row(row: &gtk::ListBoxRow) {
     let Some(list) = row.parent() else { return };
     let mut ancestor = list.parent();
@@ -9697,24 +9715,37 @@ fn show_row(row: &gtk::ListBoxRow) {
         }
     };
 
-    // Measured against whatever the scroller actually scrolls, not against
-    // the list. On the media page the list is not the scroller's child - the
-    // film's description sits above it inside the same scrolled area - and
-    // coordinates relative to the list are short by the height of everything
-    // above it, which scrolls every row to the wrong place.
-    let scrolled = scroller.child().unwrap_or_else(|| list.clone());
-    let Some((_, top)) = row.translate_coordinates(&scrolled, 0.0, 0.0) else {
-        return;
-    };
+    // The row's own allocation inside the list, which is where it sits in the
+    // content and does not move when the content is scrolled.
+    //
+    // Asked of the widget tree with `translate_coordinates` before, which
+    // looks equivalent and is not. The step above this one grabs the row's
+    // focus, and GTK answers a focus grab inside a scroller by scrolling the
+    // row into view itself - moving the adjustment and re-allocating the list
+    // underneath us. `translate_coordinates` then reported whichever
+    // allocation happened to be current: the row's place in the list on one
+    // press, its place on screen on the next.
+    //
+    // On screen it is always the same place, hard against the bottom edge, so
+    // every other press computed the same destination near the top of the list
+    // and jumped there - and the two answers diverged further the further down
+    // the list you had gone.
+    let top = f64::from(row.allocation().y());
     let adjustment = scroller.vadjustment();
     let page = adjustment.page_size();
     // Already on screen: leave it where it is rather than jumping the page
     // about under someone who can see the row perfectly well.
+    let value = adjustment.value();
     let bottom = top + f64::from(row.height());
-    if top >= adjustment.value() && bottom <= adjustment.value() + page {
+    let wanted = if top < value {
+        // Off the top: bring its top edge to the top of the frame.
+        top
+    } else if bottom > value + page {
+        // Off the bottom: bring its bottom edge to the bottom of the frame.
+        bottom - page
+    } else {
         return;
-    }
-    let wanted = top - page / 3.0;
+    };
     adjustment.set_value(wanted.clamp(adjustment.lower(), (adjustment.upper() - page).max(0.0)));
 }
 
