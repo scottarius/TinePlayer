@@ -4090,6 +4090,11 @@ impl App {
                     list.select_row(Some(&row));
                     settle_on(&row);
                 } else {
+                    // Nothing to settle on, but the claim is still worth
+                    // making: it supersedes any settling left pending by the
+                    // row this popover opened over, which would otherwise come
+                    // due and pull the focus back out to the page.
+                    claim_settling();
                     list.grab_focus();
                 }
             })
@@ -9595,6 +9600,7 @@ fn about_text(text: &str) -> gtk::Label {
 /// So the scroll is done by hand, and not until the row has been mapped -
 /// which is the point at which it knows where it is.
 fn settle_on(row: &gtk::ListBoxRow) {
+    let ticket = claim_settling();
     // The row itself, so a screen reader has a focus change to announce.
     row.grab_focus();
     // Setting the window's child maps the new page there and then, so by the
@@ -9602,18 +9608,63 @@ fn settle_on(row: &gtk::ListBoxRow) {
     // waiting for the signal would be waiting forever. Only the first screen
     // of a session arrives unmapped, because the window itself is not up yet.
     if row.is_mapped() {
-        after_layout(row);
+        after_layout(row, ticket);
     } else {
-        row.connect_map(after_layout);
+        row.connect_map(move |row| after_layout(row, ticket));
     }
+}
+
+thread_local! {
+    /// Which settling is the current one. See [`claim_settling`].
+    static SETTLING: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Claims the right to be the row the deferred work below settles on, and
+/// supersedes whatever claimed it before.
+///
+/// Settling a row is not finished when [`settle_on`] returns: where the row is
+/// and how far the scroller can travel are only known after a layout pass, so
+/// the last of it waits for an idle. Nothing about that idle was tied to the
+/// row still being the one wanted, and holding an arrow key queues one per
+/// press - so the earlier ones came due against rows already left behind, and
+/// scrolled them back into view. Arrowing quickly down a list threw the page
+/// back to wherever the cursor had been a few presses ago.
+///
+/// A ticket rather than cancelling the pending idle: several things settle
+/// rows - the arrow keys, a screen being built, a popover opening over one -
+/// and none of them knows about the others. Each takes the next number, and
+/// deferred work runs only while its number is still the current one, so the
+/// most recent claim always wins without anybody having to be told.
+///
+/// This does not replace [`focus_is_outside`], which covers what a ticket
+/// cannot: moving from the top row up to a header button focuses the button
+/// without settling anything, so no new ticket is taken and only the focus
+/// check sees that the row is no longer where the viewer is.
+fn claim_settling() -> u64 {
+    SETTLING.with(|settling| {
+        let ticket = settling.get().wrapping_add(1);
+        settling.set(ticket);
+        ticket
+    })
+}
+
+/// Whether this settling is still the one in force.
+fn settling_is_current(ticket: u64) -> bool {
+    SETTLING.with(|settling| settling.get() == ticket)
 }
 
 /// Runs once the page has been through a layout pass, which is when a row
 /// finally knows where it is and the scroller knows how much of it there is
 /// to move.
-fn after_layout(row: &gtk::ListBoxRow) {
+fn after_layout(row: &gtk::ListBoxRow, ticket: u64) {
     let row = row.clone();
     glib::idle_add_local_once(move || {
+        // Only while this is still the row being settled on. Anything settled
+        // since - the next row under a held arrow key, another screen, a
+        // popover opening - has taken a later ticket and this one is stale.
+        if !settling_is_current(ticket) {
+            return;
+        }
         // Only if the focus is still in this list. The grab below is a second
         // attempt, for the one case where the first one was too early to take
         // - and a second attempt that runs unconditionally is a second attempt
