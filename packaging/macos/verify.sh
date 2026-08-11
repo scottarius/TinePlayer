@@ -125,6 +125,48 @@ else
     fi
 fi
 
+# --- FFmpeg has to be the LGPL build ------------------------------------
+#
+# TinePlayer is MIT, and stays MIT only because everything shipped beside it
+# is LGPL or more permissive. FFmpeg is the one that could change that:
+# Homebrew builds it with x264 and x265 linked, which is GPL and would take
+# the whole distribution with it, so the copy bundled is GStreamer's own build
+# without them. That is a claim about somebody else's binary, and it is the
+# single claim holding up the license of the whole package.
+#
+# FFmpeg answers it itself. Each library records the license its configure
+# flags produced, so this reads the binary rather than trusting where it came
+# from. `contents.sh` already refuses GPL *encoders*; this is the same
+# question one level down, about the build rather than the plugin list.
+echo "Checking the bundled FFmpeg is LGPL..."
+ffmpeg_seen=0
+for lib in "$frameworks"/libav*.dylib "$frameworks"/libsw*.dylib; do
+    [[ -f "$lib" ]] || continue
+    ffmpeg_seen=1
+    stated="$(strings "$lib" 2>/dev/null | grep -m1 " license: " || true)"
+    if [[ -z "$stated" ]]; then
+        echo "  $(basename "$lib"): states no license at all" >&2
+        failed=1
+    elif [[ "$stated" != *"LGPL"* ]]; then
+        echo "  $stated" >&2
+        echo "  This is not the LGPL build. Shipping it would make the whole" >&2
+        echo "  distribution GPL, and TinePlayer claims MIT." >&2
+        failed=1
+    fi
+done
+gpl="$(strings "$frameworks"/libav*.dylib "$frameworks"/libsw*.dylib 2>/dev/null |
+    grep -m1 -- "--enable-gpl\|--enable-nonfree" || true)"
+if [[ -n "$gpl" ]]; then
+    echo "  built with $gpl" >&2
+    failed=1
+fi
+if (( ffmpeg_seen )); then
+    (( failed )) || echo "  LGPL, built without x264 or x265"
+else
+    echo "  no FFmpeg in the bundle" >&2
+    failed=1
+fi
+
 if (( failed )); then
     echo "Bundle verification failed." >&2
     exit 1
