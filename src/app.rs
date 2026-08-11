@@ -6659,14 +6659,13 @@ impl App {
         ));
         // Reported rather than swallowed: a link that does nothing looks like
         // a link that was pressed wrongly.
-        text.connect_activate_link(|_, uri| {
-            if let Err(e) =
-                gtk::gio::AppInfo::launch_default_for_uri(uri, None::<&gtk::gio::AppLaunchContext>)
-            {
-                eprintln!("Could not open {uri}: {e}");
-            }
-            glib::Propagation::Stop
-        });
+        {
+            let folder = folder.clone();
+            text.connect_activate_link(move |_, _| {
+                show_folder(&folder);
+                glib::Propagation::Stop
+            });
+        }
 
         Some(text.upcast())
     }
@@ -8942,35 +8941,46 @@ impl App {
 
     fn confirm_clear_data(self: &Rc<Self>) {
         let app = self.clone();
-        self.show_confirm(
-            "Forget saved positions and track choices\nfor every video?",
-            "Clear",
-            move || {
-                if let Err(e) = crate::config::clear_all_resume() {
-                    eprintln!("{e}");
-                }
-                // The loaded file keeps its choices for this session; only
-                // what was written down is gone.
-                app.show_settings();
-            },
-        );
+        self.show_confirm("Clear all saved playback data?", "Clear", move || {
+            if let Err(e) = crate::config::clear_all_resume() {
+                eprintln!("{e}");
+            }
+            // The loaded file keeps its choices for this session; only
+            // what was written down is gone.
+            app.show_settings();
+        });
     }
 
-    /// A yes-or-no page in the same style as the rest, since a dialog would
-    /// be unreadable at a distance and awkward with a controller.
+    /// A yes-or-no panel over the screen that asked the question.
+    ///
+    /// Over it rather than in place of it, which is what it used to be: a
+    /// question about something on the screen behind should leave that screen
+    /// where it is, and answering it should put nothing back together.
+    ///
+    /// The confirming button is destructive, because this panel is. It exists
+    /// for one question - whether to throw away what has been remembered - and
+    /// a red button on a question that only ever destroys something is the
+    /// application's own rule rather than a decision taken here.
     fn show_confirm(
         self: &Rc<Self>,
         message: &str,
         confirm_label: &str,
         action: impl Fn() + 'static,
     ) {
+        let px = |base: f64| (base * self.scale.get()).round() as i32;
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(32)
+            .spacing(px(28.0))
             .halign(gtk::Align::Center)
             .valign(gtk::Align::Center)
+            .margin_top(px(36.0))
+            .margin_bottom(px(36.0))
+            .margin_start(px(44.0))
+            .margin_end(px(44.0))
             .build();
-        page.append(&heading_label(message));
+        let heading = heading_label(message);
+        heading.set_halign(gtk::Align::Center);
+        page.append(&heading);
 
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -8981,6 +8991,7 @@ impl App {
         cancel.add_css_class("tp-button");
         let confirm = gtk::Button::with_label(confirm_label);
         confirm.add_css_class("tp-button");
+        confirm.add_css_class("tp-danger");
         buttons.append(&cancel);
         buttons.append(&confirm);
         page.append(&buttons);
@@ -9002,7 +9013,7 @@ impl App {
 
         self.set_nav(None, &[], &[]);
         *self.screen.borrow_mut() = Screen::Confirm;
-        self.window.set_child(Some(&page));
+        self.window.set_child(Some(&self.modal(&page)));
         // Cancel takes focus, so a reflexive second press doesn't destroy
         // anything.
         cancel.grab_focus();
@@ -10132,6 +10143,37 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
         // One tab stop comes from `move_focus_stop` instead, which finds the
         // stop containing the focus and steps to the next one, so a focused
         // row still counts as being on its list.
+    }
+}
+
+/// Opens a folder in whatever the machine browses files with.
+///
+/// **Not `AppInfo::launch_default_for_uri`, which was tried first.** GIO
+/// answers "No application is registered as handling this file" for a
+/// `file://` directory on Windows - measured 2026-08-12, with the link
+/// reaching this code and the launch failing every time. There is nothing to
+/// register: the shell is what opens folders, and GIO's table of URI handlers
+/// does not know that.
+///
+/// So each platform is asked in its own words. The exit status is deliberately
+/// not read: `explorer.exe` reports failure on success often enough to be
+/// famous for it, and there is nothing useful to do with the answer anyway.
+fn show_folder(folder: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    let mut opener = {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("explorer");
+        // No console window for a GUI application to flash up behind itself.
+        command.creation_flags(0x0800_0000);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut opener = std::process::Command::new("open");
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut opener = std::process::Command::new("xdg-open");
+
+    if let Err(e) = opener.arg(folder).spawn() {
+        eprintln!("Could not open {}: {e}", folder.display());
     }
 }
 
@@ -11319,6 +11361,17 @@ fn style_css(scale: f64) -> String {
            setting it explains, so a column of them reads as annotation rather
            than as more rows. */
         .tp-row-note {{ font-size: {note}px; opacity: 0.55; }}
+        /* The link in a note is the same words as the rest of it, underlined.
+           A theme's link blue on a line of dimmed grey reads as a different
+           kind of thing entirely, and there is only one kind of thing here.
+
+           Written as `a` first, which is HTML and not GTK: the parser accepts
+           it, matches nothing, and leaves the link exactly as the theme had
+           it. GTK gives each markup link its own node named `link`, and puts
+           the widget in the `:link` state - both are named here because which
+           one carries the colour has moved between versions. */
+        .tp-row-note link,
+        .tp-row-note *:link {{ color: #ffffff; }}
         /* Sized with the rest of the interface: the theme's default switch is
            drawn for a mouse at a desk, and is a smudge from a sofa.
 
