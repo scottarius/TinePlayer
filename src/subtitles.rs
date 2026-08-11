@@ -164,13 +164,10 @@ impl Subtitle {
 /// tracks whatever is actually being heard, file by file.
 pub const MODES: [(&str, &str); 5] = [
     ("none", "None"),
-    ("primary_forced", "Forced Only (Prefer Primary Language)"),
-    ("primary", "Primary Language"),
-    (
-        "secondary_forced",
-        "Forced Only (Prefer Secondary Language)",
-    ),
-    ("secondary", "Secondary Language"),
+    ("primary_forced", "Forced (Prefer First Output Language)"),
+    ("secondary_forced", "Forced (Prefer Second Output Language)"),
+    ("primary", "First Output Language"),
+    ("secondary", "Second Output Language"),
 ];
 
 /// How the setting reads on screen: one of [`MODES`] or a language name.

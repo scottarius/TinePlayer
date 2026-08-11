@@ -382,7 +382,6 @@ enum Screen {
     PasteUri,
     VideoSource,
     Opening,
-    Chooser,
     /// The three steps of aligning an audio file, in the one panel that
     /// carries them: which track to measure against, the measuring, and what
     /// it found. Separate screens because backing out means different things
@@ -429,6 +428,38 @@ enum MenuAction {
     Track(Role),
     Align(Role),
     Subtitles,
+}
+
+/// One line of a chooser: what it says, and which choice it stands for.
+/// `None` is the "None" entry, which most of these lists begin with.
+type Choice = (String, Option<usize>);
+
+/// Everything a chooser needs to draw itself.
+struct Choices {
+    entries: Vec<Choice>,
+    /// The choice already in force, so the list opens on it rather than at the
+    /// top. `None` when nothing is set, which lands on the "None" row every
+    /// list that has one begins with.
+    current: Option<usize>,
+    /// Entries with a rule drawn above them, by index. Only the subtitle
+    /// preference has any: it offers three unlike things in one list - nothing,
+    /// four ways of following an output, and two hundred languages - and
+    /// without the rules they read as one long undifferentiated run.
+    dividers: Vec<usize>,
+}
+
+/// Puts a selector's rows in, and can be run again when what they should say
+/// has changed - which for a device list is a moment after it opens.
+type Fill = dyn Fn(&Rc<App>);
+
+/// A screen's navigation, held while a popover borrows the keyboard.
+struct NavState {
+    list: Option<gtk::ListBox>,
+    header: Vec<gtk::Button>,
+    footer: Vec<gtk::Button>,
+    header_entry: Option<gtk::Button>,
+    stops: Vec<gtk::Widget>,
+    copy_root: Option<gtk::Widget>,
 }
 
 /// What the alignment thread has to say for itself, on its way back to the
@@ -502,6 +533,16 @@ pub struct App {
     /// Bumped whenever a different file is loaded, so artwork still arriving
     /// from a thread for the previous one is dropped rather than drawn.
     art_generation: Cell<u64>,
+    /// The output devices as last enumerated, and whether an enumeration has
+    /// ever finished.
+    ///
+    /// Held because finding them is not cheap: it starts a GStreamer device
+    /// monitor, which probes every audio backend on the machine and takes long
+    /// enough on the main thread to be seen as lag when a menu opens. The list
+    /// changes only when hardware is plugged in or unplugged, so it is worth
+    /// keeping between openings rather than asking again each time.
+    device_names: RefCell<Vec<String>>,
+    device_scan: Cell<bool>,
     /// The rebuild waiting for a drag-resize to stop, and the poster height
     /// the page on screen was built at. See [`App::rebuild_when_resize_ends`].
     resize_settle: RefCell<Option<glib::SourceId>>,
@@ -617,9 +658,6 @@ pub struct App {
     /// Settings when you meant Play is a button's width of travel every time.
     nav_header_entry: RefCell<Option<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
-    /// Whether the open chooser was reached from the settings screen, so
-    /// that finishing with it returns where it came from.
-    from_settings: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -743,6 +781,8 @@ impl App {
             poster_art: RefCell::new(None),
             backdrop_art: RefCell::new(None),
             art_generation: Cell::new(0),
+            device_names: RefCell::new(Vec::new()),
+            device_scan: Cell::new(false),
             resize_settle: RefCell::new(None),
             built_poster: Cell::new(0.0),
             tracks: RefCell::new(Vec::new()),
@@ -781,7 +821,6 @@ impl App {
             nav_header: RefCell::new(Vec::new()),
             nav_header_entry: RefCell::new(None),
             controls: RefCell::new(None),
-            from_settings: Cell::new(false),
             styles: styles.clone(),
             scale: Cell::new(scale),
             scrub_generation: Cell::new(0),
@@ -887,6 +926,15 @@ impl App {
 
         app.install_key_handling();
         app.install_accelerators(gtk_app);
+
+        // Find the outputs now, in the background, so the first menu that
+        // lists them opens with them already in it rather than with
+        // "Searching for outputs..." and a pause. Startup is where there is
+        // time to spare for this: nothing is waiting on the answer, and the
+        // probe takes long enough to be seen if it is left until a menu wants
+        // it. Every opening still looks again - see `show_selector` - so this
+        // is a head start rather than the only look.
+        app.scan_devices_soon(|_| {});
 
         // Applied to the window itself rather than at playback, so the
         // menus are fullscreen too.
@@ -1485,7 +1533,6 @@ impl App {
         let screen = *self.screen.borrow();
         match screen {
             Screen::Playing => self.leave_playback(),
-            Screen::Chooser => self.leave_chooser(),
             Screen::Confirm | Screen::About | Screen::Notices | Screen::Kodi => {
                 self.show_settings()
             }
@@ -2872,19 +2919,19 @@ impl App {
                 *app.menu_row.borrow_mut() = row.index();
                 match actions.get(row.index() as usize) {
                     Some(MenuAction::Device(Role::Primary)) => {
-                        app.show_chooser(Setting::PrimaryDevice)
+                        app.show_selector(Setting::PrimaryDevice, row)
                     }
                     Some(MenuAction::Track(Role::Primary)) => {
-                        app.show_chooser(Setting::PrimaryTrack)
+                        app.show_selector(Setting::PrimaryTrack, row)
                     }
                     Some(MenuAction::Device(Role::Secondary)) => {
-                        app.show_chooser(Setting::SecondaryDevice)
+                        app.show_selector(Setting::SecondaryDevice, row)
                     }
                     Some(MenuAction::Track(Role::Secondary)) => {
-                        app.show_chooser(Setting::SecondaryTrack)
+                        app.show_selector(Setting::SecondaryTrack, row)
                     }
                     Some(MenuAction::Align(role)) => app.show_align(*role),
-                    Some(MenuAction::Subtitles) => app.show_chooser(Setting::Subtitles),
+                    Some(MenuAction::Subtitles) => app.show_selector(Setting::Subtitles, row),
                     None => {}
                 }
             });
@@ -3722,32 +3769,78 @@ impl App {
 
     // --- Choosers ------------------------------------------------------
 
-    fn show_chooser(self: &Rc<Self>, setting: Setting) {
-        let title = match setting {
-            Setting::PrimaryDevice => "First Output Device",
-            Setting::PrimaryTrack => "First Audio Track",
-            Setting::SecondaryDevice => "Second Output Device",
-            Setting::SecondaryTrack => "Second Audio Track",
-            Setting::Subtitles => "Subtitles",
-            Setting::PrimaryLanguage => "First Language Preference",
-            Setting::SecondaryLanguage => "Second Language Preference",
-            Setting::SubtitleLanguage => "Subtitle Preference",
-            Setting::SubtitleFont => "Subtitle Font",
-        };
-        let (page, list, back, _header) = list_page(title, true);
+    /// Enumerates the output devices on a thread, and calls `then` on the main
+    /// thread if the answer differs from what the cache already held.
+    ///
+    /// For the popover, which opens immediately against whatever the cache
+    /// already has and fills itself in when this lands. The probe is the one
+    /// slow thing either menu does, and it is slow because it starts a device
+    /// monitor - which asks every audio backend on the machine what it has.
+    ///
+    /// Polled rather than pushed, in the manner of the other threads here:
+    /// nothing in this application may be touched from another thread, so the
+    /// answer comes back through a channel and is picked up on this one.
+    fn scan_devices_soon(self: &Rc<Self>, then: impl Fn(&Rc<Self>) + 'static) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let names: Vec<String> = list_audio_output_devices()
+                .map(|devices| {
+                    devices
+                        .iter()
+                        .map(|device| device.display_name().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = sender.send(names);
+        });
 
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+            let names = match receiver.try_recv() {
+                Ok(names) => names,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                // Gone without an answer, which leaves nothing to show and no
+                // reason to keep looking.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            app.device_scan.set(true);
+            // Only when the answer is different. A refill re-selects the entry
+            // in force, so running it against an unchanged list would throw
+            // away wherever the viewer had arrowed to, a moment after they
+            // got there.
+            if *app.device_names.borrow() == names {
+                return glib::ControlFlow::Break;
+            }
+            *app.device_names.borrow_mut() = names;
+            then(&app);
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// What a chooser offers, and which of it is already in force.
+    ///
+    /// Split out from the screen that shows it so a popover and a full page
+    /// can offer exactly the same list. They differ in how they are put on
+    /// screen and in nothing else, and two copies of this match is the way
+    /// that stops being true.
+    fn chooser_entries(self: &Rc<Self>, setting: Setting) -> Choices {
         // Entries are (display text, choice). `None` means the "None"
         // option, which every list offers except the primary device - an
         // output has to exist for anything to play.
-        let mut entries: Vec<(String, Option<usize>)> = Vec::new();
-        // The choice already in force, so the list opens on it rather than
-        // at the top. Left as None when nothing is set, which lands on the
-        // "None" row every list that has one begins with.
+        let mut entries: Vec<Choice> = Vec::new();
         let mut current: Option<usize> = None;
+        let mut dividers: Vec<usize> = Vec::new();
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
                 if setting == Setting::SecondaryDevice {
                     entries.push(("None".to_string(), None));
+                    // A rule under it. "None" here means "play nothing on a
+                    // second output", which is a different kind of answer to
+                    // the hardware listed below it - and the only list where
+                    // this one is offered at all.
+                    dividers.push(1);
                 }
                 let configured = {
                     let config = self.config.borrow();
@@ -3757,17 +3850,18 @@ impl App {
                         config.secondary_sink.clone()
                     }
                 };
-                match list_audio_output_devices() {
-                    Ok(devices) => {
-                        for (position, device) in devices.iter().enumerate() {
-                            let name = device.display_name().to_string();
-                            if configured.as_deref() == Some(name.as_str()) {
-                                current = Some(position);
-                            }
-                            entries.push((name, Some(position)));
-                        }
+                let devices = self.device_names.borrow();
+                // Nothing found and nothing looked for yet: the caller is
+                // showing this while the probe runs, so say so rather than
+                // offering an empty list, which reads as "no outputs".
+                if devices.is_empty() && !self.device_scan.get() {
+                    entries.push(("Searching for outputs...".to_string(), None));
+                }
+                for (position, name) in devices.iter().enumerate() {
+                    if configured.as_deref() == Some(name.as_str()) {
+                        current = Some(position);
                     }
-                    Err(e) => entries.push((format!("Error: {e}"), None)),
+                    entries.push((name.clone(), Some(position)));
                 }
             }
             Setting::Subtitles => {
@@ -3807,7 +3901,7 @@ impl App {
                     current = Some(audio_file);
                     entries.push((format!("Audio File: {}", file.label()), Some(audio_file)));
                 } else {
-                    entries.push(("Audio File...".to_string(), Some(audio_file)));
+                    entries.push(("Browse...".to_string(), Some(audio_file)));
                 }
             }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
@@ -3820,6 +3914,11 @@ impl App {
                     }
                 };
                 current = language_position(configured.as_deref());
+                // A rule under it, before the languages. The entry above is
+                // not a language at all - it is the absence of a preference,
+                // which leaves the choice to whatever the file offers first -
+                // and run flush against Afrikaans it reads as one.
+                dividers.push(1);
                 // Worded exactly as the settings row shows it when unset, so
                 // the list and the value it came from agree.
                 entries.push((
@@ -3859,6 +3958,12 @@ impl App {
                             .position(|(code, _, _, _)| *code == setting)
                             .map(|position| modes + position)
                     });
+                // Below "None", and again above the languages. What sits
+                // between is the part worth choosing: following an output
+                // tracks whatever is actually being heard, file by file, where
+                // naming a language is a guess that holds until it does not.
+                dividers.push(1);
+                dividers.push(modes);
                 for (position, (_, label)) in crate::subtitles::MODES.iter().enumerate() {
                     entries.push((label.to_string(), Some(position)));
                 }
@@ -3885,55 +3990,249 @@ impl App {
             }
         }
 
-        for (text, _) in &entries {
-            append_named(&list, &chooser_row(text), text);
+        Choices {
+            entries,
+            current,
+            dividers,
+        }
+    }
+
+    /// Puts the current screen's navigation aside, so something on top of it
+    /// can have the keyboard for a while.
+    ///
+    /// The application keeps one navigation model for the screen on display -
+    /// which list the arrows drive, which buttons sit above and below it. A
+    /// popover is the first thing that is neither a screen nor part of one: it
+    /// needs the arrows while it is open and has to give them back exactly as
+    /// it found them, because the page underneath is still there and still
+    /// where the viewer will be returned to.
+    fn take_nav(&self) -> NavState {
+        NavState {
+            list: self.nav_list.borrow().clone(),
+            header: self.nav_header.borrow().clone(),
+            footer: self.nav_footer.borrow().clone(),
+            header_entry: self.nav_header_entry.borrow().clone(),
+            stops: self.nav_stops.borrow().clone(),
+            copy_root: self.copy_root.borrow().clone(),
+        }
+    }
+
+    /// Gives the screen underneath its navigation back.
+    fn put_nav(&self, state: NavState) {
+        *self.nav_list.borrow_mut() = state.list;
+        *self.nav_header.borrow_mut() = state.header;
+        *self.nav_footer.borrow_mut() = state.footer;
+        *self.nav_header_entry.borrow_mut() = state.header_entry;
+        *self.nav_stops.borrow_mut() = state.stops;
+        *self.copy_root.borrow_mut() = state.copy_root;
+    }
+
+    /// A selector over the row that opened it, rather than a page that
+    /// replaces everything.
+    ///
+    /// The same entries a full chooser would list, from `chooser_entries`, in
+    /// a popover anchored to the row. The page stays visible behind it, which
+    /// is the point: what you are choosing for is still on screen, and the
+    /// same widget will work over a playing film when these are wanted during
+    /// playback.
+    fn show_selector(self: &Rc<Self>, setting: Setting, anchor: &gtk::ListBoxRow) {
+        let scale = self.scale.get();
+        let px = |base: f64| (base * scale).round() as i32;
+        // A device list is not ready when the popover opens - it is being
+        // probed on a thread - so the entries are held rather than captured,
+        // and the rows are filled by something that can be run twice.
+        let entries: Rc<RefCell<Vec<Choice>>> = Rc::new(RefCell::new(Vec::new()));
+        let (scroller, list) = scrolling_list();
+        let fill: Rc<Fill> = {
+            let entries = entries.clone();
+            let list = list.clone();
+            Rc::new(move |app: &Rc<Self>| {
+                let Choices {
+                    entries: fresh,
+                    current,
+                    dividers,
+                } = app.chooser_entries(setting);
+                while let Some(row) = list.row_at_index(0) {
+                    list.remove(&row);
+                }
+                for (text, _) in &fresh {
+                    let entry = chooser_row(text);
+                    // Right-aligned, unlike the same row on a full chooser
+                    // page. The popover opens against a row whose value sits
+                    // on the right, and the choices are that value's
+                    // alternatives - so they read as a column under it rather
+                    // than as a list that starts somewhere else.
+                    entry.set_xalign(1.0);
+                    append_named(&list, &entry, text);
+                }
+                // Opened on whatever is already in force. Grabbing focus
+                // scrolls it into view, which is what a long list needs.
+                let opening = fresh
+                    .iter()
+                    .position(|(_, choice)| *choice == current)
+                    .unwrap_or(0) as i32;
+                *entries.borrow_mut() = fresh;
+                // A rule above the entries that begin a group. A header rather
+                // than a row of its own, for the reason the media page's group
+                // headings give: headers sit outside the selection model and
+                // the focus chain, so a rule cannot be landed on. Set on every
+                // fill, since the rows it describes are rebuilt each time.
+                list.set_header_func(move |row, _| {
+                    match dividers.contains(&(row.index() as usize)) {
+                        true => {
+                            row.set_header(Some(&gtk::Separator::new(gtk::Orientation::Horizontal)))
+                        }
+                        false => row.set_header(None::<&gtk::Widget>),
+                    }
+                });
+                if let Some(row) = list.row_at_index(opening) {
+                    row.add_css_class("tp-current");
+                    list.select_row(Some(&row));
+                    settle_on(&row);
+                } else {
+                    list.grab_focus();
+                }
+            })
+        };
+        fill(self);
+        // As wide as its longest entry, between a floor and a ceiling.
+        //
+        // `propagate_natural_width` is the part that does the work, and its
+        // absence is what made the first attempt at this a narrow column of
+        // "...": without it a scrolled window's natural width *is* its
+        // `min-content-width`, so the popover opened at the floor no matter
+        // what was in it. Ellipsizing entries make that failure look like a
+        // sizing bug rather than a missing property, because ellipsizing is
+        // what lets a label shrink that far in the first place - it lowers the
+        // minimum width and leaves the natural width alone, which is exactly
+        // the number wanted here.
+        // Fixed for a device list, which opens holding a placeholder and is
+        // filled in a moment later: sized to its contents it would open narrow
+        // and jump wider under the pointer. The row's own width is a stable
+        // number and a generous one, and device names are long.
+        let devices = matches!(setting, Setting::PrimaryDevice | Setting::SecondaryDevice);
+        // Two different questions. Every opening of a device list goes and
+        // looks again, because hardware is plugged in and unplugged between
+        // openings and a cache that is never refreshed is only a stale list.
+        // Only the first opening has nothing to show while that happens.
+        let waiting = devices && !self.device_scan.get();
+        if waiting {
+            scroller.set_size_request(anchor.width().max(px(SELECTOR_MIN_WIDTH)), -1);
+        }
+        scroller.set_propagate_natural_width(true);
+        scroller.set_min_content_width(px(SELECTOR_MIN_WIDTH));
+        // A ceiling as well, for the one entry that has no natural length: an
+        // audio file is named by its path, and some of those are a page wide.
+        scroller.set_max_content_width(px(SELECTOR_MAX_WIDTH));
+        // Tall lists scroll rather than growing past the window - the language
+        // list is two hundred entries. Short ones stay short.
+        scroller.set_max_content_height(px(SELECTOR_HEIGHT));
+        scroller.set_propagate_natural_height(true);
+
+        let popover = gtk::Popover::builder()
+            .child(&scroller)
+            .position(gtk::PositionType::Bottom)
+            // No arrow: this is a panel of choices, not a speech bubble, and
+            // the anchor is already obvious from where it opens.
+            .has_arrow(false)
+            .build();
+        popover.add_css_class("tp-selector");
+        popover.set_parent(anchor);
+        // What the popover will be: its contents, plus the padding
+        // `.tp-selector > contents` puts around them. Measured on the child
+        // for the reason `aim` gives - the popover itself measures zero.
+        let (_, content_width, _, _) = scroller.measure(gtk::Orientation::Horizontal, -1);
+        aim_right(&popover, anchor, content_width + px(SELECTOR_PAD) * 2);
+
+        // The arrows belong to the popover while it is up, and to the page
+        // again the moment it is not.
+        let saved = self.take_nav();
+        self.wire_navigation(&list, &[], &[]);
+        {
+            let app = self.clone();
+            let saved = std::cell::RefCell::new(Some(saved));
+            popover.connect_closed(move |popover| {
+                if let Some(saved) = saved.borrow_mut().take() {
+                    app.put_nav(saved);
+                }
+                // A popover parented by hand has to be unparented by hand, or
+                // it outlives the row and GTK complains when that row goes.
+                if popover.parent().is_some() {
+                    popover.unparent();
+                }
+            });
         }
 
         {
             let app = self.clone();
             let entries = entries.clone();
+            let popover = popover.clone();
             list.connect_row_activated(move |_, row| {
                 app.sounds.borrow().click();
-                let Some((_, choice)) = entries.get(row.index() as usize) else {
-                    return;
+                let choice = match entries.borrow().get(row.index() as usize) {
+                    Some((_, choice)) => *choice,
+                    None => return,
                 };
-                if !app.apply_choice(setting, *choice) {
-                    app.leave_chooser();
+                popover.popdown();
+                // After the popover has gone, not during. Applying a choice
+                // rebuilds the page underneath, which destroys the row this is
+                // anchored to - and doing that while it is still up is how a
+                // widget ends up parented to something that no longer exists.
+                //
+                // Rebuilt rather than patched because a choice can change more
+                // than the row it was made on: picking a second output fills
+                // in the rows below it, and clearing one empties them.
+                let app = app.clone();
+                let over = *app.screen.borrow();
+                glib::idle_add_local_once(move || {
+                    if app.apply_choice(setting, choice) {
+                        return;
+                    }
+                    match over {
+                        Screen::Settings => app.show_settings(),
+                        _ => app.show_menu(),
+                    }
+                });
+            });
+        }
+
+        popover.popup();
+        // Deliberately not re-aimed once it is open. Correcting against
+        // `popover.width()` after the fact was tried and is wrong twice over:
+        // an allocated popover measures wider than its contents, because the
+        // allocation carries the margin the shadow is drawn into, so the
+        // correction moved a popover that had opened in the right place about
+        // fifty pixels to the left - and it did it a frame late, in full view.
+        //
+        // Selecting the current entry is `fill`'s job, and it is run again
+        // here so that it happens with the list allocated: scrolling a row
+        // into view needs a size, and inside a popover there is none until it
+        // has been shown.
+        fill(self);
+
+        // The outputs, once something has gone and found them. The popover is
+        // already up with "Searching for outputs..." in it, and fills in when
+        // this lands - which is the whole point of doing it this way, since
+        // the probe is slow enough on the main thread to read as the menu
+        // being stuck.
+        if devices {
+            let fill = fill.clone();
+            // Only if it is still open. Refilling a popover that has been
+            // dismissed would be pointless, and worse than pointless: it ends
+            // by focusing the entry in force, which would take focus off the
+            // page the viewer went back to.
+            let popover = popover.downgrade();
+            self.scan_devices_soon(move |app| {
+                if popover
+                    .upgrade()
+                    .is_some_and(|popover| popover.is_visible())
+                {
+                    fill(app);
                 }
             });
         }
-        {
-            let app = self.clone();
-            back.connect_clicked(move |_| app.leave_chooser());
-        }
-
-        // Up from the first row reaches the back arrow, so leaving is a
-        // navigable step rather than only a button press.
-        self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
-
-        *self.screen.borrow_mut() = Screen::Chooser;
-        self.window.set_child(Some(&page));
-        // Opens on whatever is already selected, and grabbing focus scrolls
-        // it into view, which matters for the language list.
-        let opening = entries
-            .iter()
-            .position(|(_, choice)| *choice == current)
-            .unwrap_or(0) as i32;
-        if let Some(row) = list.row_at_index(opening) {
-            // The setting in force, marked as such: scrolling a long list -
-            // the languages especially - otherwise loses track of which one
-            // is actually set the moment the cursor moves off it.
-            row.add_css_class("tp-current");
-            list.select_row(Some(&row));
-            settle_on(&row);
-        }
     }
 
-    /// Arrow keys don't move focus out of a ListBox, so the boundary
-    /// between the list and the button below it has to be bridged by hand -
-    /// otherwise the button is unreachable without a pointer. Movements
-    /// that would go past either end are swallowed, which also stops GTK
-    /// reporting them as failed navigation.
     fn wire_navigation(
         self: &Rc<Self>,
         list: &gtk::ListBox,
@@ -4010,15 +4309,6 @@ impl App {
             .and_then(|file| file.local().map(|path| path.to_path_buf()))
     }
 
-    /// Returns to whichever screen the chooser was opened from.
-    fn leave_chooser(self: &Rc<Self>) {
-        if self.from_settings.replace(false) {
-            self.show_settings();
-        } else {
-            self.show_menu();
-        }
-    }
-
     /// What the menu shows against the Subtitles row.
     fn describe_subtitle(&self) -> String {
         let Some(chosen) = self.subtitle.borrow().clone() else {
@@ -4037,15 +4327,14 @@ impl App {
     fn apply_choice(self: &Rc<Self>, setting: Setting, choice: Option<usize>) -> bool {
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
-                let names: Vec<String> = list_audio_output_devices()
-                    .map(|devices| {
-                        devices
-                            .iter()
-                            .map(|d| d.display_name().to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let picked = choice.and_then(|index| names.get(index).cloned());
+                // From the cache the list was built from, not a fresh probe.
+                // This used to enumerate the hardware all over again just to
+                // turn the row that was pressed back into a name, which put a
+                // second pause between the press and anything happening.
+                let picked = {
+                    let names = self.device_names.borrow();
+                    choice.and_then(|index| names.get(index).cloned())
+                };
 
                 let mut cleared_secondary = false;
                 {
@@ -6148,18 +6437,18 @@ impl App {
                 match row.index() {
                     ROW_INTERFACE_SCALE => app.work_switch_row(ROW_INTERFACE_SCALE),
                     ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
-                    ROW_PRIMARY_DEVICE => app.open_setting(Setting::PrimaryDevice),
-                    ROW_PRIMARY_LANGUAGE => app.open_setting(Setting::PrimaryLanguage),
+                    ROW_PRIMARY_DEVICE => app.show_selector(Setting::PrimaryDevice, row),
+                    ROW_PRIMARY_LANGUAGE => app.show_selector(Setting::PrimaryLanguage, row),
                     ROW_PRIMARY_DESCRIPTION => app.work_switch_row(ROW_PRIMARY_DESCRIPTION),
                     ROW_PRIMARY_VOLUME => app.work_switch_row(ROW_PRIMARY_VOLUME),
                     ROW_PRIMARY_SYNC => app.work_switch_row(ROW_PRIMARY_SYNC),
-                    ROW_SECONDARY_DEVICE => app.open_setting(Setting::SecondaryDevice),
-                    ROW_SECONDARY_LANGUAGE => app.open_setting(Setting::SecondaryLanguage),
+                    ROW_SECONDARY_DEVICE => app.show_selector(Setting::SecondaryDevice, row),
+                    ROW_SECONDARY_LANGUAGE => app.show_selector(Setting::SecondaryLanguage, row),
                     ROW_SECONDARY_DESCRIPTION => app.work_switch_row(ROW_SECONDARY_DESCRIPTION),
                     ROW_SECONDARY_VOLUME => app.work_switch_row(ROW_SECONDARY_VOLUME),
                     ROW_SECONDARY_SYNC => app.work_switch_row(ROW_SECONDARY_SYNC),
-                    ROW_SUBTITLE_LANGUAGE => app.open_setting(Setting::SubtitleLanguage),
-                    ROW_SUBTITLE_FONT => app.open_setting(Setting::SubtitleFont),
+                    ROW_SUBTITLE_LANGUAGE => app.show_selector(Setting::SubtitleLanguage, row),
+                    ROW_SUBTITLE_FONT => app.show_selector(Setting::SubtitleFont, row),
                     ROW_CLEAR_DATA => app.confirm_clear_data(),
                     ROW_KODI => app.show_kodi(),
                     ROW_ABOUT => app.show_about(),
@@ -6183,13 +6472,6 @@ impl App {
             list.select_row(Some(&row));
             settle_on(&row);
         }
-    }
-
-    /// Opens a chooser and remembers to come back here rather than to the
-    /// main menu.
-    fn open_setting(self: &Rc<Self>, setting: Setting) {
-        self.from_settings.set(true);
-        self.show_chooser(setting);
     }
 
     /// Turns the described-audio preference on or off for one output.
@@ -8604,6 +8886,29 @@ const PAGE_MAX_UNITS: f64 = 1920.0;
 /// rather than leaving a band along the bottom.
 const POSTER_SHARE: f64 = 0.58;
 
+/// The padding `.tp-selector > contents` draws around a selector's list,
+/// which its own width has to account for. Kept beside the stylesheet value it
+/// mirrors - `panel_pad` - because the two have to agree.
+const SELECTOR_PAD: f64 = 8.0;
+
+/// How narrow a selector is allowed to get, in interface units.
+///
+/// A list of short entries - "None", "Stereo", a two-word device name - would
+/// otherwise open as a sliver, which reads as something gone wrong rather than
+/// as a deliberately small menu.
+const SELECTOR_MIN_WIDTH: f64 = 300.0;
+
+/// How wide a selector is allowed to get before its entries ellipsize.
+const SELECTOR_MAX_WIDTH: f64 = 900.0;
+
+/// How tall a selector is allowed to get before it scrolls instead.
+///
+/// Not a share of the window, deliberately: a popover that fills the screen is
+/// the full-screen chooser this replaces. This is roughly a dozen rows, which
+/// is enough for every device list and short enough that the page it belongs
+/// to is still visible around it - which is the whole reason for a popover.
+const SELECTOR_HEIGHT: f64 = 520.0;
+
 /// Three lines of summary, in interface units, reserved whether the film has
 /// a summary or not.
 ///
@@ -9726,6 +10031,43 @@ fn browser_row(icon: &str, text: &str) -> gtk::Box {
     row
 }
 
+/// Lines a selector's right edge up with the right edge of the row that opened
+/// it, leaving the vertical placement to GTK.
+///
+/// GTK positions a popover by centering it on a rectangle you nominate, in the
+/// parent's coordinates. Here that is a one-pixel sliver at
+/// `row_width - popover_width / 2`, so centering the popover on it lands the
+/// two right edges together. The entries inside are right-aligned because they
+/// are alternatives to the value on the right of the row, and a centered
+/// popover would sit just left of it - close enough to read as a mistake
+/// rather than a margin.
+///
+/// The rectangle spans the row's full height, which is GTK's own default and
+/// gives its ordinary vertical behaviour: below the row when there is room,
+/// flipped above it when there is not.
+///
+/// Aligning an edge of the popover to an edge of the row was tried and taken
+/// out again. It is possible - a zero-height rectangle at `y` puts the
+/// popover's near edge on that line - but it requires predicting which way GTK
+/// will open, and the popover then covers the row it belongs to, which leaves
+/// a choice sitting under the pointer where the row used to be. Clicking again
+/// to dismiss picks that choice instead. macOS avoids this by aligning the
+/// *selected* entry to the row rather than the first one, so a second click
+/// picks what was already set; without that, overlapping is worse than not.
+///
+/// **The width cannot come from measuring the popover.** A popover is a
+/// `GtkNative`: it takes no room in the widget that parents it, so measuring
+/// it as a child answers zero however wide it will actually open. That zero is
+/// what left an earlier attempt at this centered. The number has to come from
+/// what is inside it, plus the padding the stylesheet puts around that.
+fn aim_right(popover: &gtk::Popover, anchor: &gtk::ListBoxRow, width: i32) {
+    if width <= 0 || anchor.width() <= 0 {
+        return;
+    }
+    let center = anchor.width() - width / 2;
+    popover.set_pointing_to(Some(&gdk::Rectangle::new(center, 0, 1, anchor.height())));
+}
+
 fn chooser_row(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-row");
@@ -10058,6 +10400,27 @@ fn style_css(scale: f64) -> String {
             margin: {group_top}px {pad_h}px {group_gap}px {pad_h}px;
         }}
         .tp-group-first {{ margin-top: {group_first_top}px; }}
+        /* A selector opened over the page. `contents` is the node GTK puts
+           inside a popover; styling the popover itself leaves the theme's own
+           background drawn underneath. */
+        /* Smaller than a row on the page behind it. A selector is a list of
+           variations on one value rather than a set of destinations, and at
+           the page's own size it reads as a second menu that has landed on
+           top of the first. */
+        .tp-selector .tp-row {{
+            font-size: {selector_row}px;
+            padding: {selector_row_pad_v}px {selector_row_pad_h}px;
+        }}
+        .tp-selector separator {{
+            margin: {rule_gap}px 0;
+            background-color: rgba(255, 255, 255, 0.14);
+        }}
+        .tp-selector > contents {{
+            background-color: {selector_bg};
+            border-radius: {panel_radius}px;
+            padding: {panel_pad}px;
+            box-shadow: 0 {shadow_drop}px {shadow_blur}px rgba(0, 0, 0, 0.55);
+        }}
         /* Which row is in force, as opposed to which row the cursor is on.
            Two different facts that a list has only one highlight for, and
            conflating them is actively misleading in the places column: moving
@@ -10403,6 +10766,16 @@ fn style_css(scale: f64) -> String {
         group_top = px(24.0),
         group_gap = px(4.0),
         group_first_top = px(10.0),
+        // About three quarters of the page's row. Clearly subordinate to the
+        // menu behind it, and still a size anyone can read from a sofa - which
+        // half size was not, on the one list in the interface made of
+        // near-identical strings where a misread picks the wrong track.
+        rule_gap = px(6.0),
+        selector_row = px(17.0),
+        selector_row_pad_v = px(7.0),
+        selector_row_pad_h = px(14.0),
+        shadow_drop = px(4.0),
+        shadow_blur = px(18.0),
         subrow = px(28.0),
         mark = px(4.0),
         // A shade larger than `ICON_PX`, which is what every other icon in
@@ -10469,6 +10842,10 @@ fn style_css(scale: f64) -> String {
         // already drawn in, since the backdrop paints over the whole page and
         // a mismatch would show as a rectangle behind the content.
         page_bg = "#242424",
+        // Darker than the page and all but opaque. It sits over artwork here
+        // and will sit over a moving picture later, and neither is a ground
+        // anyone can read a list against.
+        selector_bg = "rgba(26, 26, 26, 0.98)",
         // The poster's frame, a shade off the page in whichever direction
         // there is room to go.
         panel = "rgba(255, 255, 255, 0.07)",
