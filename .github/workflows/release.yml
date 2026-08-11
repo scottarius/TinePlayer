@@ -112,10 +112,54 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
 
+      # The runner ships with aws/tap preinstalled, and Homebrew now refuses
+      # to use an untrusted tap - printing a screen of explanation on every
+      # brew call to say so. Nothing here comes from that tap, so it is noise
+      # rather than a failure, but a wall of warning text is what a real
+      # message hides behind, and the GTK build below is one whose output has
+      # to be readable. Untapped rather than HOMEBREW_NO_REQUIRE_TAP_TRUST,
+      # which is broader and switches off a check Homebrew is making mandatory.
+      - name: Quiet the untrusted tap warning
+        run: brew untap aws/tap || true
+
       - name: Install dependencies
         run: |
           chmod +x setup-mac.sh
           ./setup-mac.sh
+
+      # --- A GTK a screen reader can see into ---------------------------
+      #
+      # Homebrew's gtk4 is compiled without the AccessKit backend, so a bundle
+      # built against it is silent to VoiceOver however carefully the widgets
+      # are named. packaging/macos/verify.sh refuses to ship one, so this is
+      # not optional decoration: without these steps the job fails rather than
+      # producing an inaccessible package.
+      #
+      # Keyed on the GTK version Homebrew has, because that is what
+      # gtk-accesskit.sh builds to match - ours links against Homebrew's glib
+      # and pango and the bundle takes its schemas from the gtk4 formula, so
+      # the two have to stay in step. A Homebrew gtk4 bump therefore misses
+      # the cache and rebuilds, which is the point.
+      - name: Which GTK to match
+        id: gtk
+        run: |
+          version="$(brew list --versions gtk4 | awk '{print $2}')"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "Homebrew has GTK $version"
+
+      - name: Cache the AccessKit GTK
+        id: gtk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/gtk-a11y
+          key: gtk-accesskit-${{ runner.os }}-${{ runner.arch }}-${{ steps.gtk.outputs.version }}-${{ hashFiles('packaging/macos/gtk-accesskit.sh') }}
+
+      - name: Build GTK with AccessKit
+        if: steps.gtk-cache.outputs.cache-hit != 'true'
+        run: |
+          brew install meson ninja
+          chmod +x packaging/macos/gtk-accesskit.sh
+          ./packaging/macos/gtk-accesskit.sh
 
       # Signing and notarization, when the secrets for them exist.
       #
@@ -176,12 +220,26 @@ jobs:
       # LGPL FFmpeg from GStreamer's own macOS build, and makes the disk
       # image. Signing stays ad-hoc unless TINE_SIGN_IDENTITY is set, so these
       # are empty and harmless until the secrets exist.
+      #
+      # The three GTK variables are what point the build at the AccessKit GTK
+      # rather than Homebrew's. All three are needed: PKG_CONFIG_PATH decides
+      # which headers are compiled against, RUSTFLAGS decides which library is
+      # actually linked - they can disagree, and when they do the build
+      # succeeds and the result is silently inaccessible - and
+      # TINEPLAYER_GTK_PREFIX is what lets the packaging copy it in and
+      # collect its license paperwork.
       - name: Package
         env:
           TINE_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           TINE_NOTARY_PROFILE: ${{ secrets.MACOS_CERT_P12 != '' && 'tineplayer' || '' }}
           TINE_NOTARY_KEYCHAIN: ${{ runner.temp }}/signing.keychain-db
         run: |
+          # $HOME/gtk-a11y, which is where gtk-accesskit.sh installed it and
+          # where the cache restores it. The install names inside those dylibs
+          # are absolute, so the path has to be the one they were built at.
+          export TINEPLAYER_GTK_PREFIX="$HOME/gtk-a11y"
+          export PKG_CONFIG_PATH="$TINEPLAYER_GTK_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export RUSTFLAGS="-L native=$TINEPLAYER_GTK_PREFIX/lib -C link-arg=-Wl,-search_paths_first"
           chmod +x packaging/macos/*.sh
           ./packaging/macos/package.sh
 

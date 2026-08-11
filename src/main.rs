@@ -402,21 +402,39 @@ fn use_bundled_resources() {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn use_bundled_resources() {}
 
-/// Switches on GTK's accessibility backend, which Windows otherwise leaves
-/// off.
+/// Switches on GTK's accessibility backend, which Windows and macOS otherwise
+/// leave off.
 ///
 /// Without this a screen reader sees the window and nothing inside it: no
 /// buttons, no rows, no names, however carefully those names are set. GTK
-/// speaks to Windows through AccessKit, which ships beside it but is not
-/// selected unless asked for.
+/// speaks to both platforms through AccessKit, which is not selected unless
+/// asked for.
 ///
 /// Left alone if the environment already names a backend, so anyone
 /// debugging accessibility can still choose one.
 ///
+/// **This line is only half of it on macOS, and the other half is not in this
+/// repository.** GTK's AccessKit backend arrived in 4.18 and has to be
+/// compiled in with `-Daccesskit=enabled` against `accesskit-c`. Homebrew's
+/// gtk4 does neither, so on a Mac built against Homebrew's GTK this names a
+/// backend that is not in the binary and changes nothing. It was written and
+/// reverted once for exactly that reason - a fix that does nothing is worse
+/// than none, because it reads as support that exists. What makes it real is
+/// the GTK the application is linked against; see `packaging/macos`.
+///
+/// `otool -L $(pkg-config --variable=libdir gtk4)/libgtk-4.dylib | grep -c
+/// accesskit` answers 1 for a GTK that has it and 0 for one that does not, and
+/// that is the thing to check first if a Mac goes silent again.
+///
+/// **Not `nm -gU`**, which was used for this once and cannot answer it: it
+/// lists *exported* symbols, and GTK imports AccessKit rather than
+/// re-exporting it, so it prints 0 for a working GTK and a broken one alike.
+/// `nm -u` counts the imports and works too - 72 against 0 here.
+///
 /// Must run before `display::apply_display_env`, which sets `GTK_A11Y=none`
 /// when nothing has claimed it, to quiet a warning on machines with no session
 /// bus. Whichever runs first wins.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn enable_accessibility() {
     if std::env::var_os("GTK_A11Y").is_none() {
         // Safe here and nowhere later: this runs before GTK starts and
@@ -425,7 +443,7 @@ fn enable_accessibility() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn enable_accessibility() {}
 
 /// Draws text through fontconfig rather than DirectWrite.

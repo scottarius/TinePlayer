@@ -25,6 +25,30 @@ fi
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 prefix="$(brew --prefix)"
 
+# Where a GTK built with the AccessKit backend lives, when the build used one.
+#
+# Homebrew's gtk4 is compiled without it: its own backend listing says
+# "accesskit - Disabled during GTK build", so a screen reader sees the window
+# and nothing inside it, however carefully the names are set. Building GTK with
+# `-Daccesskit=enabled` against accesskit-c is what makes VoiceOver work, and
+# that GTK lives outside Homebrew's prefix.
+#
+# Empty means an ordinary build against Homebrew's GTK, which packages exactly
+# as it always did. `verify.sh` is what decides whether a bundle without
+# accessibility is allowed to ship.
+gtk_prefix="${TINEPLAYER_GTK_PREFIX:-}"
+if [[ -n "$gtk_prefix" && ! -d "$gtk_prefix/lib" ]]; then
+    echo "TINEPLAYER_GTK_PREFIX is set to $gtk_prefix, which has no lib directory." >&2
+    exit 1
+fi
+
+# Every prefix a bundled library may come from, longest-first so that a nested
+# one is matched before the prefix that contains it.
+search_prefixes="$prefix"
+if [[ -n "$gtk_prefix" ]]; then
+    search_prefixes="$gtk_prefix:$prefix"
+fi
+
 frameworks="$app/Contents/Frameworks"
 resources="$app/Contents/Resources"
 plugins="$resources/gstreamer-1.0"
@@ -195,10 +219,11 @@ fi
 
 # --- Every library any of that links ------------------------------------
 echo "Copying libraries..."
-python3 - "$prefix" "$frameworks" "$app/Contents/MacOS/tineplayer" "$plugins" <<'PYTHON'
+python3 - "$search_prefixes" "$frameworks" "$app/Contents/MacOS/tineplayer" "$plugins" <<'PYTHON'
 import os, subprocess, shutil, sys
 
-prefix, frameworks, binary, plugins = sys.argv[1:5]
+prefixes, frameworks, binary, plugins = sys.argv[1:5]
+prefixes = [p for p in prefixes.split(":") if p]
 
 
 def resolve(dep):
@@ -209,12 +234,22 @@ def resolve(dep):
     asks for @rpath/libsharpyuv.0.dylib, which never appears as a path at all.
     System libraries under /usr/lib and /System are deliberately not resolved,
     since every Mac has them and copying them in would be wrong.
+
+    More than one prefix, because a GTK built with the AccessKit backend does
+    not come from Homebrew and lives outside its tree. A library found under
+    none of them is left where it is - which for a system library is right,
+    and for anything else is what `verify.sh` catches: a path into somebody's
+    home directory ships a bundle that runs on the machine that built it and
+    on no other.
     """
-    if dep.startswith(prefix):
-        return dep
+    for prefix in prefixes:
+        if dep.startswith(prefix):
+            return dep
     if dep.startswith("@rpath/"):
-        candidate = os.path.join(prefix, "lib", dep[len("@rpath/"):])
-        return candidate if os.path.exists(candidate) else None
+        for prefix in prefixes:
+            candidate = os.path.join(prefix, "lib", dep[len("@rpath/"):])
+            if os.path.exists(candidate):
+                return candidate
     return None
 
 
@@ -270,7 +305,16 @@ PYTHON
 echo "Repointing libraries..."
 retarget() {
     local file="$1"
-    otool -L "$file" | awk -v p="$prefix" 'NR>1 && index($1, p) == 1 {print $1}' |
+    # Every prefix a bundled library may have come from, not only Homebrew's:
+    # a dependency left pointing at the GTK prefix would be an absolute path
+    # into the build machine, and the bundle would run there and nowhere else.
+    otool -L "$file" |
+        awk -v ps="$search_prefixes" '
+            BEGIN { n = split(ps, prefix, ":") }
+            NR > 1 {
+                for (i = 1; i <= n; i++)
+                    if (index($1, prefix[i]) == 1) { print $1; break }
+            }' |
         while read -r dep; do
             install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$file" 2>/dev/null || true
         done
