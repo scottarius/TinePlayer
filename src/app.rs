@@ -658,6 +658,10 @@ pub struct App {
     /// Settings when you meant Play is a button's width of travel every time.
     nav_header_entry: RefCell<Option<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
+    /// Whether the window was already maximized when fullscreen was entered,
+    /// so that leaving fullscreen can put back the state it found rather than
+    /// the one fullscreen implies. See [`App::toggle_fullscreen`].
+    maximized_before_fullscreen: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -783,6 +787,7 @@ impl App {
             art_generation: Cell::new(0),
             device_names: RefCell::new(Vec::new()),
             device_scan: Cell::new(false),
+            maximized_before_fullscreen: Cell::new(false),
             resize_settle: RefCell::new(None),
             built_poster: Cell::new(0.0),
             tracks: RefCell::new(Vec::new()),
@@ -1863,9 +1868,32 @@ impl App {
         }
         let wanted = !self.window.is_fullscreen();
         if wanted {
+            // Read before the change, because a fullscreen window reports
+            // itself maximized whether or not anybody maximized it.
+            self.maximized_before_fullscreen
+                .set(self.window.is_maximized());
             self.window.fullscreen();
         } else {
             self.window.unfullscreen();
+            // Put back the state fullscreen was entered from, said outright
+            // in both directions rather than left to GTK.
+            //
+            // Leaving fullscreen does not restore it: a window that was never
+            // maximized comes back maximized, because fullscreen implies
+            // maximized and that is the state handed back - and one launched
+            // fullscreen comes back maximized having never been drawn at its
+            // own size at all. Asking only for the un-maximize fixed those two
+            // and broke the third: a window maximized on purpose came back
+            // windowed, because GTK restores the size it had and not the fact
+            // that it was maximized. So both halves are asked for.
+            //
+            // The flag is only ever set on the way in, so a window launched
+            // fullscreen has never set it and takes the default - which is the
+            // right answer for exactly that case.
+            match self.maximized_before_fullscreen.get() {
+                true => self.window.maximize(),
+                false => self.window.unmaximize(),
+            }
             // The pointer only hides in fullscreen, and leaving takes the
             // countdown that would have brought it back with it.
             if let Some(controls) = self.controls.borrow().as_ref() {
