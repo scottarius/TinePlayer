@@ -241,104 +241,6 @@ const PAGE_ROWS: i32 = 8;
 /// reads longer than this has to raise it.
 pub const READING_CHARS: i32 = 7;
 
-/// The rows the settings screen always has. The version row below the
-/// update switch is extra, and only there while the switch is on.
-const SETTINGS_ROWS: usize = 23;
-
-/// Every row of the settings screen, in the order it is built.
-///
-/// Named rather than written as numbers at each use. The screen is coupled to
-/// these in three separate places - the list that builds the rows, the sliders
-/// attached to particular ones, and the match that acts on an activation - and
-/// nothing catches a mismatch: the compiler is satisfied either way, the row
-/// count still adds up, and the symptom is a row that quietly opens the wrong
-/// screen. Inserting a row means changing one constant rather than renumbering
-/// every literal after it.
-const ROW_INTERFACE_SCALE: i32 = 0;
-const ROW_SOUNDS: i32 = 1;
-const ROW_PRIMARY_DEVICE: i32 = 2;
-const ROW_PRIMARY_LANGUAGE: i32 = 3;
-const ROW_PRIMARY_DESCRIPTION: i32 = 4;
-const ROW_PRIMARY_VOLUME: i32 = 5;
-const ROW_PRIMARY_SYNC: i32 = 6;
-const ROW_SECONDARY_DEVICE: i32 = 7;
-const ROW_SECONDARY_LANGUAGE: i32 = 8;
-const ROW_SECONDARY_DESCRIPTION: i32 = 9;
-const ROW_SECONDARY_VOLUME: i32 = 10;
-const ROW_SECONDARY_SYNC: i32 = 11;
-const ROW_SUBTITLE_LANGUAGE: i32 = 12;
-const ROW_SUBTITLE_SIZE: i32 = 13;
-const ROW_SUBTITLE_FONT: i32 = 14;
-const ROW_RESUME_THRESHOLD: i32 = 15;
-const ROW_WATCHED_THRESHOLD: i32 = 16;
-const ROW_CLEAR_DATA: i32 = 17;
-const ROW_KODI: i32 = 18;
-const ROW_ABOUT: i32 = 19;
-const ROW_NOTICES: i32 = 20;
-/// Where the update switch sits, and the row naming a new version under it.
-const UPDATE_SWITCH_ROW: i32 = 21;
-/// The version this is, and what the check made of it. Always built, unlike
-/// the check itself, which can be turned off.
-const UPDATE_STATUS_ROW: i32 = 22;
-
-/// Every row, in the order they are built, which is what the constants above
-/// are positions in. Inserting a row means renumbering everything below it,
-/// and a number that does not get renumbered puts a control on the wrong row
-/// rather than failing - which is how the secondary output's switch came to
-/// be built over its Preferred Language row.
-const SETTINGS_ORDER: [i32; SETTINGS_ROWS] = [
-    ROW_INTERFACE_SCALE,
-    ROW_SOUNDS,
-    ROW_PRIMARY_DEVICE,
-    ROW_PRIMARY_LANGUAGE,
-    ROW_PRIMARY_DESCRIPTION,
-    ROW_PRIMARY_VOLUME,
-    ROW_PRIMARY_SYNC,
-    ROW_SECONDARY_DEVICE,
-    ROW_SECONDARY_LANGUAGE,
-    ROW_SECONDARY_DESCRIPTION,
-    ROW_SECONDARY_VOLUME,
-    ROW_SECONDARY_SYNC,
-    ROW_SUBTITLE_LANGUAGE,
-    ROW_SUBTITLE_SIZE,
-    ROW_SUBTITLE_FONT,
-    ROW_RESUME_THRESHOLD,
-    ROW_WATCHED_THRESHOLD,
-    ROW_CLEAR_DATA,
-    ROW_KODI,
-    ROW_ABOUT,
-    ROW_NOTICES,
-    UPDATE_SWITCH_ROW,
-    UPDATE_STATUS_ROW,
-];
-
-/// Rows that begin a group: each output, then subtitles, then what is
-/// remembered between runs, then the housekeeping at the bottom.
-const SETTINGS_SECTIONS: [i32; 6] = [
-    ROW_PRIMARY_DEVICE,
-    ROW_SECONDARY_DEVICE,
-    ROW_SUBTITLE_LANGUAGE,
-    ROW_RESUME_THRESHOLD,
-    ROW_KODI,
-    ROW_ABOUT,
-];
-/// Rows that belong to the row named above them, drawn indented so the group
-/// reads as settings of that one thing rather than as more of their own.
-/// Indentation is what lets them be called just "Preferred Language" instead
-/// of repeating "Primary" and "Secondary" in every label.
-const SETTINGS_SUBROWS: [i32; 10] = [
-    ROW_PRIMARY_LANGUAGE,
-    ROW_PRIMARY_DESCRIPTION,
-    ROW_PRIMARY_VOLUME,
-    ROW_PRIMARY_SYNC,
-    ROW_SECONDARY_LANGUAGE,
-    ROW_SECONDARY_DESCRIPTION,
-    ROW_SECONDARY_VOLUME,
-    ROW_SECONDARY_SYNC,
-    ROW_SUBTITLE_SIZE,
-    ROW_SUBTITLE_FONT,
-];
-
 /// How wide the alignment panel is, measured in characters of its own body
 /// text.
 ///
@@ -411,10 +313,21 @@ enum Screen {
 }
 
 /// Which output a choice is about, where the two are otherwise handled alike.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Role {
     Primary,
     Secondary,
+}
+
+impl Role {
+    /// How the config file names this output. Two spellings of one thing, and
+    /// this is where they meet.
+    fn key(self) -> &'static str {
+        match self {
+            Role::Primary => "primary",
+            Role::Secondary => "secondary",
+        }
+    }
 }
 
 /// What choosing a row on the main menu does.
@@ -451,6 +364,161 @@ struct Choices {
 /// Puts a selector's rows in, and can be run again when what they should say
 /// has changed - which for a device list is a moment after it opens.
 type Fill = dyn Fn(&Rc<App>);
+
+/// One row on the settings screen, named rather than numbered.
+///
+/// **These were twenty-three `const ROW_*: i32` values, and the numbering was
+/// the bug.** Every list of switches and sliders was keyed by position, so
+/// inserting a row moved everything below it and the widgets went on being
+/// built against the old numbers - a comment in the old code records exactly
+/// that happening, a switch landing on the wrong row and leaving another with
+/// none. Categories would have made it worse, each pane starting its own count
+/// from zero.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Item {
+    InterfaceScale,
+    Sounds,
+    StartFullscreen,
+    ReadMetadata,
+    ShowBackdrop,
+    ResumeThreshold,
+    WatchedThreshold,
+    Updates,
+    UpdateStatus,
+    ClearData,
+    /// The five rows each output has, told apart by which output they are for
+    /// rather than by five more names apiece.
+    Device(Role),
+    Language(Role),
+    Description(Role),
+    Volume(Role),
+    Sync(Role),
+    SubtitlePreference,
+    SubtitleSize,
+    SubtitleFont,
+    Kodi,
+    About,
+    Notices,
+}
+
+impl Item {
+    /// The bar this row carries, if it carries one.
+    fn slider(self) -> Option<Slider> {
+        Some(match self {
+            Item::InterfaceScale => Slider::Scale,
+            Item::SubtitleSize => Slider::SubtitleSize,
+            Item::Volume(role) => Slider::Volume(role.key()),
+            Item::Sync(role) => Slider::Offset(role.key()),
+            Item::ResumeThreshold => Slider::ResumeThreshold,
+            Item::WatchedThreshold => Slider::WatchedThreshold,
+            _ => return None,
+        })
+    }
+
+    /// The chooser this row opens, if it opens one.
+    fn setting(self) -> Option<Setting> {
+        Some(match self {
+            Item::Device(Role::Primary) => Setting::PrimaryDevice,
+            Item::Device(Role::Secondary) => Setting::SecondaryDevice,
+            Item::Language(Role::Primary) => Setting::PrimaryLanguage,
+            Item::Language(Role::Secondary) => Setting::SecondaryLanguage,
+            Item::SubtitlePreference => Setting::SubtitleLanguage,
+            Item::SubtitleFont => Setting::SubtitleFont,
+            _ => return None,
+        })
+    }
+
+    /// Whether a switch sits on this row, which decides two things: that a
+    /// click on the row itself must not work it, and that activating the row
+    /// from the keyboard must.
+    fn has_switch(self) -> bool {
+        matches!(
+            self,
+            Item::InterfaceScale
+                | Item::Sounds
+                | Item::StartFullscreen
+                | Item::ReadMetadata
+                | Item::ShowBackdrop
+                | Item::Description(_)
+                | Item::Volume(_)
+                | Item::Sync(_)
+                | Item::Updates
+        )
+    }
+}
+
+/// The left column of the settings screen, and what each of its entries holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Category {
+    General,
+    Outputs,
+    Subtitles,
+    Integrations,
+    About,
+}
+
+impl Category {
+    const ALL: [Category; 5] = [
+        Category::General,
+        Category::Outputs,
+        Category::Subtitles,
+        Category::Integrations,
+        Category::About,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Category::General => "General",
+            Category::Outputs => "Outputs",
+            Category::Subtitles => "Subtitles",
+            Category::Integrations => "Integrations",
+            Category::About => "About",
+        }
+    }
+
+    /// What the right-hand pane shows, and the heading each group opens with.
+    ///
+    /// The headings are what make Outputs readable: it holds two rows called
+    /// Volume and two called Audio Sync, and until now they were told apart
+    /// only by which half of the list they were in.
+    fn items(self) -> Vec<(Option<&'static str>, Item)> {
+        match self {
+            Category::General => vec![
+                (None, Item::InterfaceScale),
+                (None, Item::Sounds),
+                (None, Item::StartFullscreen),
+                (Some("LIBRARY"), Item::ReadMetadata),
+                (None, Item::ShowBackdrop),
+                (None, Item::ResumeThreshold),
+                (None, Item::WatchedThreshold),
+                (Some("UPDATES"), Item::Updates),
+                (None, Item::UpdateStatus),
+                // Last, and alone under its own heading: it is the one thing
+                // on this screen that destroys something.
+                (Some("DATA"), Item::ClearData),
+            ],
+            Category::Outputs => vec![
+                (Some("FIRST OUTPUT"), Item::Device(Role::Primary)),
+                (None, Item::Language(Role::Primary)),
+                (None, Item::Description(Role::Primary)),
+                (None, Item::Volume(Role::Primary)),
+                (None, Item::Sync(Role::Primary)),
+                (Some("SECOND OUTPUT"), Item::Device(Role::Secondary)),
+                (None, Item::Language(Role::Secondary)),
+                (None, Item::Description(Role::Secondary)),
+                (None, Item::Volume(Role::Secondary)),
+                (None, Item::Sync(Role::Secondary)),
+            ],
+            Category::Subtitles => vec![
+                (None, Item::SubtitlePreference),
+                (None, Item::SubtitleSize),
+                (None, Item::SubtitleFont),
+            ],
+            Category::Integrations => vec![(None, Item::Kodi)],
+            Category::About => vec![(None, Item::About), (None, Item::Notices)],
+        }
+    }
+}
 
 /// What the file browser was opened to find.
 ///
@@ -624,7 +692,13 @@ pub struct App {
     /// The sliders on the settings screen, by the row each one sits in, so
     /// left and right can find the one that is selected. Emptied whenever a
     /// screen without them is built.
-    settings_sliders: RefCell<Vec<(i32, Slider, gtk::Scale, gtk::Label)>>,
+    settings_sliders: RefCell<Vec<(Item, Slider, gtk::Scale, gtk::Label)>>,
+    /// Which category the settings screen is showing, kept so leaving and
+    /// coming back lands where it was left rather than at the top.
+    settings_category: Cell<Category>,
+    /// What the right-hand pane is showing, by row. The one place a row's
+    /// position is turned back into what it is.
+    pane_items: RefCell<Vec<Item>>,
     /// The About page's scroll position, so up and down can move a page that
     /// has nothing on it to select.
     about_scroll: RefCell<Option<gtk::Adjustment>>,
@@ -635,7 +709,7 @@ pub struct App {
     kodi_draft: RefCell<Option<KodiDraft>>,
     /// The switches on the settings screen, by row, so a toggle can move the
     /// one it belongs to instead of rebuilding the screen under the viewer.
-    settings_switches: RefCell<Vec<(i32, gtk::Switch)>>,
+    settings_switches: RefCell<Vec<(Item, gtk::Switch)>>,
     /// The settings list itself, so a row can be redrawn without rebuilding
     /// the screen around it.
     settings_list: RefCell<Option<gtk::ListBox>>,
@@ -841,6 +915,8 @@ impl App {
             nav_side_list: RefCell::new(None),
             nav_stops: RefCell::new(Vec::new()),
             settings_sliders: RefCell::new(Vec::new()),
+            settings_category: Cell::new(Category::General),
+            pane_items: RefCell::new(Vec::new()),
             about_scroll: RefCell::new(None),
             copy_root: RefCell::new(None),
             kodi_draft: RefCell::new(None),
@@ -1941,9 +2017,10 @@ impl App {
             }
         }
 
-        let mut config = self.config.borrow_mut();
-        config.fullscreen = wanted;
-        let _ = config.save();
+        // Deliberately not written down. Whether to *open* fullscreen is a
+        // setting somebody sets on purpose, and it used to be whatever the
+        // window happened to be at the moment they quit - so pressing F11 once
+        // on the way out changed how the application started for ever after.
     }
 
     /// Records what the gamepad should be moving through. Screens built from
@@ -2254,11 +2331,14 @@ impl App {
         else {
             return false;
         };
+        let Some(item) = self.item_at(index) else {
+            return false;
+        };
         let found = self
             .settings_sliders
             .borrow()
             .iter()
-            .find(|(row, ..)| *row == index)
+            .find(|(row, ..)| *row == item)
             .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
         let Some((kind, scale, value)) = found else {
             return false;
@@ -2294,12 +2374,12 @@ impl App {
 
     /// Silences the output the selected row belongs to, or lets it go. What
     /// activating a level row does, since there is nothing to open.
-    fn toggle_settings_mute(self: &Rc<Self>, index: i32) {
+    fn toggle_settings_mute(self: &Rc<Self>, item: Item) {
         let found = self
             .settings_sliders
             .borrow()
             .iter()
-            .find(|(row, ..)| *row == index)
+            .find(|(row, ..)| *row == item)
             .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
         let Some((Slider::Volume(role), scale, value)) = found else {
             return;
@@ -2317,7 +2397,7 @@ impl App {
         // moving it while nothing can be heard is not.
         scale.set_sensitive(!muted);
         value.set_sensitive(!muted);
-        self.set_settings_switch(index, !muted);
+        self.set_settings_switch(item, !muted);
         self.save_volume_soon();
     }
 
@@ -2326,12 +2406,12 @@ impl App {
     /// Off is how somebody checks whether a delay is helping: winding it to
     /// zero would answer the same question and lose the value they spent time
     /// finding.
-    fn toggle_settings_offset(self: &Rc<Self>, index: i32) {
+    fn toggle_settings_offset(self: &Rc<Self>, item: Item) {
         let found = self
             .settings_sliders
             .borrow()
             .iter()
-            .find(|(row, ..)| *row == index)
+            .find(|(row, ..)| *row == item)
             .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
         let Some((Slider::Offset(role), scale, value)) = found else {
             return;
@@ -2348,7 +2428,7 @@ impl App {
         scale.set_sensitive(on);
         value.set_text(&offset_label(self.config.borrow().applied_offset_ms(role)));
         value.set_sensitive(on);
-        self.set_settings_switch(index, on);
+        self.set_settings_switch(item, on);
     }
 
     /// Where a slider stands now, and how that reads beside it.
@@ -4760,7 +4840,14 @@ impl App {
         *self.poster_art.borrow_mut() = None;
         *self.backdrop_art.borrow_mut() = None;
         self.art_generation.set(self.art_generation.get() + 1);
-        *self.details.borrow_mut() = crate::metadata::resolve(source, &media);
+        let beside = {
+            let config = self.config.borrow();
+            crate::metadata::Beside {
+                metadata: config.read_metadata,
+                backdrop: config.show_backdrop,
+            }
+        };
+        *self.details.borrow_mut() = crate::metadata::resolve(source, &media, beside);
 
         let duration_ns = media.duration_ns;
         let tracks = media.audio;
@@ -6378,169 +6465,124 @@ impl App {
 
     /// Everything that applies to the application rather than to the video
     /// currently loaded. Reached from the gear in the footer.
+    /// What a settings row is called.
+    fn item_label(&self, item: Item) -> String {
+        match item {
+            Item::InterfaceScale => "Interface Size".to_string(),
+            Item::Sounds => "Navigation Sounds".to_string(),
+            Item::StartFullscreen => "Start Fullscreen".to_string(),
+            Item::ReadMetadata => "Read Metadata Beside Files".to_string(),
+            Item::ShowBackdrop => "Show Backdrop Artwork".to_string(),
+            Item::ResumeThreshold => "Resume Threshold".to_string(),
+            Item::WatchedThreshold => "Watched Threshold".to_string(),
+            Item::Updates => "Check for updates".to_string(),
+            Item::UpdateStatus => self.version_label(),
+            Item::ClearData => "Clear Saved Playback Data".to_string(),
+            Item::Device(_) => "Output Device".to_string(),
+            Item::Language(_) => "Preferred Language".to_string(),
+            Item::Description(_) => "Prefer Audio Description".to_string(),
+            Item::Volume(_) => "Volume".to_string(),
+            Item::Sync(_) => "Audio Sync".to_string(),
+            Item::SubtitlePreference => "Subtitle Preference".to_string(),
+            Item::SubtitleSize => "Subtitle Size".to_string(),
+            Item::SubtitleFont => "Subtitle Font".to_string(),
+            Item::Kodi => "Kodi".to_string(),
+            Item::About => "About TinePlayer".to_string(),
+            Item::Notices => "Third Party Notices".to_string(),
+        }
+    }
+
+    /// What it reads against the label. Empty for the rows that carry a
+    /// switch or a bar, which show their state in the control itself, and for
+    /// the ones that only open something.
+    fn item_value(&self, item: Item) -> String {
+        let config = self.config.borrow();
+        match item {
+            Item::Device(role) => {
+                let sink = match role {
+                    Role::Primary => config.primary_sink.clone(),
+                    Role::Secondary => config.secondary_sink.clone(),
+                };
+                sink.unwrap_or_else(|| match role {
+                    Role::Primary => "Not set".to_string(),
+                    Role::Secondary => "None".to_string(),
+                })
+            }
+            Item::Language(role) => {
+                let (code, unset) = match role {
+                    Role::Primary => (&config.primary_language, "First track"),
+                    Role::Secondary => (&config.secondary_language, "Second track"),
+                };
+                match code {
+                    Some(code) => crate::languages::name_for(code),
+                    None => unset.to_string(),
+                }
+            }
+            Item::SubtitlePreference => {
+                crate::subtitles::describe(config.subtitle_language.as_deref())
+            }
+            Item::SubtitleFont => config
+                .subtitle_font
+                .clone()
+                .unwrap_or_else(|| crate::pipeline::DEFAULT_SUBTITLE_FONT.to_string()),
+            // Deliberately blank. Saying what Kodi is set to means finding
+            // every Kodi on the machine and reading its configuration file,
+            // and this row is passed by everyone who came here for something
+            // else. The answer is on the screen it opens.
+            Item::Kodi => String::new(),
+            Item::UpdateStatus => {
+                drop(config);
+                self.version_status()
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Whether the switch on this row is on, for the rows that have one.
+    fn item_switch(&self, item: Item) -> Option<bool> {
+        let config = self.config.borrow();
+        Some(match item {
+            // On means the size is worked out from the screen, which is the
+            // one switch here that turns the bar beside it off rather than on.
+            Item::InterfaceScale => config.ui_scale.is_none(),
+            Item::Sounds => config.sounds,
+            Item::StartFullscreen => config.fullscreen,
+            Item::ReadMetadata => config.read_metadata,
+            Item::ShowBackdrop => config.show_backdrop,
+            Item::Description(Role::Primary) => config.primary_audio_description,
+            Item::Description(Role::Secondary) => config.secondary_audio_description,
+            Item::Volume(role) => !config.muted(role.key()),
+            Item::Sync(role) => config.offset_on(role.key()),
+            Item::Updates => config.check_for_updates,
+            _ => return None,
+        })
+    }
+
+    /// Whether the row can be worked at all.
+    ///
+    /// One case, and it is the reason this exists rather than everything being
+    /// live: with nothing read from beside the file there is no artwork to
+    /// draw, so the backdrop switch would be a control over nothing.
+    fn item_enabled(&self, item: Item) -> bool {
+        match item {
+            Item::ShowBackdrop => self.config.borrow().read_metadata,
+            _ => true,
+        }
+    }
+
+    /// Settings, as a column of categories and the rows of whichever one is
+    /// chosen.
+    ///
+    /// One flat list of twenty-three rows before this, which is how it came to
+    /// hold two rows called Volume and two called Audio Sync with nothing but
+    /// their position to tell them apart.
     fn show_settings(self: &Rc<Self>) {
+        let scale = self.scale.get();
+        let px = |base: f64| (base * scale).round() as i32;
         let (page, list, back, _header) = list_page("Settings", true);
 
-        let rows = {
-            let config = self.config.borrow();
-            let language = |code: &Option<String>, unset: &str| match code {
-                Some(code) => crate::languages::name_for(code),
-                None => unset.to_string(),
-            };
-            [
-                (
-                    "Interface Size".to_string(),
-                    match config.ui_scale {
-                        Some(scale) => format!("{scale}x"),
-                        None => format!("Automatic ({}x)", self.scale.get()),
-                    },
-                    true,
-                ),
-                (
-                    "Navigation Sounds".to_string(),
-                    if config.sounds { "On" } else { "Off" }.to_string(),
-                    true,
-                ),
-                (
-                    "First Output Device".to_string(),
-                    config
-                        .primary_sink
-                        .clone()
-                        .unwrap_or_else(|| "Not set".to_string()),
-                    true,
-                ),
-                (
-                    "Preferred Language".to_string(),
-                    language(&config.primary_language, "First track"),
-                    true,
-                ),
-                (
-                    "Prefer Audio Description".to_string(),
-                    if config.primary_audio_description {
-                        "Yes"
-                    } else {
-                        "No"
-                    }
-                    .to_string(),
-                    true,
-                ),
-                (
-                    "Volume".to_string(),
-                    volume_label(config.volume("primary"), config.muted("primary")),
-                    true,
-                ),
-                (
-                    "Audio Sync".to_string(),
-                    offset_label(config.applied_offset_ms("primary")),
-                    true,
-                ),
-                (
-                    "Second Output Device".to_string(),
-                    config
-                        .secondary_sink
-                        .clone()
-                        .unwrap_or_else(|| "None".to_string()),
-                    true,
-                ),
-                (
-                    "Preferred Language".to_string(),
-                    language(&config.secondary_language, "Second track"),
-                    true,
-                ),
-                (
-                    "Prefer Audio Description".to_string(),
-                    if config.secondary_audio_description {
-                        "Yes"
-                    } else {
-                        "No"
-                    }
-                    .to_string(),
-                    true,
-                ),
-                (
-                    "Volume".to_string(),
-                    volume_label(config.volume("secondary"), config.muted("secondary")),
-                    true,
-                ),
-                (
-                    "Audio Sync".to_string(),
-                    offset_label(config.applied_offset_ms("secondary")),
-                    true,
-                ),
-                (
-                    "Subtitle Preference".to_string(),
-                    crate::subtitles::describe(config.subtitle_language.as_deref()),
-                    true,
-                ),
-                (
-                    "Subtitle Size".to_string(),
-                    config
-                        .subtitle_size
-                        .unwrap_or(crate::pipeline::DEFAULT_SUBTITLE_SIZE)
-                        .to_string(),
-                    true,
-                ),
-                (
-                    "Subtitle Font".to_string(),
-                    config
-                        .subtitle_font
-                        .clone()
-                        .unwrap_or_else(|| crate::pipeline::DEFAULT_SUBTITLE_FONT.to_string()),
-                    true,
-                ),
-                (
-                    "Resume Threshold".to_string(),
-                    format!("{}%", config.resume_min_percent().round()),
-                    true,
-                ),
-                (
-                    "Watched Threshold".to_string(),
-                    format!("{}%", config.watched_percent().round()),
-                    true,
-                ),
-                ("Clear Saved Playback Data".to_string(), String::new(), true),
-                (
-                    "Kodi".to_string(),
-                    // Deliberately blank. Saying what Kodi is set to means
-                    // finding every Kodi on the machine and reading its
-                    // configuration file, and this row is passed by everyone
-                    // who came to Settings for something else. The answer is
-                    // on the screen it opens, which is where it is wanted.
-                    String::new(),
-                    // Always reachable: with nothing configured, this is where
-                    // configuring starts.
-                    true,
-                ),
-                ("About TinePlayer".to_string(), String::new(), true),
-                ("Third Party Notices".to_string(), String::new(), true),
-                (
-                    "Check for updates".to_string(),
-                    if config.check_for_updates {
-                        "On"
-                    } else {
-                        "Off"
-                    }
-                    .to_string(),
-                    true,
-                ),
-                (self.version_label(), self.version_status(), true),
-            ]
-            .to_vec()
-        };
-        debug_assert_eq!(rows.len(), SETTINGS_ORDER.len());
-
-        for (label, value, enabled) in &rows {
-            append_named(
-                &list,
-                &menu_row(label, value, *enabled),
-                &row_name(label, value),
-            );
-        }
-        // Swapped in over the ordinary rows built above, which keeps the row
-        // count and the section and indent indices in one place rather than
-        // splitting the list into two kinds of thing to build.
-        // A fifth of what the window has, so the bar is a consistent share
-        // of the screen whether that is a laptop or a television. The monitor
+        // A fifth of what the window has, so a bar is a consistent share of
+        // the screen whether that is a laptop or a television. The monitor
         // stands in before the window has been given a size.
         let slider_width = match self.window.width() {
             0 => appearance::monitor_for_window(&self.window)
@@ -6548,148 +6590,175 @@ impl App {
                 .unwrap_or(1920),
             width => width,
         } / 5;
-        self.settings_switches.borrow_mut().clear();
-        // By name, not by number. These were written as 2, 5 and 9, and
-        // inserting the sync rows moved the secondary description row to 10
-        // while the 9 stayed put - so its switch was built over Preferred
-        // Language, which then had no row of its own at all.
-        for (index, label, on) in [
-            (ROW_SOUNDS, "Navigation Sounds", self.config.borrow().sounds),
-            (
-                ROW_PRIMARY_DESCRIPTION,
-                "Prefer Audio Description",
-                self.config.borrow().primary_audio_description,
-            ),
-            (
-                ROW_SECONDARY_DESCRIPTION,
-                "Prefer Audio Description",
-                self.config.borrow().secondary_audio_description,
-            ),
-            (
-                UPDATE_SWITCH_ROW,
-                "Check for updates",
-                self.config.borrow().check_for_updates,
-            ),
-        ] {
-            let (widget, switch) = switch_row(label, on);
-            if let Some(row) = list.row_at_index(index) {
-                row.set_child(Some(&widget));
-            }
-            self.settings_switches.borrow_mut().push((index, switch));
-        }
 
-        self.settings_sliders.borrow_mut().clear();
-        for (index, kind, label) in [
-            (ROW_INTERFACE_SCALE, Slider::Scale, "Interface Size"),
-            (ROW_SUBTITLE_SIZE, Slider::SubtitleSize, "Subtitle Size"),
-            (ROW_PRIMARY_VOLUME, Slider::Volume("primary"), "Volume"),
-            (ROW_PRIMARY_SYNC, Slider::Offset("primary"), "Audio Sync"),
-            (ROW_SECONDARY_VOLUME, Slider::Volume("secondary"), "Volume"),
-            (
-                ROW_SECONDARY_SYNC,
-                Slider::Offset("secondary"),
-                "Audio Sync",
-            ),
-            (
-                ROW_RESUME_THRESHOLD,
-                Slider::ResumeThreshold,
-                "Resume Threshold",
-            ),
-            (
-                ROW_WATCHED_THRESHOLD,
-                Slider::WatchedThreshold,
-                "Watched Threshold",
-            ),
-        ] {
-            let (now, reading) = self.slider_state(kind);
-            // A switch on the two that can be turned off, and none on the
-            // thresholds, which have no off - a resume threshold of "not
-            // applied" is the same as zero.
-            let toggle = match kind {
-                Slider::Volume(role) => Some(!self.config.borrow().muted(role)),
-                Slider::Offset(role) => Some(self.config.borrow().offset_on(role)),
-                // On means the size is worked out from the screen, which is
-                // the one switch here that turns the bar beside it off rather
-                // than on.
-                Slider::Scale => Some(self.config.borrow().ui_scale.is_none()),
-                _ => None,
-            };
-            let (widget, scale, value, switch) =
-                slider_row(label, slider_width, kind.range(), now, &reading, toggle);
-            if let Some(row) = list.row_at_index(index) {
-                row.set_child(Some(&widget));
-            }
-            if let Some(switch) = switch {
-                self.settings_switches.borrow_mut().push((index, switch));
-            }
-            if kind == Slider::Scale {
-                let by_hand = self.config.borrow().ui_scale.is_some();
-                scale.set_sensitive(by_hand);
-                value.set_sensitive(by_hand);
-            }
-            {
-                let app = self.clone();
-                let value = value.clone();
-                scale.connect_change_value(move |_, scroll, moved| {
-                    app.set_slider(kind, moved, &value);
-                    if kind == Slider::Scale {
-                        // A drag reports Jump, over and over, while the
-                        // pointer holds the bar. Anything else - a step, a
-                        // page, a scroll wheel - is finished by the time it
-                        // arrives and can be drawn straight away.
-                        if scroll == gtk::ScrollType::Jump {
-                            app.wanted_scale.set(Some(moved));
-                        } else {
-                            app.apply_scale(moved);
-                        }
-                    }
-                    glib::Propagation::Proceed
-                });
-            }
-            // Let go of, and only then redrawn. Watched rather than handled,
-            // so the bar keeps its own grip on the pointer while it is being
-            // dragged.
-            if kind == Slider::Scale {
-                let app = self.clone();
-                let watcher = gtk::EventControllerLegacy::new();
-                watcher.set_propagation_phase(gtk::PropagationPhase::Bubble);
-                watcher.connect_event(move |_, event| {
-                    let done = matches!(
-                        event.event_type(),
-                        gdk::EventType::ButtonRelease | gdk::EventType::TouchEnd
-                    );
-                    if done && let Some(steps) = app.wanted_scale.take() {
-                        app.apply_scale(steps);
-                    }
-                    glib::Propagation::Proceed
-                });
-                scale.add_controller(watcher);
-            }
-            self.settings_sliders
-                .borrow_mut()
-                .push((index, kind, scale, value));
-        }
-
-        // Each switch reports its own presses, now that it takes them rather
-        // than letting them fall through to the row. Guarded against the
-        // moves made from here when the same setting is worked another way.
-        for (index, switch) in self.settings_switches.borrow().iter() {
-            let app = self.clone();
-            let index = *index;
-            switch.connect_state_set(move |_, _| {
-                if !app.settling_switch.get() {
-                    app.sounds.borrow().click();
-                    app.apply_switch_row(index);
+        // The right-hand pane, rebuilt in place when the category changes
+        // rather than by rebuilding the screen: the cursor is in the column on
+        // the left at that moment, and rebuilding around it would take it away.
+        let fill: Rc<Fill> = {
+            let list = list.clone();
+            Rc::new(move |app: &Rc<Self>| {
+                while let Some(row) = list.row_at_index(0) {
+                    list.remove(&row);
                 }
-                glib::Propagation::Proceed
+                app.settings_switches.borrow_mut().clear();
+                app.settings_sliders.borrow_mut().clear();
+
+                let entries = app.settings_category.get().items();
+                *app.pane_items.borrow_mut() = entries.iter().map(|(_, item)| *item).collect();
+
+                for (index, (_, item)) in entries.iter().enumerate() {
+                    let item = *item;
+                    let label = app.item_label(item);
+                    let enabled = app.item_enabled(item);
+
+                    // Three kinds of row, and which one it is belongs to the
+                    // item rather than to where it sits.
+                    let widget = match (item.slider(), app.item_switch(item)) {
+                        (Some(kind), on) => {
+                            let (now, reading) = app.slider_state(kind);
+                            let (widget, bar, value, switch) =
+                                slider_row(&label, slider_width, kind.range(), now, &reading, on);
+                            if kind == Slider::Scale {
+                                let by_hand = app.config.borrow().ui_scale.is_some();
+                                bar.set_sensitive(by_hand);
+                                value.set_sensitive(by_hand);
+                            }
+                            app.wire_slider(kind, &bar, &value);
+                            if let Some(switch) = switch {
+                                app.settings_switches.borrow_mut().push((item, switch));
+                            }
+                            app.settings_sliders
+                                .borrow_mut()
+                                .push((item, kind, bar, value));
+                            widget
+                        }
+                        (None, Some(on)) => {
+                            let (widget, switch) = switch_row(&label, on);
+                            switch.set_sensitive(enabled);
+                            app.settings_switches.borrow_mut().push((item, switch));
+                            widget
+                        }
+                        (None, None) => menu_row(&label, &app.item_value(item), enabled),
+                    };
+
+                    let name = row_name(&label, &app.item_value(item));
+                    append_named(&list, &widget, &name);
+                    let Some(row) = list.row_at_index(index as i32) else {
+                        continue;
+                    };
+                    row.set_sensitive(enabled);
+                    if item == Item::UpdateStatus {
+                        app.watch_update_row(&row);
+                    }
+                }
+
+                // Each switch reports its own presses, now that it takes them
+                // rather than letting them fall through to the row. Guarded
+                // against the moves made from here when the same setting is
+                // worked another way.
+                for (item, switch) in app.settings_switches.borrow().iter() {
+                    let app = app.clone();
+                    let item = *item;
+                    switch.connect_state_set(move |_, _| {
+                        if !app.settling_switch.get() {
+                            app.sounds.borrow().click();
+                            app.apply_switch_item(item);
+                        }
+                        glib::Propagation::Proceed
+                    });
+                }
+
+                // A heading above the row that opens a group, by the same
+                // mechanism the media page uses: headers are not rows, so they
+                // cannot be landed on.
+                let headings: Vec<Option<&'static str>> =
+                    entries.iter().map(|(heading, _)| *heading).collect();
+                list.set_header_func(move |row, _| {
+                    let index = row.index();
+                    match headings.get(index as usize).copied().flatten() {
+                        Some(heading) => {
+                            row.set_header(Some(&group_heading(heading, scale, index == 0)))
+                        }
+                        None => row.set_header(None::<&gtk::Widget>),
+                    }
+                });
+                app.refresh_version_row();
+            })
+        };
+        fill(self);
+
+        // The categories, down the left.
+        let (categories_scroller, categories) = scrolling_list();
+        categories_scroller.set_size_request(px(CATEGORY_WIDTH), -1);
+        for category in Category::ALL {
+            append_named(
+                &categories,
+                &menu_row(category.title(), "", true),
+                category.title(),
+            );
+        }
+        if let Some(row) = Category::ALL
+            .iter()
+            .position(|category| *category == self.settings_category.get())
+            .and_then(|index| categories.row_at_index(index as i32))
+        {
+            categories.select_row(Some(&row));
+        }
+        // Immediately, on the selection moving, rather than on the row being
+        // activated: this is a column of what is being looked at, not a list of
+        // things to do, and having to press a category to see it is a step that
+        // says nothing.
+        {
+            let app = self.clone();
+            let fill = fill.clone();
+            categories.connect_row_selected(move |_, row| {
+                let Some(category) = row
+                    .map(|row| row.index() as usize)
+                    .and_then(|index| Category::ALL.get(index).copied())
+                else {
+                    return;
+                };
+                if category == app.settings_category.get() {
+                    return;
+                }
+                app.settings_category.set(category);
+                // The remembered row belongs to the category it was in.
+                *app.settings_row.borrow_mut() = 0;
+                fill(&app);
             });
         }
+
+        // Both panes on grounds of their own, the way the media page's rows
+        // are: two lists side by side on a bare page have nothing to say where
+        // either one ends.
+        let Some(listing) = page.last_child() else {
+            return;
+        };
+        page.remove(&listing);
+        let columns = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(px(16.0))
+            .vexpand(true)
+            .build();
+        for (pane, expand) in [
+            (categories_scroller.clone().upcast::<gtk::Widget>(), false),
+            (listing.clone(), true),
+        ] {
+            let panel = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .hexpand(expand)
+                .css_classes(["tp-menu-panel"])
+                .build();
+            panel.append(&pane);
+            columns.append(&panel);
+        }
+        page.append(&columns);
 
         // Watched in the capture phase, so a press is known about before
         // anything else handles it. Cleared on the way out rather than on
         // release, because the row is activated in between - and a press that
-        // never activates a row must not leave the next key press looking
-        // like a click.
+        // never activates a row must not leave the next key press looking like
+        // a click.
         {
             let app = self.clone();
             let click = gtk::GestureClick::new();
@@ -6703,80 +6772,31 @@ impl App {
             list.add_controller(click);
         }
 
-        for index in SETTINGS_SECTIONS {
-            if let Some(row) = list.row_at_index(index) {
-                row.add_css_class("tp-section-start");
-            }
-        }
-        for index in SETTINGS_SUBROWS {
-            if let Some(row) = list.row_at_index(index) {
-                row.add_css_class("tp-subrow");
-            }
-        }
-
         *self.settings_list.borrow_mut() = Some(list.clone());
-
-        // Reaching the row is what takes the mark off the settings button:
-        // arriving on it is the moment somebody has been told, and pressing
-        // it should not be required to stop being nagged about something
-        // already seen. Attached whether or not there is anything new, since
-        // a check finishing while this screen is open can make there be -
-        // acknowledging nothing is harmless.
-        if let Some(row) = list.row_at_index(UPDATE_STATUS_ROW) {
-            let app = self.clone();
-            let controller = gtk::EventControllerFocus::new();
-            controller.connect_enter(move |_| {
-                let mut state = app.updates.borrow_mut();
-                crate::updates::acknowledge(&mut state);
-                drop(state);
-                app.draw_update_badge();
-            });
-            row.add_controller(controller);
-        }
-        self.refresh_version_row();
 
         {
             let app = self.clone();
             list.connect_row_activated(move |_, row| {
+                let Some(item) = app.item_at(row.index()) else {
+                    return;
+                };
                 // A switch is worked by pressing the switch, not by clicking
                 // the row it sits on: the row is a wide target, and hitting it
                 // on the way past should not change a setting. Enter on the
                 // selected row still does, which arrives here with nothing
                 // having been clicked.
-                if app.clicked_row.replace(false) && row_has_switch(row.index()) {
+                if app.clicked_row.replace(false) && item.has_switch() {
                     return;
                 }
                 // A switch row is answered by the switch, which plays its own
                 // click when it moves. Playing one here too would double it.
-                if !row_has_switch(row.index()) {
+                if !item.has_switch() {
                     app.sounds.borrow().click();
                 }
-                // Remembered so returning from a chooser lands back on the
-                // row it was opened from, as the main menu does.
+                // Remembered so returning from a chooser lands back on the row
+                // it was opened from, as the main menu does.
                 *app.settings_row.borrow_mut() = row.index();
-                match row.index() {
-                    ROW_INTERFACE_SCALE => app.work_switch_row(ROW_INTERFACE_SCALE),
-                    ROW_SOUNDS => app.work_switch_row(ROW_SOUNDS),
-                    ROW_PRIMARY_DEVICE => app.show_selector(Setting::PrimaryDevice, row),
-                    ROW_PRIMARY_LANGUAGE => app.show_selector(Setting::PrimaryLanguage, row),
-                    ROW_PRIMARY_DESCRIPTION => app.work_switch_row(ROW_PRIMARY_DESCRIPTION),
-                    ROW_PRIMARY_VOLUME => app.work_switch_row(ROW_PRIMARY_VOLUME),
-                    ROW_PRIMARY_SYNC => app.work_switch_row(ROW_PRIMARY_SYNC),
-                    ROW_SECONDARY_DEVICE => app.show_selector(Setting::SecondaryDevice, row),
-                    ROW_SECONDARY_LANGUAGE => app.show_selector(Setting::SecondaryLanguage, row),
-                    ROW_SECONDARY_DESCRIPTION => app.work_switch_row(ROW_SECONDARY_DESCRIPTION),
-                    ROW_SECONDARY_VOLUME => app.work_switch_row(ROW_SECONDARY_VOLUME),
-                    ROW_SECONDARY_SYNC => app.work_switch_row(ROW_SECONDARY_SYNC),
-                    ROW_SUBTITLE_LANGUAGE => app.show_selector(Setting::SubtitleLanguage, row),
-                    ROW_SUBTITLE_FONT => app.show_selector(Setting::SubtitleFont, row),
-                    ROW_CLEAR_DATA => app.confirm_clear_data(),
-                    ROW_KODI => app.show_kodi(),
-                    ROW_ABOUT => app.show_about(),
-                    ROW_NOTICES => app.show_notices(),
-                    UPDATE_SWITCH_ROW => app.work_switch_row(UPDATE_SWITCH_ROW),
-                    UPDATE_STATUS_ROW => app.open_release_page(),
-                    _ => {}
-                }
+                app.activate_item(item, row);
             });
         }
         {
@@ -6784,13 +6804,103 @@ impl App {
             back.connect_clicked(move |_| app.show_menu());
         }
 
+        // The column of categories goes in the order ahead of the list it sits
+        // left of, which is what makes left and right move between them - the
+        // same arrangement the browser's drives column uses.
+        *self.nav_side_list.borrow_mut() = Some(categories.clone());
         self.wire_navigation(&list, std::slice::from_ref(&back), &[]);
+        self.wire_arrows(categories.upcast_ref());
+        announce_selection(&categories);
         *self.screen.borrow_mut() = Screen::Settings;
         self.window.set_child(Some(&page));
         let remembered = (*self.settings_row.borrow()).min(last_row_index(&list));
         if let Some(row) = list.row_at_index(remembered) {
             list.select_row(Some(&row));
             settle_on(&row);
+        }
+    }
+
+    /// Which setting a row in the right-hand pane is.
+    fn item_at(&self, index: i32) -> Option<Item> {
+        self.pane_items.borrow().get(index as usize).copied()
+    }
+
+    /// Takes the mark off the settings button once the version row is reached.
+    ///
+    /// Arriving on it is the moment somebody has been told, and pressing it
+    /// should not be required to stop being nagged about something already
+    /// seen. Attached whether or not there is anything new, since a check
+    /// finishing while this screen is open can make there be.
+    fn watch_update_row(self: &Rc<Self>, row: &gtk::ListBoxRow) {
+        let app = self.clone();
+        let controller = gtk::EventControllerFocus::new();
+        controller.connect_enter(move |_| {
+            let mut state = app.updates.borrow_mut();
+            crate::updates::acknowledge(&mut state);
+            drop(state);
+            app.draw_update_badge();
+        });
+        row.add_controller(controller);
+    }
+
+    /// What a row does when it is chosen.
+    fn activate_item(self: &Rc<Self>, item: Item, row: &gtk::ListBoxRow) {
+        if let Some(setting) = item.setting() {
+            self.show_selector(setting, row);
+            return;
+        }
+        if item.has_switch() {
+            self.work_switch_item(item);
+            return;
+        }
+        match item {
+            Item::ClearData => self.confirm_clear_data(),
+            Item::Kodi => self.show_kodi(),
+            Item::About => self.show_about(),
+            Item::Notices => self.show_notices(),
+            Item::UpdateStatus => self.open_release_page(),
+            _ => {}
+        }
+    }
+
+    /// Wires a bar to the setting it moves.
+    fn wire_slider(self: &Rc<Self>, kind: Slider, bar: &gtk::Scale, value: &gtk::Label) {
+        {
+            let app = self.clone();
+            let value = value.clone();
+            bar.connect_change_value(move |_, scroll, moved| {
+                app.set_slider(kind, moved, &value);
+                if kind == Slider::Scale {
+                    // A drag reports Jump, over and over, while the pointer
+                    // holds the bar. Anything else - a step, a page, a scroll
+                    // wheel - is finished by the time it arrives and can be
+                    // drawn straight away.
+                    if scroll == gtk::ScrollType::Jump {
+                        app.wanted_scale.set(Some(moved));
+                    } else {
+                        app.apply_scale(moved);
+                    }
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        // Let go of, and only then redrawn. Watched rather than handled, so the
+        // bar keeps its own grip on the pointer while it is being dragged.
+        if kind == Slider::Scale {
+            let app = self.clone();
+            let watcher = gtk::EventControllerLegacy::new();
+            watcher.set_propagation_phase(gtk::PropagationPhase::Bubble);
+            watcher.connect_event(move |_, event| {
+                let done = matches!(
+                    event.event_type(),
+                    gdk::EventType::ButtonRelease | gdk::EventType::TouchEnd
+                );
+                if done && let Some(steps) = app.wanted_scale.take() {
+                    app.apply_scale(steps);
+                }
+                glib::Propagation::Proceed
+            });
+            bar.add_controller(watcher);
         }
     }
 
@@ -6818,22 +6928,22 @@ impl App {
         };
         self.set_settings_switch(
             if primary {
-                ROW_PRIMARY_DESCRIPTION
+                Item::Description(Role::Primary)
             } else {
-                ROW_SECONDARY_DESCRIPTION
+                Item::Description(Role::Secondary)
             },
             on,
         );
     }
 
     /// Moves the switch on a settings row to match what it now reports.
-    fn set_settings_switch(&self, index: i32, on: bool) {
+    fn set_settings_switch(&self, item: Item, on: bool) {
         self.settling_switch.set(true);
         if let Some((_, switch)) = self
             .settings_switches
             .borrow()
             .iter()
-            .find(|(row, _)| *row == index)
+            .find(|(row, _)| *row == item)
         {
             switch.set_active(on);
         }
@@ -6846,34 +6956,107 @@ impl App {
     /// only runs the sliding animation from the switch's own gesture and
     /// activation. Setting its state moves it there in one frame, which is
     /// what made a key press look different from a click.
-    fn work_switch_row(self: &Rc<Self>, index: i32) {
+    fn work_switch_item(self: &Rc<Self>, item: Item) {
         let switch = self
             .settings_switches
             .borrow()
             .iter()
-            .find(|(row, _)| *row == index)
+            .find(|(row, _)| *row == item)
             .map(|(_, switch)| switch.clone());
         match switch {
             // Its own handler carries on from here, as it does for a click.
             Some(switch) => {
                 switch.activate();
             }
-            None => self.apply_switch_row(index),
+            None => self.apply_switch_item(item),
         }
     }
 
     /// What a switch row actually changes, once something has asked for it.
-    fn apply_switch_row(self: &Rc<Self>, index: i32) {
-        match index {
-            ROW_INTERFACE_SCALE => self.toggle_automatic_scale(),
-            ROW_SOUNDS => self.toggle_sounds(),
-            ROW_PRIMARY_DESCRIPTION => self.toggle_audio_description(true),
-            ROW_SECONDARY_DESCRIPTION => self.toggle_audio_description(false),
-            ROW_PRIMARY_VOLUME | ROW_SECONDARY_VOLUME => self.toggle_settings_mute(index),
-            ROW_PRIMARY_SYNC | ROW_SECONDARY_SYNC => self.toggle_settings_offset(index),
-            UPDATE_SWITCH_ROW => self.toggle_update_checks(),
+    fn apply_switch_item(self: &Rc<Self>, item: Item) {
+        match item {
+            Item::InterfaceScale => self.toggle_automatic_scale(),
+            Item::Sounds => self.toggle_sounds(),
+            Item::StartFullscreen => self.toggle_start_fullscreen(),
+            Item::ReadMetadata => self.toggle_read_metadata(),
+            Item::ShowBackdrop => self.toggle_show_backdrop(),
+            Item::Description(role) => self.toggle_audio_description(role == Role::Primary),
+            Item::Volume(_) => self.toggle_settings_mute(item),
+            Item::Sync(_) => self.toggle_settings_offset(item),
+            Item::Updates => self.toggle_update_checks(),
             _ => {}
         }
+    }
+
+    /// Turns "open fullscreen" on or off.
+    ///
+    /// Only this changes it. Pressing F11 or the fullscreen mark is about the
+    /// session in hand and leaves this alone - see [`App::toggle_fullscreen`].
+    fn toggle_start_fullscreen(self: &Rc<Self>) {
+        let mut config = self.config.borrow_mut();
+        config.fullscreen = !config.fullscreen;
+        let _ = config.save();
+    }
+
+    /// Turns the reading of sidecars and artwork beside a video on or off.
+    ///
+    /// The page is rebuilt afterwards, since what it can show has changed -
+    /// and the backdrop row with it, which is only workable while this is on.
+    fn toggle_read_metadata(self: &Rc<Self>) {
+        {
+            let mut config = self.config.borrow_mut();
+            config.read_metadata = !config.read_metadata;
+            let _ = config.save();
+        }
+        self.reread_details();
+        self.show_settings();
+    }
+
+    /// Turns the film's fanart behind the media page on or off.
+    fn toggle_show_backdrop(self: &Rc<Self>) {
+        {
+            let mut config = self.config.borrow_mut();
+            config.show_backdrop = !config.show_backdrop;
+            let _ = config.save();
+        }
+        self.reread_details();
+    }
+
+    /// Reads what is beside the file again, after a setting changed what may
+    /// be read at all.
+    ///
+    /// Nothing to do without a file: the answer is about a video, and the
+    /// next one loaded will be read under whatever the setting now says.
+    fn reread_details(self: &Rc<Self>) {
+        let Some(source) = self.file.borrow().clone() else {
+            return;
+        };
+        let beside = {
+            let config = self.config.borrow();
+            crate::metadata::Beside {
+                metadata: config.read_metadata,
+                backdrop: config.show_backdrop,
+            }
+        };
+        let media = crate::probe::Media {
+            audio: Vec::new(),
+            subtitles: Vec::new(),
+            duration_ns: 0,
+            video: self.details.borrow().video.clone(),
+            tags: Default::default(),
+        };
+        let mut details = crate::metadata::resolve(&source, &media, beside);
+        // The parts that came from the container rather than from beside the
+        // file are already known and are not re-probed for a toggle.
+        let held = self.details.borrow();
+        details.duration_s = held.duration_s;
+        details.container = held.container.clone();
+        drop(held);
+        *self.details.borrow_mut() = details;
+        *self.poster_art.borrow_mut() = None;
+        *self.backdrop_art.borrow_mut() = None;
+        self.art_generation.set(self.art_generation.get() + 1);
+        self.start_art_load();
     }
 
     /// Turns the version check on or off.
@@ -6892,7 +7075,7 @@ impl App {
         if on {
             self.check_for_updates(true);
         }
-        self.set_settings_switch(UPDATE_SWITCH_ROW, on);
+        self.set_settings_switch(Item::Updates, on);
         self.refresh_version_row();
     }
 
@@ -6927,8 +7110,19 @@ impl App {
     /// and drew it again - which flickers and moves every row under whatever
     /// was pointing at one.
     fn refresh_version_row(&self) {
+        // Found by asking which row is the version one, rather than by a fixed
+        // number: it is only in the pane at all when General is the category
+        // being shown.
+        let Some(index) = self
+            .pane_items
+            .borrow()
+            .iter()
+            .position(|item| *item == Item::UpdateStatus)
+        else {
+            return;
+        };
         let list = self.settings_list.borrow().clone();
-        let Some(row) = list.and_then(|list| list.row_at_index(UPDATE_STATUS_ROW)) else {
+        let Some(row) = list.and_then(|list| list.row_at_index(index as i32)) else {
             return;
         };
         let (label, value) = (self.version_label(), self.version_status());
@@ -7027,7 +7221,7 @@ impl App {
             (config.sounds, config.primary_sink.clone())
         };
         *self.sounds.borrow_mut() = Sounds::new(enabled, device);
-        self.set_settings_switch(ROW_SOUNDS, enabled);
+        self.set_settings_switch(Item::Sounds, enabled);
     }
 
     /// Hands the size back to the screen, or takes it over by hand.
@@ -7054,7 +7248,7 @@ impl App {
             .settings_sliders
             .borrow()
             .iter()
-            .find(|(row, ..)| *row == ROW_INTERFACE_SCALE)
+            .find(|(row, ..)| *row == Item::InterfaceScale)
             .map(|(_, kind, scale, value)| (*kind, scale.clone(), value.clone()));
         if let Some((kind, scale, value)) = found {
             let (now, reading) = self.slider_state(kind);
@@ -7063,7 +7257,7 @@ impl App {
             scale.set_sensitive(!now_automatic);
             value.set_sensitive(!now_automatic);
         }
-        self.set_settings_switch(ROW_INTERFACE_SCALE, now_automatic);
+        self.set_settings_switch(Item::InterfaceScale, now_automatic);
     }
 
     /// Redraws the interface at the size the bar is now at.
@@ -9389,6 +9583,11 @@ const CORNER_MARK_PX: f64 = 26.0;
 /// across and 67% down - so a size set by eye against the icons that came
 /// before was mostly padding, and the marks came out small however large the
 /// number grew.
+/// How wide the settings screen's column of categories is, in interface
+/// units. Fixed rather than sized to its contents, so the pane beside it does
+/// not move when the longest category name changes.
+const CATEGORY_WIDTH: f64 = 260.0;
+
 const ROW_MARK_PX: f64 = 34.0;
 
 /// The same, for a folder in a listing. A little smaller: a folder is a wide
@@ -9502,24 +9701,6 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
         // stop containing the focus and steps to the next one, so a focused
         // row still counts as being on its list.
     }
-}
-
-/// How a settings row reads aloud: the setting, then what it is set to.
-/// Whether a settings row carries a switch, and so is worked by the switch
-/// rather than by a click anywhere along it.
-fn row_has_switch(index: i32) -> bool {
-    matches!(
-        index,
-        ROW_INTERFACE_SCALE
-            | ROW_SOUNDS
-            | ROW_PRIMARY_DESCRIPTION
-            | ROW_SECONDARY_DESCRIPTION
-            | ROW_PRIMARY_VOLUME
-            | ROW_SECONDARY_VOLUME
-            | ROW_PRIMARY_SYNC
-            | ROW_SECONDARY_SYNC
-            | UPDATE_SWITCH_ROW
-    )
 }
 
 fn row_name(label: &str, value: &str) -> String {
@@ -11589,38 +11770,68 @@ mod readings {
 mod settings_rows {
     use super::*;
 
-    /// One row, one position. A row constant that is duplicated or skipped
-    /// means two controls built onto the same row and another left as a plain
-    /// line of text - which is what a stale number did to Preferred Language,
-    /// and it looked like a missing setting rather than like a bug.
+    /// Every setting is somewhere, and nowhere twice.
+    ///
+    /// This is what the old numbering could not promise. Rows were positions
+    /// in one list, so a stale number silently built a control onto the wrong
+    /// row and left another as a plain line of text - which is what happened
+    /// to Preferred Language, and it read as a missing setting rather than a
+    /// bug. Categories make losing one easy in a new way: an item can simply
+    /// be left out of every list and never appear at all.
     #[test]
-    fn every_row_has_one_position() {
-        let mut positions = SETTINGS_ORDER;
-        positions.sort_unstable();
-        let expected: Vec<i32> = (0..SETTINGS_ROWS as i32).collect();
-        assert_eq!(positions.to_vec(), expected);
-    }
-
-    /// The version sits last, under the switch that decides whether anything
-    /// is said about newer ones.
-    #[test]
-    fn the_version_row_comes_last_and_follows_the_switch() {
-        assert_eq!(UPDATE_STATUS_ROW, SETTINGS_ROWS as i32 - 1);
-        assert_eq!(UPDATE_SWITCH_ROW, UPDATE_STATUS_ROW - 1);
-    }
-
-    /// Headings and the rows indented under them are drawn differently, so a
-    /// row named as both would be asking for two contradictory things.
-    #[test]
-    fn no_row_is_both_a_heading_and_indented_under_one() {
-        for row in SETTINGS_SECTIONS {
-            assert!(
-                !SETTINGS_SUBROWS.contains(&row),
-                "row {row} is both a section and a subrow"
-            );
+    fn every_item_appears_in_exactly_one_category() {
+        let all: Vec<Item> = Category::ALL
+            .iter()
+            .flat_map(|category| category.items())
+            .map(|(_, item)| item)
+            .collect();
+        for item in &all {
+            let count = all.iter().filter(|other| *other == item).count();
+            assert_eq!(count, 1, "an item appears {count} times");
         }
-        for row in SETTINGS_SECTIONS.iter().chain(SETTINGS_SUBROWS.iter()) {
-            assert!(SETTINGS_ORDER.contains(row), "row {row} is not built");
+        // Written out rather than derived, so adding a setting and forgetting
+        // to place it fails here instead of at a glance. Twenty-six rather
+        // than the twenty-one variants of `Item`: the five an output has are
+        // placed once for each output.
+        assert_eq!(all.len(), 26);
+    }
+
+    /// The version sits under the switch that decides whether anything is
+    /// said about newer ones. Read the other way round it is a status with no
+    /// stated relationship to the control above it.
+    #[test]
+    fn the_version_follows_the_update_switch() {
+        let general: Vec<Item> = Category::General
+            .items()
+            .into_iter()
+            .map(|(_, item)| item)
+            .collect();
+        let switch = general.iter().position(|item| *item == Item::Updates);
+        let status = general.iter().position(|item| *item == Item::UpdateStatus);
+        assert_eq!(status, switch.map(|at| at + 1));
+    }
+
+    /// Clear Data destroys something, and was asked to sit at the end of
+    /// General rather than among the everyday toggles.
+    #[test]
+    fn clearing_data_comes_last() {
+        let general = Category::General.items();
+        assert_eq!(general.last().map(|(_, item)| *item), Some(Item::ClearData));
+    }
+
+    /// A row carries a switch or a bar or neither, and the two that carry
+    /// both - the pair whose bar can be turned off - are deliberate. What must
+    /// not happen is a row claiming a switch it was never built with, since
+    /// activating it would then do nothing at all.
+    #[test]
+    fn every_switch_row_has_something_to_switch() {
+        for (_, item) in Category::ALL.iter().flat_map(|category| category.items()) {
+            if item.has_switch() {
+                assert!(
+                    item.setting().is_none(),
+                    "a row cannot both open a chooser and hold a switch"
+                );
+            }
         }
     }
 }

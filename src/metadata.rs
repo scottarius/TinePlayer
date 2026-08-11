@@ -191,8 +191,12 @@ impl Details {
 /// handful of `is_file` calls - but it still touches the disk, and over a
 /// network share that is not free. Called from wherever the probe already
 /// runs, which is a worker thread on the path that matters.
-pub fn resolve(source: &Source, media: &Media) -> Details {
-    let path = source.local();
+pub fn resolve(source: &Source, media: &Media, beside: Beside) -> Details {
+    // Only where the viewer wants what is beside the file read at all. With it
+    // off, `path` is `None` here and everything downstream that looks on disk -
+    // the sidecar, the poster, the backdrop - finds nothing and says so in the
+    // ordinary way, which is the same code path a film with no sidecar takes.
+    let path = source.local().filter(|_| beside.metadata);
     let sidecar = path.and_then(crate::nfo::read).unwrap_or_default();
 
     // The three sources in order, each one only consulted for what the one
@@ -245,7 +249,9 @@ pub fn resolve(source: &Source, media: &Media) -> Details {
         video: media.video.clone(),
         container: container(source),
         poster: path.and_then(|path| find_poster(path, &sidecar, media)),
-        backdrop: path.and_then(|path| find_backdrop(path, &sidecar)),
+        backdrop: path
+            .filter(|_| beside.backdrop)
+            .and_then(|path| find_backdrop(path, &sidecar)),
     }
 }
 
@@ -272,6 +278,23 @@ fn flowed(text: &str) -> String {
 /// release ends in things like "1080p.DTS" - so this takes off a final piece
 /// only when it is short and entirely letters or digits, which is what a
 /// container extension looks like and what "2024" or "Part 2" does not.
+/// What the viewer has agreed may be read from disk beside the video.
+///
+/// Passed in rather than read here, because this module is given a file and
+/// answers what is known about it - what a viewer has chosen is the
+/// application's business, and threading it through keeps this testable
+/// without a config.
+#[derive(Clone, Copy)]
+pub struct Beside {
+    /// The sidecar and the artwork files. Off means the page falls back to the
+    /// file name and the container's own tags, which is the same page a film
+    /// with no sidecar has always had.
+    pub metadata: bool,
+    /// The fanart behind the page. Meaningless with `metadata` off, since
+    /// there is then nothing found to draw.
+    pub backdrop: bool,
+}
+
 /// A broadcast date as the page shows it: "September 22, 2004".
 ///
 /// Sidecars write `<aired>` as an ISO date, which is unambiguous and not how

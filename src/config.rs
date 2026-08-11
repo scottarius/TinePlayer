@@ -43,6 +43,11 @@ fn default_sounds() -> bool {
     true
 }
 
+/// The default for a setting that is on unless somebody says otherwise.
+fn yes() -> bool {
+    true
+}
+
 fn default_check_for_updates() -> bool {
     true
 }
@@ -158,7 +163,32 @@ pub struct Config {
     /// Remembered rather than reset each run: a machine wired to a television
     /// wants fullscreen every time, and saying so once should be enough.
     #[serde(default)]
+    /// Whether to open fullscreen, as a deliberate choice rather than a
+    /// record of how the window was last left.
+    ///
+    /// **Not written by the fullscreen button or F11.** It used to be, which
+    /// made "start fullscreen" a side effect of whichever way round the window
+    /// happened to be at the moment somebody quit - and left no way to say
+    /// "open fullscreen" that a single stray keypress did not undo. Toggling
+    /// during a session is about this session; this is about every one.
     pub fullscreen: bool,
+    /// Whether to read the `.nfo` sidecar and the artwork files sitting beside
+    /// a video.
+    ///
+    /// On by default, and off is a real answer: a library with no sidecars
+    /// gains nothing from the looking, and somebody who would rather see file
+    /// names than a scraper's idea of a title should be able to say so. Only
+    /// what is read *beside* the file - the container's own tags come from the
+    /// video itself and are read either way.
+    #[serde(default = "yes")]
+    pub read_metadata: bool,
+    /// Whether the film's fanart is drawn behind the media page.
+    ///
+    /// Depends on [`Config::read_metadata`], the artwork being one of the
+    /// things read beside the file: with that off there is nothing to draw and
+    /// the row that sets this is disabled rather than lying about it.
+    #[serde(default = "yes")]
+    pub show_backdrop: bool,
     /// The size the window was last left at, in pixels, so it opens where it
     /// was rather than at a default every time.
     ///
@@ -217,6 +247,8 @@ impl Default for Config {
             watched_percent: None,
             last_video: None,
             fullscreen: false,
+            read_metadata: true,
+            show_backdrop: true,
             window_width: None,
             window_height: None,
             sounds: default_sounds(),
