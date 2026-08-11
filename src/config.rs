@@ -159,6 +159,17 @@ pub struct Config {
     /// wants fullscreen every time, and saying so once should be enough.
     #[serde(default)]
     pub fullscreen: bool,
+    /// The size the window was last left at, in pixels, so it opens where it
+    /// was rather than at a default every time.
+    ///
+    /// Written only for a window that is neither maximized nor fullscreen:
+    /// those are states rather than sizes, and recording the screen's
+    /// dimensions as the window's own would leave nothing to restore to when
+    /// they are turned off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_width: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_height: Option<i32>,
     /// Plays a short click when moving through the menus.
     #[serde(default = "default_sounds")]
     pub sounds: bool,
@@ -206,6 +217,8 @@ impl Default for Config {
             watched_percent: None,
             last_video: None,
             fullscreen: false,
+            window_width: None,
+            window_height: None,
             sounds: default_sounds(),
             check_for_updates: default_check_for_updates(),
             xdg_runtime_dir: None,
