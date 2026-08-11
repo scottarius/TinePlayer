@@ -482,7 +482,7 @@ impl Category {
     fn items(self) -> Vec<(Option<&'static str>, Item)> {
         match self {
             Category::General => vec![
-                (None, Item::InterfaceScale),
+                (Some("INTERFACE"), Item::InterfaceScale),
                 (None, Item::Sounds),
                 (None, Item::StartFullscreen),
                 (Some("LIBRARY"), Item::ReadMetadata),
@@ -6506,7 +6506,7 @@ impl App {
         match item {
             Item::InterfaceScale => "Interface Size".to_string(),
             Item::Sounds => "Navigation Sounds".to_string(),
-            Item::StartFullscreen => "Start Fullscreen".to_string(),
+            Item::StartFullscreen => "Always Start Fullscreen".to_string(),
             Item::ReadMetadata => "Read Metadata Beside Files".to_string(),
             Item::ShowBackdrop => "Show Backdrop Artwork".to_string(),
             Item::ResumeThreshold => "Resume Threshold".to_string(),
@@ -6591,6 +6591,84 @@ impl App {
             Item::Updates => config.check_for_updates,
             _ => return None,
         })
+    }
+
+    /// A line under the row explaining what it does, for the settings whose
+    /// names do not say it.
+    ///
+    /// Most do not have one, and that is the point: a note under every row is
+    /// a wall of text nobody reads, and the ones that matter stop standing
+    /// out. These are the settings whose effect is invisible until it happens,
+    /// or whose name is a term of art.
+    fn item_description(&self, item: Item) -> Option<&'static str> {
+        Some(match item {
+            Item::ReadMetadata => {
+                "Find and read video metadata beside video files like .nfo and images often provided by media libraries."
+            }
+            Item::ShowBackdrop => {
+                "If backdrop artwork is found, display it behind the video details."
+            }
+            Item::ResumeThreshold => {
+                "How much of a video should be viewed before offering the choice to resume a previously watched video."
+            }
+            Item::WatchedThreshold => {
+                "How much of a video should be viewed to consider it as watched."
+            }
+            Item::Language(_) => "Attempt to auto-select a language track for the output.",
+            Item::Description(_) => {
+                "Attempt to auto-select an Audio Description track for the output."
+            }
+            Item::Sync(_) => {
+                "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
+            }
+            Item::SubtitlePreference => "Attempt to auto-select subtitles when available.",
+            Item::ClearData => {
+                "Delete remembered video preferences, track choices, and resume positions."
+            }
+            Item::Kodi => "Lets Kodi hand videos to TinePlayer to play.",
+            _ => return None,
+        })
+    }
+
+    /// The note drawn under a row: its explanation, and for one row a link
+    /// beside it.
+    fn item_note(self: &Rc<Self>, item: Item, scale: f64) -> Option<gtk::Widget> {
+        let text = row_note(self.item_description(item)?, scale);
+        if item != Item::ClearData {
+            return Some(text.upcast());
+        }
+        let sentence = text.text().to_string();
+
+        // Where the data this clears actually lives, openable rather than
+        // printed. A path read off a television is a path nobody is going to
+        // type, and the folder is the thing wanted anyway - to take a copy of
+        // it before pressing the row above, or to see that it is really gone
+        // afterwards.
+        //
+        // The data folder rather than the config one: they are not the same
+        // place, and this row does not touch settings.
+        let folder = crate::config::positions_path()
+            .parent()
+            .map(|folder| folder.to_path_buf())?;
+        // On the same line as the sentence it belongs to, rather than under
+        // it: two lines of small print under one row reads as a paragraph.
+        text.set_markup(&format!(
+            "{}  <a href=\"{}\">Open user data folder</a>",
+            glib::markup_escape_text(&sentence),
+            glib::markup_escape_text(&gtk::gio::File::for_path(&folder).uri()),
+        ));
+        // Reported rather than swallowed: a link that does nothing looks like
+        // a link that was pressed wrongly.
+        text.connect_activate_link(|_, uri| {
+            if let Err(e) =
+                gtk::gio::AppInfo::launch_default_for_uri(uri, None::<&gtk::gio::AppLaunchContext>)
+            {
+                eprintln!("Could not open {uri}: {e}");
+            }
+            glib::Propagation::Stop
+        });
+
+        Some(text.upcast())
     }
 
     /// Whether the row can be worked at all.
@@ -6721,6 +6799,22 @@ impl App {
                             widget
                         }
                         (None, None) => menu_row(&label, &app.item_value(item), enabled),
+                    };
+
+                    // The note goes inside the row rather than under it as a
+                    // row of its own, which is what keeps it out of the way of
+                    // everything: it cannot be selected, cannot be arrowed on
+                    // to, and does not shift the numbering the pane is read by.
+                    let widget = match app.item_note(item, scale) {
+                        Some(note) => {
+                            let stack = gtk::Box::builder()
+                                .orientation(gtk::Orientation::Vertical)
+                                .build();
+                            stack.append(&widget);
+                            stack.append(&note);
+                            stack.upcast::<gtk::Widget>()
+                        }
+                        None => widget.upcast::<gtk::Widget>(),
                     };
 
                     let name = row_name(&label, &app.item_value(item));
@@ -10041,6 +10135,27 @@ fn append_named(list: &gtk::ListBox, child: &impl IsA<gtk::Widget>, name: &str) 
     }
 }
 
+/// The explanation drawn under a settings row.
+///
+/// Never selectable and never focusable. It is not a control and not a value:
+/// a caret landing in it, or an arrow key stopping on it, would be the
+/// interface answering a question nobody asked.
+fn row_note(text: &str, scale: f64) -> gtk::Label {
+    let px = |base: f64| (base * scale).round() as i32;
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("tp-row-note");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_can_focus(false);
+    // Lined up with the name above it, which sits inside the row's own
+    // padding, and clear of the row below.
+    label.set_margin_start(px(18.0));
+    label.set_margin_end(px(18.0));
+    label.set_margin_bottom(px(10.0));
+    label
+}
+
+/// How a settings row reads aloud: the setting, then what it is set to.
 fn row_name(label: &str, value: &str) -> String {
     if value.is_empty() {
         label.to_string()
@@ -11200,6 +11315,10 @@ fn style_css(scale: f64) -> String {
         }}
         .tp-row {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
         .tp-value {{ opacity: 0.7; }}
+        /* A line under a row saying what it does. Smaller and dimmer than the
+           setting it explains, so a column of them reads as annotation rather
+           than as more rows. */
+        .tp-row-note {{ font-size: {note}px; opacity: 0.55; }}
         /* Sized with the rest of the interface: the theme's default switch is
            drawn for a mouse at a desk, and is a smudge from a sofa.
 
@@ -11786,6 +11905,7 @@ fn style_css(scale: f64) -> String {
         row = px(21.0),
         hint = px(20.0),
         small = px(17.0),
+        note = px(16.0),
         tight_v = px(7.0),
         tight_h = px(10.0),
         pad_v = px(9.0),
