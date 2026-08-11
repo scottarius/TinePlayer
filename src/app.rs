@@ -6603,7 +6603,7 @@ impl App {
     fn item_description(&self, item: Item) -> Option<&'static str> {
         Some(match item {
             Item::ReadMetadata => {
-                "Find and read video metadata beside video files like .nfo and images often provided by media libraries."
+                "Find and read metadata beside video files like .nfo and images often provided by media libraries."
             }
             Item::ShowBackdrop => {
                 "If backdrop artwork is found, display it behind the video details."
@@ -7009,8 +7009,14 @@ impl App {
             let app = self.clone();
             let controller = gtk::EventControllerFocus::new();
             controller.connect_enter(move |_| {
-                if *app.screen.borrow() == Screen::Settings && app.in_settings_pane.get() != pane {
+                if *app.screen.borrow() != Screen::Settings {
+                    return;
+                }
+                if app.in_settings_pane.get() != pane {
                     app.settings_stage(pane);
+                }
+                if pane {
+                    app.select_focused_row();
                 }
             });
             widget.add_controller(controller);
@@ -7102,6 +7108,37 @@ impl App {
         {
             categories.select_row(Some(&row));
             settle_on(&row);
+        }
+    }
+
+    /// Selects the row the focus has just landed in.
+    ///
+    /// A switch or a bar takes the focus when it is clicked, which carries it
+    /// into the pane without going through the arrow keys - and the list's own
+    /// arrival handler answers a list with nothing selected by selecting its
+    /// first row. Clicking a switch two thirds of the way down therefore lit
+    /// the row at the top. The row under the pointer is the one meant.
+    fn select_focused_row(&self) {
+        let Some(list) = self.settings_list.borrow().clone() else {
+            return;
+        };
+        let Some(mut widget) = gtk::prelude::GtkWindowExt::focus(&self.window) else {
+            return;
+        };
+        // Up from whatever took the focus to the row holding it, which may be
+        // a switch inside a box inside the row.
+        loop {
+            if let Some(row) = widget.downcast_ref::<gtk::ListBoxRow>()
+                && row.parent().as_ref() == Some(list.upcast_ref::<gtk::Widget>())
+            {
+                list.select_row(Some(row));
+                *self.settings_row.borrow_mut() = row.index();
+                return;
+            }
+            match widget.parent() {
+                Some(parent) => widget = parent,
+                None => return,
+            }
         }
     }
 
@@ -7293,7 +7330,39 @@ impl App {
             let _ = config.save();
         }
         self.reread_details();
-        self.show_settings();
+        // The one row this governs, redrawn where it stands.
+        //
+        // Rebuilding the whole screen was what this did, and it moved the
+        // cursor every time: a switch is worked without activating its row, so
+        // the remembered row is whatever was last activated, and coming back
+        // in lands on that instead of on the switch just pressed.
+        self.refresh_backdrop_row();
+    }
+
+    /// Turns the backdrop row on or off to match whether there is anything
+    /// to draw, without disturbing the screen around it.
+    fn refresh_backdrop_row(&self) {
+        let enabled = self.config.borrow().read_metadata;
+        if let Some((_, switch)) = self
+            .settings_switches
+            .borrow()
+            .iter()
+            .find(|(item, _)| *item == Item::ShowBackdrop)
+        {
+            switch.set_sensitive(enabled);
+        }
+        let Some(index) = self
+            .pane_items
+            .borrow()
+            .iter()
+            .position(|item| *item == Item::ShowBackdrop)
+        else {
+            return;
+        };
+        let list = self.settings_list.borrow().clone();
+        if let Some(row) = list.and_then(|list| list.row_at_index(index as i32)) {
+            row.set_sensitive(enabled);
+        }
     }
 
     /// Turns the film's fanart behind the media page on or off.
@@ -11406,6 +11475,12 @@ fn style_css(scale: f64) -> String {
             background-color: {fill};
             border-color: {fill};
         }}
+        /* A switch that cannot be worked, saying so. The colours above are
+           stated outright rather than taken from the theme, so the theme's own
+           insensitive styling has nothing to dim - which left a disabled row
+           with a lit switch on it, reading as a control that simply refused
+           the press. Faded whole, so trough, fill and knob go together. */
+        .tp-row switch:disabled {{ opacity: 0.35; }}
         .tp-chevron {{ font-size: {row}px; opacity: 0.5; }}
         .tp-hint {{ font-size: {hint}px; opacity: 0.7; }}
         /* The one screen made of paragraphs. Looser than a row of settings,
