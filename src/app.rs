@@ -293,7 +293,6 @@ enum Screen {
     AlignProgress,
     AlignResult,
     Confirm,
-    About,
     Notices,
     Kodi,
     /// The screens of the Kodi wizard. None of them writes anything: only
@@ -397,7 +396,6 @@ enum Item {
     SubtitleSize,
     SubtitleFont,
     Kodi,
-    About,
     Notices,
 }
 
@@ -515,7 +513,9 @@ impl Category {
                 (None, Item::SubtitleFont),
             ],
             Category::Integrations => vec![(None, Item::Kodi)],
-            Category::About => vec![(None, Item::About), (None, Item::Notices)],
+            // The text itself is not a row - see `about_body`, which the
+            // pane draws above these.
+            Category::About => vec![(None, Item::Notices)],
         }
     }
 }
@@ -725,6 +725,10 @@ pub struct App {
     /// The column of categories beside it, so the keyboard can be handed back
     /// to it from outside the function that built it.
     settings_categories: RefCell<Option<gtk::ListBox>>,
+    /// What a category says above its rows, where it says anything. Only About
+    /// does: its text used to be a screen of its own, two steps away from the
+    /// row that named it.
+    settings_body: RefCell<Option<gtk::Box>>,
     /// Whether the settings row about to be activated was clicked rather than
     /// chosen with a key or a gamepad. A switch row responds to a press on
     /// the switch itself, not to a click anywhere along the row - but Enter
@@ -936,6 +940,7 @@ impl App {
             settings_switches: RefCell::new(Vec::new()),
             settings_list: RefCell::new(None),
             settings_categories: RefCell::new(None),
+            settings_body: RefCell::new(None),
             clicked_row: Cell::new(false),
             settling_switch: Cell::new(false),
             key_held: Cell::new(false),
@@ -1676,9 +1681,7 @@ impl App {
         let screen = *self.screen.borrow();
         match screen {
             Screen::Playing => self.leave_playback(),
-            Screen::Confirm | Screen::About | Screen::Notices | Screen::Kodi => {
-                self.show_settings()
-            }
+            Screen::Confirm | Screen::Notices | Screen::Kodi => self.show_settings(),
             // Every wizard screen leaves the wizard rather than stepping back
             // through it. Nothing has been written until Configure, so this
             // is the same as pressing Cancel, which is what Escape should
@@ -6520,8 +6523,7 @@ impl App {
             Item::SubtitleSize => "Subtitle Size".to_string(),
             Item::SubtitleFont => "Subtitle Font".to_string(),
             Item::Kodi => "Kodi".to_string(),
-            Item::About => "About TinePlayer".to_string(),
-            Item::Notices => "Third Party Notices".to_string(),
+            Item::Notices => "Third-Party Notices".to_string(),
         }
     }
 
@@ -6637,9 +6639,46 @@ impl App {
         // The right-hand pane, rebuilt in place when the category changes
         // rather than by rebuilding the screen: the cursor is in the column on
         // the left at that moment, and rebuilding around it would take it away.
+        // The list comes out of its scroller so a block of text can sit above
+        // it inside the same one, which is what makes the two scroll together.
+        // Taken out first: `gtk_box_append` refuses a widget that still has a
+        // parent, and says so only in a log nobody is reading.
+        let scroller = list
+            .parent()
+            .and_then(|viewport| viewport.parent())
+            .and_downcast::<gtk::ScrolledWindow>();
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        if let Some(scroller) = scroller.as_ref() {
+            scroller.set_child(None::<&gtk::Widget>);
+            let column = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .build();
+            column.append(&body);
+            column.append(&list);
+            scroller.set_child(Some(&column));
+            // What the arrows move when there is text rather than rows to move
+            // through - see `reading_about`, which decides when that is.
+            *self.about_scroll.borrow_mut() = Some(scroller.vadjustment());
+        }
+
         let fill: Rc<Fill> = {
             let list = list.clone();
+            let body = body.clone();
             Rc::new(move |app: &Rc<Self>| {
+                // What this category says for itself, before its rows.
+                while let Some(child) = body.first_child() {
+                    body.remove(&child);
+                }
+                *app.settings_body.borrow_mut() = match app.settings_category.get() {
+                    Category::About => {
+                        let text = app.about_body();
+                        body.append(&text);
+                        Some(text)
+                    }
+                    _ => None,
+                };
                 while let Some(row) = list.row_at_index(0) {
                     list.remove(&row);
                 }
@@ -6927,6 +6966,13 @@ impl App {
             true => self.set_nav(Some(&list), std::slice::from_ref(&back), &[]),
             false => self.set_nav(Some(&categories), std::slice::from_ref(&back), &[]),
         }
+        // After `set_nav`, which clears it: that is how a screen without
+        // selectable text is sure of not leaving the last one's behind.
+        *self.copy_root.borrow_mut() = self
+            .settings_body
+            .borrow()
+            .clone()
+            .map(|body| body.upcast());
         // Rewritten after `set_nav`, which builds the order from the one list
         // it was given. Tab should reach both, in the order they are read.
         *self.nav_stops.borrow_mut() = vec![back.upcast(), categories.upcast(), list.upcast()];
@@ -7002,7 +7048,6 @@ impl App {
         match item {
             Item::ClearData => self.confirm_clear_data(),
             Item::Kodi => self.show_kodi(),
-            Item::About => self.show_about(),
             Item::Notices => self.show_notices(),
             Item::UpdateStatus => self.open_release_page(),
             _ => {}
@@ -7476,11 +7521,55 @@ impl App {
     /// licenses of the work TinePlayer is built on ask to be acknowledged
     /// somewhere a person can find them. A packaged application with no About
     /// page has nowhere to put either.
-    fn show_about(self: &Rc<Self>) {
-        let (page, scroller, body, back) = text_page("About");
+    /// What About says, as a block of widgets rather than a screen.
+    ///
+    /// It was a screen reached from a row, which put the version, the license
+    /// and where the settings file lives two steps and a page transition away
+    /// from a viewer looking for exactly those things. The About category
+    /// shows this directly, with the notices below it as the one row.
+    fn about_body(self: &Rc<Self>) -> gtk::Box {
+        let px = |base: f64| (base * self.scale.get()).round() as i32;
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(12.0))
+            // Room of its own inside the panel. Prose against the edge of a
+            // box reads as something that overflowed into it, where the rows
+            // below have their own padding and look placed.
+            .margin_top(px(ABOUT_INSET))
+            .margin_bottom(px(ABOUT_INSET))
+            .margin_start(px(ABOUT_INSET))
+            .margin_end(px(ABOUT_INSET))
+            .build();
 
-        let version = format!("TinePlayer {}", env!("CARGO_PKG_VERSION"));
-        body.append(&about_heading(&version));
+        // The mark beside the name, which is the one place in the application
+        // that says which player this is in so many words.
+        let title = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(px(14.0))
+            .build();
+        // Larger than the one in the corner of a header, which shares a fixed
+        // slot with the back arrow and is sized to it. Here it stands beside
+        // the application's name and is the only picture on the page.
+        let mark = logo_image(self.scale.get());
+        mark.set_pixel_size(px(ABOUT_LOGO));
+        // Both centered against each other, or the mark hangs above a line of
+        // text half its height.
+        mark.set_valign(gtk::Align::Center);
+        let name = about_heading(&format!("TinePlayer {}", env!("CARGO_PKG_VERSION")));
+        name.add_css_class("tp-about-title");
+        name.set_valign(gtk::Align::Center);
+        title.append(&mark);
+        title.append(&name);
+        body.append(&title);
+
+        // What it is, before what it is made of. Everything else on this page
+        // assumes you already know, which is no use to somebody who has
+        // inherited the machine it is installed on.
+        body.append(&about_heading("Watch together, in different languages."));
+        body.append(&about_text(
+            "A player that allows people to watch videos together while hearing separate soundtracks.",
+        ));
+
         body.append(&about_text(
             "Free software under the MIT License, Copyright (c) 2026 Scott Bounds. You may use, change and pass it on, provided the copyright notice travels with it. It comes with no warranty of any kind.",
         ));
@@ -7490,57 +7579,68 @@ impl App {
         // where a domain we own can simply be pointed somewhere else. It is
         // also shorter to read from across a room and possible to type from
         // memory, which a full GitHub path is not.
-        //
-        // The deeper links below stay on github.com. Domain forwarding
-        // carries the root and not the path, so sending those through it
-        // would land people on the front page instead of the file named.
         body.append(&about_link(
             "Report issues or check for updates at",
             "https://tineplayer.app",
             "tineplayer.app",
-            Address::Inline,
         ));
 
+        // The attribution without the numbers, which are worth stating exactly
+        // and are stated below where they can be read off rather than picked
+        // out of a sentence.
         body.append(&about_heading("Built with"));
+        body.append(&about_text(
+            "GStreamer and GTK, both free software under the GNU Lesser General Public License.",
+        ));
+        // Pointed at the copy in hand rather than at the one on the web. The
+        // notices are compiled into the binary and sit one row below this, and
+        // the machines this player is built for are televisions where opening
+        // a browser is not something a D-pad does well.
+        body.append(&about_text(
+            "Also the work of a good many people writing Rust libraries, all attributed under Third-Party Notices below.",
+        ));
+
+        // What a bug report needs, in one place and readable off the screen.
+        //
+        // The renderer earns its line here. GTK picks one for the machine, and
+        // the same drawing can come out differently on two of them - a blend
+        // node this application used to draw its backdrop with looked right on
+        // Windows and was all but invisible on a Raspberry Pi, which is a
+        // difference nobody can report without being told what to look at.
+        body.append(&about_heading("App Details"));
+        // One label rather than a line each, so a single drag takes the lot.
+        // Every paragraph on this page holds its own selection - GTK gives a
+        // label one, and labels do not share - so five lines could be copied
+        // only one at a time, which is the opposite of what somebody gathering
+        // them for a bug report needs.
+        //
+        // GStreamer is asked for its numbers rather than its version string,
+        // which begins with its own name and read as "GStreamer: GStreamer
+        // 1.28.5".
+        let (major, minor, micro, _) = gstreamer::version();
         body.append(&about_text(&format!(
-            "{} and GTK {}.{}.{}, both free software under the GNU Lesser General Public License.",
-            gstreamer::version_string(),
+            "TinePlayer: {}\nSystem: {} ({})\nGTK: {}.{}.{}\nGStreamer: {major}.{minor}.{micro}\nRenderer: {}",
+            env!("CARGO_PKG_VERSION"),
+            os_name(),
+            std::env::consts::ARCH,
             gtk::major_version(),
             gtk::minor_version(),
             gtk::micro_version(),
+            self.renderer_name(),
         )));
-        body.append(&about_link(
-            "Also the work of a good many people writing Rust libraries, all attributed here:",
-            "https://github.com/scottarius/TinePlayer/blob/main/THIRD-PARTY.md",
-            "https://github.com/scottarius/TinePlayer/THIRD-PARTY.md",
-            Address::OwnLine,
-        ));
+        body
+    }
 
-        body.append(&about_heading("Where things are kept"));
-        for (label, path) in [
-            ("Settings", crate::config::config_path()),
-            ("Saved positions", crate::config::positions_path()),
-        ] {
-            body.append(&about_text(&format!("{label}: {}", path.display())));
-        }
-
-        {
-            let app = self.clone();
-            back.connect_clicked(move |_| {
-                app.sounds.borrow().click();
-                app.show_settings();
-            });
-        }
-
-        // No list to move through, so up and down scroll the page instead.
-        // Without this the only way down a page longer than the screen would
-        // be a mouse, on an interface built not to need one.
-        self.set_nav(None, std::slice::from_ref(&back), &[]);
-        *self.about_scroll.borrow_mut() = Some(scroller.vadjustment());
-        *self.copy_root.borrow_mut() = Some(body.upcast());
-        *self.screen.borrow_mut() = Screen::About;
-        self.window.set_child(Some(&page));
-        back.grab_focus();
+    /// Which of GTK's renderers is drawing this window.
+    ///
+    /// Read from the window rather than from `GSK_RENDERER`, which names only
+    /// what was asked for: unset is the ordinary case, and a request GTK could
+    /// not honour falls back to another without saying so.
+    fn renderer_name(&self) -> String {
+        self.window
+            .renderer()
+            .map(|renderer| renderer.type_().name().to_string())
+            .unwrap_or_else(|| "not yet drawn".to_string())
     }
 
     /// The notices for everything TinePlayer is built from, in the
@@ -7557,9 +7657,28 @@ impl App {
     /// whichever way TinePlayer was installed, and cannot be separated from
     /// the thing it describes.
     fn show_notices(self: &Rc<Self>) {
-        let (page, scroller, body, back) = text_page("Third Party Notices");
+        let px = |base: f64| (base * self.scale.get()).round() as i32;
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(20.0))
+            .margin_top(px(28.0))
+            .margin_bottom(px(28.0))
+            .margin_start(px(32.0))
+            .margin_end(px(32.0))
+            .build();
+        page.append(&heading_label("Third-Party Notices"));
 
-        let blocks = notices_blocks(include_str!("../THIRD-PARTY.md"));
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(10.0))
+            .build();
+        let mut blocks = notices_blocks(include_str!("../THIRD-PARTY.md"));
+        // The file's own title, which the dialog says above this already. Read
+        // as a file it belongs there; read here it is the same three words
+        // twice, an inch apart.
+        if matches!(blocks.first(), Some(Notice::Heading(_))) {
+            blocks.remove(0);
+        }
         let last = blocks.len().saturating_sub(1);
         for (index, block) in blocks.into_iter().enumerate() {
             let widget = match block {
@@ -7571,30 +7690,55 @@ impl App {
             // as another entry. A heading would be too much for one sentence;
             // the space is enough to separate it.
             if index == last {
-                widget.set_margin_top((24.0 * self.scale.get()).round() as i32);
-                // And room under it, so scrolling to the end stops with the
-                // last line clear of the edge rather than against it.
-                widget.set_margin_bottom((32.0 * self.scale.get()).round() as i32);
+                widget.set_margin_top(px(24.0));
             }
             body.append(&widget);
         }
 
+        // Two hundred crates will not fit on any screen, so the dialog keeps
+        // to a share of the window and the list scrolls inside it.
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&body)
+            .build();
+        scroller.set_focusable(false);
+        let height = (self.window.height() as f64 * NOTICES_SHARE).round() as i32;
+        scroller.set_max_content_height(height.max(px(320.0)));
+        scroller.set_propagate_natural_height(true);
+        // And a width, which the height alone does not give: the text wraps,
+        // so its natural width is whatever the longest unwrapped line happens
+        // to be, and left to that the dialog spans the window. A line of prose
+        // is read at a comfortable length or not at all.
+        scroller.set_propagate_natural_width(true);
+        scroller.set_max_content_width(px(NOTICES_WIDTH));
+        page.set_halign(gtk::Align::Center);
+        page.append(&scroller);
+
+        let close = gtk::Button::with_label("Close");
+        close.add_css_class("tp-button");
+        close.set_halign(gtk::Align::Center);
+        page.append(&close);
         {
             let app = self.clone();
-            back.connect_clicked(move |_| {
+            close.connect_clicked(move |_| {
                 app.sounds.borrow().click();
                 app.show_settings();
             });
         }
 
-        // The same arrangement the About page uses: nothing to select, so up
-        // and down scroll instead.
-        self.set_nav(None, std::slice::from_ref(&back), &[]);
+        // Over the settings rather than in place of them: the notices are
+        // something looked up and dismissed, and the screen they were reached
+        // from is still where the viewer was.
+        //
+        // Nothing to select, so up and down scroll instead - the arrangement
+        // the About text uses beside it.
+        self.set_nav(None, std::slice::from_ref(&close), &[]);
         *self.about_scroll.borrow_mut() = Some(scroller.vadjustment());
         *self.copy_root.borrow_mut() = Some(body.upcast());
         *self.screen.borrow_mut() = Screen::Notices;
-        self.window.set_child(Some(&page));
-        back.grab_focus();
+        self.window.set_child(Some(&self.modal(&page)));
+        close.grab_focus();
     }
 
     /// Copies whatever is selected on the screen being shown, and says
@@ -7636,8 +7780,22 @@ impl App {
 
     /// Moves the About page when there is nothing to select on it. Says
     /// whether it did, so ordinary navigation can carry on elsewhere.
+    /// Whether what is on screen is a page of text with no rows to move
+    /// through, so the arrows should scroll it instead.
+    ///
+    /// The About text no longer has a screen of its own - it is a block above
+    /// the notices row in the settings pane - so this asks where the keyboard
+    /// is as well as which screen it is. In the column of categories the
+    /// arrows are moving between categories and must not scroll anything.
+    fn reading_about(&self) -> bool {
+        *self.screen.borrow() == Screen::Notices
+            || (self.on_settings()
+                && self.in_settings_pane.get()
+                && self.settings_category.get() == Category::About)
+    }
+
     fn scroll_about(&self, delta: i32) -> bool {
-        if *self.screen.borrow() != Screen::About {
+        if !self.reading_about() {
             return false;
         }
         let Some(adjustment) = self.about_scroll.borrow().clone() else {
@@ -7651,9 +7809,9 @@ impl App {
         true
     }
 
-    /// The same for Home and End, which the About page has no rows to give to.
+    /// The same for Home and End, on the pages with no rows to give them to.
     fn scroll_about_edge(&self, end: bool) -> bool {
-        if *self.screen.borrow() != Screen::About {
+        if !self.reading_about() {
             return false;
         }
         let Some(adjustment) = self.about_scroll.borrow().clone() else {
@@ -9735,6 +9893,34 @@ const CORNER_MARK_PX: f64 = 26.0;
 /// across and 67% down - so a size set by eye against the icons that came
 /// before was mostly padding, and the marks came out small however large the
 /// number grew.
+/// The operating system, written as people write it. `std::env::consts::OS`
+/// answers in lowercase identifiers - "macos", "windows" - which read as a
+/// build target rather than as a machine.
+fn os_name() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
+/// How much room the About text keeps inside its panel, in interface units.
+const ABOUT_INSET: f64 = 18.0;
+
+/// The mark beside the application's name on the About page, in interface
+/// units.
+const ABOUT_LOGO: f64 = 46.0;
+
+/// How tall the notices are allowed to grow before they scroll, as a share of
+/// the window. A dialog is a thing on top of a screen, and one that reaches
+/// the edges is a screen wearing a border.
+const NOTICES_SHARE: f64 = 0.8;
+
+/// How wide the notices dialog is allowed to get, in interface units. About
+/// the length of line prose is comfortable to read.
+const NOTICES_WIDTH: f64 = 900.0;
+
 /// How wide the settings screen's column of categories is, in interface
 /// units. Fixed rather than sized to its contents, so the pane beside it does
 /// not move when the longest category name changes.
@@ -10183,28 +10369,6 @@ fn notices_blocks(source: &str) -> Vec<Notice> {
     blocks
 }
 
-/// A page of prose rather than of rows, for the one screen that is read
-/// instead of navigated.
-fn text_page(title: &str) -> (gtk::Box, gtk::ScrolledWindow, gtk::Box, gtk::Button) {
-    let (page, list, back, _slot) = list_page(title, true);
-    // The list that came with the page is not wanted here, but the header,
-    // the back button and the margins are: taking the page apart is less
-    // duplication than building a second one that has to be kept in step.
-    if let Some(scroller) = page
-        .last_child()
-        .and_then(|w| w.downcast::<gtk::ScrolledWindow>().ok())
-    {
-        list.unparent();
-        let body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(16)
-            .build();
-        scroller.set_child(Some(&body));
-        return (page, scroller, body, back);
-    }
-    unreachable!("list_page always ends in its scroller");
-}
-
 /// A heading within a page of prose. Named rather than styled inline so the
 /// About page reads as a document rather than as a form.
 fn about_heading(text: &str) -> gtk::Label {
@@ -10218,26 +10382,19 @@ fn about_heading(text: &str) -> gtk::Label {
 }
 
 /// Where the address sits in relation to the sentence introducing it.
-enum Address {
-    /// Finishing the sentence, for one short enough to take in at a glance.
-    Inline,
-    /// On a line of its own. A long address is read character by character,
-    /// and one wrapped mid-way through a paragraph is hard to pick back out
-    /// of it.
-    OwnLine,
-}
-
 /// A line ending in a link that opens in the machine's browser. The address
 /// is shown as written rather than hidden behind words, since on a screen
 /// nobody can click there is still a use in being able to read it out.
-fn about_link(lead: &str, href: &str, shown: &str, place: Address) -> gtk::Label {
+///
+/// Always on the same line as the sentence introducing it. There was a second
+/// arrangement that put a long address on a line of its own, because one read
+/// character by character is hard to pick back out of a wrapped paragraph -
+/// and the only long address has gone, the notices it pointed at now being a
+/// row directly below rather than a page on the web.
+fn about_link(lead: &str, href: &str, shown: &str) -> gtk::Label {
     let label = about_text("");
-    let separator = match place {
-        Address::Inline => " ",
-        Address::OwnLine => "\n",
-    };
     label.set_markup(&format!(
-        "{}{separator}<a href=\"{}\">{}</a>",
+        "{} <a href=\"{}\">{}</a>",
         glib::markup_escape_text(lead),
         glib::markup_escape_text(href),
         glib::markup_escape_text(shown),
@@ -11087,6 +11244,12 @@ fn style_css(scale: f64) -> String {
             font-weight: bold;
             margin-top: {pad_v}px;
         }}
+        /* The name at the top of About, which opens the page and so has
+           nothing above it to be spaced from. The margin every other heading
+           carries is inside the label's own box, so centering it against the
+           mark beside it centered the margin too and left the text sitting
+           low by exactly that much. */
+        .tp-about-title {{ margin-top: 0; }}
         /* Every button in the interface: one size, one padding, one corner.
            The corner matches a menu row's, so a button and the rows it sits
            over read as parts of one page. */
@@ -11959,7 +12122,7 @@ mod settings_rows {
         // to place it fails here instead of at a glance. Twenty-six rather
         // than the twenty-one variants of `Item`: the five an output has are
         // placed once for each output.
-        assert_eq!(all.len(), 26);
+        assert_eq!(all.len(), 25);
     }
 
     /// The version sits under the switch that decides whether anything is

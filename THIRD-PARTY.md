@@ -1,4 +1,4 @@
-# Third-party notices
+# Third-Party Notices
 
 TinePlayer includes and depends on open source work by other people. This file
 lists it and the terms it is provided under.
