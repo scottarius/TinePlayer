@@ -112,6 +112,16 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
 
+      # The runner ships with aws/tap preinstalled, and Homebrew now refuses
+      # to use an untrusted tap - printing a screen of explanation on every
+      # brew call to say so. Nothing here comes from that tap, so it is noise
+      # rather than a failure, but a wall of warning text is what a real
+      # message hides behind, and the GTK build below is one whose output has
+      # to be readable. Untapped rather than HOMEBREW_NO_REQUIRE_TAP_TRUST,
+      # which is broader and switches off a check Homebrew is making mandatory.
+      - name: Quiet the untrusted tap warning
+        run: brew untap aws/tap || true
+
       - name: Install dependencies
         run: |
           chmod +x setup-mac.sh
