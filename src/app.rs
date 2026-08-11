@@ -5212,14 +5212,23 @@ impl App {
         let page = self.browser_page(&directory, mode);
         let entries = browser_entries(&directory, mode);
 
-        // The way out alone in the middle. Choosing here is opening a video,
-        // which the rows themselves do.
+        // The two things done with a selection, together in the middle, in
+        // the order every other pair in the application uses: the way out
+        // first, then the action. Opening the system browser stays off to one
+        // side, being a way out of this screen rather than a use of it.
+        let choices = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing((24.0 * self.scale.get()).round() as i32)
+            .build();
+        choices.append(&page.cancel);
+        choices.append(&page.open);
+
         let footer = gtk::CenterBox::new();
         footer.set_start_widget(Some(&page.browse));
-        footer.set_center_widget(Some(&page.cancel));
+        footer.set_center_widget(Some(&choices));
         page.page.append(&footer);
 
-        fill_browser_list(&page.list, &entries);
+        fill_browser_list(&page.list, &entries, self.scale.get());
 
         {
             let app = self.clone();
@@ -5262,6 +5271,33 @@ impl App {
             let app = self.clone();
             page.cancel.connect_clicked(move |_| app.go_back());
         }
+        // The button does what a double click does, by asking the list to
+        // activate the row rather than repeating what activation means. One
+        // description of what opening a row is, in the handler above.
+        {
+            let list = page.list.clone();
+            page.open.connect_clicked(move |_| {
+                if let Some(row) = list.selected_row() {
+                    list.emit_by_name::<()>("row-activated", &[&row]);
+                }
+            });
+        }
+        // Off unless a file is selected. Not a folder, which a double click
+        // or Enter still steps into - the button is for choosing the thing
+        // this screen exists to choose, and a folder is not it. Not the way
+        // up, and not the notice a folder with nothing in it shows, which is
+        // a row like any other to GTK.
+        {
+            let open = page.open.clone();
+            let openable: Vec<bool> = entries.iter().map(|entry| entry.openable).collect();
+            page.list.connect_row_selected(move |_, row| {
+                let selected = row
+                    .map(|row| row.index() as usize)
+                    .and_then(|index| openable.get(index).copied())
+                    .unwrap_or(false);
+                open.set_sensitive(selected);
+            });
+        }
 
         {
             let mut config = self.config.borrow_mut();
@@ -5271,7 +5307,79 @@ impl App {
 
         // The trail alone now that the arrow has gone: left from the current
         // folder simply walks back up it.
-        self.wire_navigation(&page.list, &page.crumbs, std::slice::from_ref(&page.cancel));
+        // Typing a letter jumps to the first name that begins with it, which
+        // is how a folder of two hundred films is reached without holding an
+        // arrow key. Attached here rather than to every list: the browser is
+        // the one screen whose rows are named by something other than us, and
+        // so the one where a name cannot be predicted.
+        {
+            let labels: Vec<String> = entries
+                .iter()
+                .map(|entry| entry.label.trim().to_lowercase())
+                .collect();
+            let list = page.list.clone();
+            let app = self.clone();
+            // What was typed last, so a repeat of it can be told from a new
+            // letter. Held by the controller rather than the application: it
+            // belongs to this listing and is meaningless once it is gone.
+            let last: RefCell<Option<String>> = RefCell::new(None);
+            let controller = gtk::EventControllerKey::new();
+            controller.connect_key_pressed(move |_, key, _, state| {
+                // Nothing with a modifier on it: those are shortcuts, and
+                // Ctrl+C on a browser row should stay Ctrl+C. Shift is let
+                // through, being how a capital arrives.
+                if state.intersects(
+                    gdk::ModifierType::CONTROL_MASK
+                        | gdk::ModifierType::ALT_MASK
+                        | gdk::ModifierType::META_MASK,
+                ) {
+                    return glib::Propagation::Proceed;
+                }
+                let Some(typed) = key.to_unicode().filter(|c| c.is_alphanumeric()) else {
+                    return glib::Propagation::Proceed;
+                };
+                let typed = typed.to_lowercase().to_string();
+                // The same letter again walks on to the next name that starts
+                // with it, wrapping at the end; a different letter starts from
+                // the top. Without that, a folder holding a dozen films
+                // beginning with "The" would answer every press with the same
+                // row and look as though the key had done nothing.
+                let again = last.borrow().as_deref() == Some(typed.as_str());
+                *last.borrow_mut() = Some(typed.clone());
+                let from = match again {
+                    true => list
+                        .selected_row()
+                        .map_or(0, |row| row.index() as usize + 1),
+                    false => 0,
+                };
+                let matching = |offset: usize| {
+                    let index = (from + offset) % labels.len().max(1);
+                    labels
+                        .get(index)
+                        .filter(|label| label.starts_with(&typed))
+                        .map(|_| index)
+                };
+                let Some(index) = (0..labels.len()).find_map(matching) else {
+                    // Nothing starts with it. Swallowed all the same, so a
+                    // stray letter cannot fall through to whatever else on the
+                    // screen might answer it.
+                    return glib::Propagation::Stop;
+                };
+                if let Some(row) = list.row_at_index(index as i32) {
+                    app.sounds.borrow().click();
+                    list.select_row(Some(&row));
+                    settle_on(&row);
+                }
+                glib::Propagation::Stop
+            });
+            page.list.add_controller(controller);
+        }
+
+        self.wire_navigation(
+            &page.list,
+            &page.crumbs,
+            &[page.cancel.clone(), page.open.clone()],
+        );
         self.remember_origin();
         *self.screen.borrow_mut() = Screen::Browser;
         self.window.set_child(Some(&self.modal(&page.page)));
@@ -5323,8 +5431,11 @@ impl App {
             .build();
         // Larger than the lettering beside it: at this size the icon is what
         // the eye finds first, and the words only confirm it.
-        let browse_icon = gtk::Image::from_icon_name("folder-symbolic");
-        browse_icon.set_pixel_size((24.0 * self.scale.get()).round() as i32);
+        // The same folder the rows are drawn with, so the button that opens
+        // another browser is marked with what it opens - smaller than in a
+        // row, where it stands alone against a name; here it sits beside a
+        // line of text on a button and should not outweigh it.
+        let browse_icon = RowIcon::Folder.image_at(BUTTON_FOLDER_PX, self.scale.get());
         browse_face.append(&browse_icon);
         browse_face.append(&gtk::Label::new(Some("Open System Browser")));
         let browse = gtk::Button::builder().child(&browse_face).build();
@@ -5347,14 +5458,35 @@ impl App {
             });
         }
 
+        // What a click used to do on its own. A single click selects now, so
+        // there has to be something a pointer can press to act on what it
+        // selected - a double click is the shortcut, not the only way.
+        let open = gtk::Button::with_label("Open");
+        open.add_css_class("tp-button");
+        open.add_css_class("tp-action");
+        // Nothing is selected until the list is filled, and a row that opens
+        // nothing leaves it off again. See `follow_open`.
+        open.set_sensitive(false);
+
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("tp-button");
+
+        // A click selects; it takes a second one to open. Set here rather than
+        // on each screen, so the file browser and the folder chooser cannot
+        // come to disagree about what a click does.
+        //
+        // The keyboard is untouched by it. GtkListBox emits `row-activated` on
+        // a double click and on Enter either way, and Enter here goes through
+        // `activate_focused`, which emits it by hand - so every handler is
+        // reached exactly as it was.
+        list.set_activate_on_single_click(false);
 
         BrowserPage {
             page,
             list,
             crumbs: crumb_buttons,
             browse,
+            open,
             cancel,
         }
     }
@@ -7542,7 +7674,7 @@ impl App {
         footer.set_center_widget(Some(&buttons));
         page.page.append(&footer);
 
-        fill_browser_list(&page.list, &entries);
+        fill_browser_list(&page.list, &entries, self.scale.get());
 
         {
             let app = self.clone();
@@ -9084,6 +9216,31 @@ pub fn settings_image(size: f64) -> gtk::Image {
 /// scaling. One number for both, so they cannot drift apart.
 const CORNER_MARK_PX: f64 = 26.0;
 
+/// The mark beside a name in the file browser, in interface units: the height
+/// of the box a file mark is drawn into.
+///
+/// The marks are cropped to their ink before they are bundled, which is what
+/// makes one number mean the same thing for all of them. Drawn as exported
+/// they carried a wide empty margin - the page shape filled 54% of its canvas
+/// across and 67% down - so a size set by eye against the icons that came
+/// before was mostly padding, and the marks came out small however large the
+/// number grew.
+const ROW_MARK_PX: f64 = 34.0;
+
+/// The same, for a folder in a listing. A little smaller: a folder is a wide
+/// shape where a page is a tall one, so an equal box fills more of the line
+/// with ink and puts the folders ahead of the files in a list that is mostly
+/// files.
+const FOLDER_MARK_PX: f64 = 29.0;
+
+/// The folder on the button that opens the system browser, which is smaller
+/// again: a mark beside a line of text rather than one standing on its own.
+const BUTTON_FOLDER_PX: f64 = 24.0;
+
+/// How wide the marks' column is, whichever mark is in it. Wide enough for the
+/// broadest of them with a little air, so the names line up down the list.
+const MARK_COLUMN_PX: f64 = 32.0;
+
 /// The triangle on the play button, and the arrow on restart.
 ///
 /// White under either theme, because both sit on the blue button rather than
@@ -9988,6 +10145,7 @@ struct BrowserPage {
     list: gtk::ListBox,
     crumbs: Vec<gtk::Button>,
     browse: gtk::Button,
+    open: gtk::Button,
     cancel: gtk::Button,
 }
 
@@ -9995,8 +10153,11 @@ struct BrowserPage {
 /// and how it reads aloud. A path of `None` is the way up.
 #[derive(Clone)]
 struct BrowserEntry {
+    /// Whether the Open button acts on this row: a file, rather than a folder,
+    /// the way up, or a notice.
+    openable: bool,
     label: String,
-    icon: &'static str,
+    icon: RowIcon,
     path: Option<std::path::PathBuf>,
     spoken: String,
     /// Something to read rather than somewhere to go: the line saying a
@@ -10018,7 +10179,7 @@ fn empty_backdrop() -> gtk::Box {
 /// A notice drawn like an entry invites being chosen, and choosing it walked
 /// back up a level - which reads as a broken listing rather than as an empty
 /// folder. Centred, dimmer, without an icon, and passed over by the cursor.
-fn fill_browser_list(list: &gtk::ListBox, entries: &[BrowserEntry]) {
+fn fill_browser_list(list: &gtk::ListBox, entries: &[BrowserEntry], scale: f64) {
     for entry in entries {
         if entry.notice {
             let label = gtk::Label::new(Some(&entry.label));
@@ -10031,7 +10192,11 @@ fn fill_browser_list(list: &gtk::ListBox, entries: &[BrowserEntry]) {
                 row.set_activatable(false);
             }
         } else {
-            append_named(list, &browser_row(entry.icon, &entry.label), &entry.spoken);
+            append_named(
+                list,
+                &browser_row(entry.icon, &entry.label, scale),
+                &entry.spoken,
+            );
         }
     }
 }
@@ -10056,8 +10221,9 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
         // is punctuation and says nothing, so the spoken name says where it
         // goes instead.
         entries.push(BrowserEntry {
+            openable: false,
             label: "..".to_string(),
-            icon: "folder-symbolic",
+            icon: RowIcon::Folder,
             path: None,
             spoken: match parent.file_name() {
                 Some(name) => format!("Up to {}", name.to_string_lossy()),
@@ -10070,15 +10236,17 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
         if mode.folders_only() && !entry.is_dir {
             continue;
         }
-        // A play mark rather than a generic video one: that icon is not in
-        // this theme and fell back to the missing-image glyph, which reads as
-        // a warning about the file itself.
-        let icon = if entry.is_dir {
-            "folder-symbolic"
-        } else {
-            "media-playback-start-symbolic"
+        // Which mark a file gets follows what this screen is for: the same
+        // file is a video when a video is being chosen and a soundtrack when
+        // one is. Nothing here inspects the file itself, which would mean
+        // opening every one in the folder to draw a list.
+        let icon = match (entry.is_dir, mode) {
+            (true, _) => RowIcon::Folder,
+            (false, Browse::Audio) => RowIcon::Audio,
+            (false, _) => RowIcon::Video,
         };
         entries.push(BrowserEntry {
+            openable: !entry.is_dir,
             label: entry.label.clone(),
             icon,
             path: Some(entry.path),
@@ -10096,8 +10264,9 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
     // is why this never appeared before.
     if mode == Browse::Videos && entries.iter().all(|entry| entry.path.is_none()) {
         entries.push(BrowserEntry {
+            openable: false,
             label: "Nothing here".to_string(),
-            icon: "",
+            icon: RowIcon::None,
             path: None,
             spoken: "Nothing here".to_string(),
             notice: true,
@@ -10106,12 +10275,67 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
     entries
 }
 
-/// A browser row: an icon from the desktop's own set, then the name.
+/// What a browser row draws beside its name.
+///
+/// The file marks are bundled rather than named from the desktop's icon set.
+/// The set is what a row used to ask for, and the theme decides what turns up:
+/// a generic video icon is absent from the Pi's theme entirely and fell back
+/// to the missing-image glyph, which reads as a warning about the file. These
+/// three are the same on every machine.
+///
+/// The folder is bundled with them. It could have stayed the theme's - a
+/// folder is the one icon every theme has - but then one mark in a column of
+/// four would be drawn in somebody else's hand, and which one would depend on
+/// the machine.
+#[derive(Clone, Copy, PartialEq)]
+enum RowIcon {
+    Folder,
+    Video,
+    Audio,
+    /// Not reachable yet: there is no subtitle browser. Bundled with the other
+    /// two because it was drawn as one of a set of three, and a matching mark
+    /// found later is a mark that does not match.
+    #[allow(dead_code)]
+    Subtitle,
+    /// A notice rather than a file - "Nothing here" - which draws no mark.
+    None,
+}
+
+impl RowIcon {
+    /// The mark at the size a listing draws it.
+    fn image(self, scale: f64) -> gtk::Image {
+        let size = match self {
+            Self::Folder => FOLDER_MARK_PX,
+            _ => ROW_MARK_PX,
+        };
+        self.image_at(size, scale)
+    }
+
+    /// The mark at a size of the caller's choosing, for the places that are
+    /// not a row in a listing.
+    fn image_at(self, size: f64, scale: f64) -> gtk::Image {
+        const VIDEO: &[u8] = include_bytes!("../data/ui/file-video.png");
+        const AUDIO: &[u8] = include_bytes!("../data/ui/file-audio.png");
+        const SUBTITLE: &[u8] = include_bytes!("../data/ui/file-subtitle.png");
+        const FOLDER: &[u8] = include_bytes!("../data/ui/folder.png");
+
+        let bytes = match self {
+            Self::Video => VIDEO,
+            Self::Audio => AUDIO,
+            Self::Subtitle => SUBTITLE,
+            Self::Folder => FOLDER,
+            Self::None => return gtk::Image::new(),
+        };
+        marked_image(bytes, size * scale)
+    }
+}
+
+/// A browser row: a mark, then the name.
 ///
 /// Icons rather than emoji, because emoji depend on a color font being
 /// installed. The Pi has none, so a folder character rendered as an empty box
 /// with the codepoint inside it.
-fn browser_row(icon: &str, text: &str) -> gtk::Box {
+fn browser_row(icon: RowIcon, text: &str, scale: f64) -> gtk::Box {
     // The padding goes on the row rather than the label, so it applies
     // before the icon as well as around the text.
     //
@@ -10121,8 +10345,16 @@ fn browser_row(icon: &str, text: &str) -> gtk::Box {
         .css_classes(["tp-row"])
         .build();
 
-    let image = gtk::Image::from_icon_name(icon);
+    let image = icon.image(scale);
     image.add_css_class("tp-row-icon");
+    // A column of its own, the same width whatever is drawn in it, so every
+    // name in the list starts at the same place. The marks are cropped to
+    // their ink and no two are the same shape - a page is tall and narrow, a
+    // folder wide - so left to size themselves the folder rows and the file
+    // rows put their names a couple of pixels apart, which is the sort of
+    // thing that reads as sloppiness without being obvious enough to name.
+    image.set_size_request((MARK_COLUMN_PX * scale).round() as i32, -1);
+    image.set_halign(gtk::Align::Center);
     row.append(&image);
 
     let label = gtk::Label::new(Some(text));
@@ -10414,8 +10646,23 @@ fn style_css(scale: f64) -> String {
            to get out of the way. A GtkListBox and a GtkScrolledWindow both
            paint the theme's view background by default, which came out as an
            opaque slab over the backdrop in the shape of the list. */
-        .tp-menu, .tp-menu > row {{ background-color: transparent; }}
-        .tp-media scrolledwindow, .tp-media viewport {{ background-color: transparent; }}
+        /* Transparent only where something is meant to show through: the
+           media page, which has the film's backdrop behind it, and a selector,
+           which draws its own panel. Everywhere else a list keeps the theme's
+           own background, which is what sets it apart from the page around it.
+           
+           Written unscoped to begin with, and that took the ground out from
+           under every list in the application - the browser's two columns
+           merged into the page behind them, and there was no longer anything
+           to say where one ended. */
+        .tp-media .tp-menu, .tp-media .tp-menu > row,
+        .tp-selector .tp-menu, .tp-selector .tp-menu > row {{
+            background-color: transparent;
+        }}
+        .tp-media scrolledwindow, .tp-media viewport,
+        .tp-selector scrolledwindow, .tp-selector viewport {{
+            background-color: transparent;
+        }}
         /* The two marks in the corner are affordances rather than actions:
            no fill and no border until the pointer is on them, so they carry
            no weight beside the button the page is actually pointing at. */
