@@ -6783,14 +6783,18 @@ impl App {
             .spacing(px(16.0))
             .vexpand(true)
             .build();
-        for (pane, expand) in [
-            (categories_scroller.clone().upcast::<gtk::Widget>(), false),
-            (listing.clone(), true),
+        for (pane, expand, ground) in [
+            (
+                categories_scroller.clone().upcast::<gtk::Widget>(),
+                false,
+                "tp-bare",
+            ),
+            (listing.clone(), true, "tp-menu-panel"),
         ] {
             let panel = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
                 .hexpand(expand)
-                .css_classes(["tp-menu-panel"])
+                .css_classes([ground])
                 .build();
             panel.append(&pane);
             columns.append(&panel);
@@ -11165,19 +11169,28 @@ fn style_css(scale: f64) -> String {
            to get out of the way. A GtkListBox and a GtkScrolledWindow both
            paint the theme's view background by default, which came out as an
            opaque slab over the backdrop in the shape of the list. */
-        /* Transparent only where something is meant to show through: the
-           media page, which has the film's backdrop behind it, and a selector,
-           which draws its own panel. Everywhere else a list keeps the theme's
-           own background, which is what sets it apart from the page around it.
-           
+        /* Transparent only where something else is already drawing the ground:
+           a panel, a selector's own box, or the media page with the film's
+           backdrop behind it. Everywhere else a list keeps the theme's own
+           background, which is what sets it apart from the page around it.
+
            Written unscoped to begin with, and that took the ground out from
            under every list in the application - the browser's two columns
            merged into the page behind them, and there was no longer anything
-           to say where one ended. */
+           to say where one ended.
+
+           `.tp-menu-panel` earns its place here for the opposite reason: a
+           list inside a panel that painted its own background drew a grey box
+           within the black one, which reads as two panels where there is one.
+           `.tp-bare` is for a list standing on no ground at all. */
+        .tp-menu-panel .tp-menu, .tp-menu-panel .tp-menu > row,
+        .tp-bare .tp-menu, .tp-bare .tp-menu > row,
         .tp-media .tp-menu, .tp-media .tp-menu > row,
         .tp-selector .tp-menu, .tp-selector .tp-menu > row {{
             background-color: transparent;
         }}
+        .tp-menu-panel scrolledwindow, .tp-menu-panel viewport,
+        .tp-bare scrolledwindow, .tp-bare viewport,
         .tp-media scrolledwindow, .tp-media viewport,
         .tp-selector scrolledwindow, .tp-selector viewport {{
             background-color: transparent;
@@ -11252,6 +11265,11 @@ fn style_css(scale: f64) -> String {
             border-radius: {panel_radius}px;
             padding: {panel_pad}px;
         }}
+        /* No ground of its own, but the same inset as the panel beside it.
+           Without it the categories sat a few pixels above and to the left of
+           the settings they name, which reads as two lists that were laid out
+           separately rather than as one screen. */
+        .tp-bare {{ padding: {panel_pad}px; }}
         /* Gray rather than a theme color, so it lifts off the background in
            both light and dark without needing two rules. */
         .tp-menu > row:hover {{ background-color: rgba(128, 128, 128, 0.18); }}
