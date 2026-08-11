@@ -43,10 +43,17 @@ pub struct Sidecar {
     ///
     /// An episode's sidecar puts the episode's own name here, under a
     /// different root element, and is read without this having to know which
-    /// it got. Nothing here is series-aware: there is no show name, season or
-    /// episode number, which is a deliberate limit rather than an oversight.
+    /// it got. The show's own name is still not read: an episode is shown by
+    /// what it is called, not by what it belongs to.
     pub title: String,
     pub year: Option<u32>,
+    /// Which episode this is, where the sidecar says so: `<season>` and
+    /// `<episode>`, which only an `<episodedetails>` file carries. Both or
+    /// neither - a number without the other names nothing.
+    pub episode: Option<(u32, u32)>,
+    /// The day it first went out, from `<aired>`. Shown in place of the year
+    /// for an episode, that being the date anybody would recognise it by.
+    pub aired: String,
     /// The summary. `<plot>` where there is one, `<outline>` after it, which
     /// is the shorter form some scrapers write instead.
     pub plot: String,
@@ -188,6 +195,10 @@ pub fn parse(text: &str) -> Sidecar {
         year: number(&text, "year")
             .or_else(|| value(&text, "premiered").and_then(|date| date.get(..4)?.parse().ok()))
             .filter(|year| (1870..=2200).contains(year)),
+        // Both or neither. A file with one and not the other is telling us
+        // something it does not know, and "S01E00" is worse than nothing.
+        episode: number(&text, "season").zip(number(&text, "episode")),
+        aired: value(&text, "aired").unwrap_or_default(),
         plot,
         runtime_mins: number(&text, "runtime"),
         mpaa: certificate(&value(&text, "mpaa").unwrap_or_default()),
@@ -394,6 +405,39 @@ mod tests {
     </streamdetails>
   </fileinfo>
 </movie>"#;
+
+    /// An episode's sidecar, which uses a different root element and carries
+    /// two numbers no film has.
+    #[test]
+    fn reads_an_episode() {
+        let episode = parse(
+            "<episodedetails><title>The Constant</title><season>4</season>             <episode>5</episode><aired>2008-02-28</aired></episodedetails>",
+        );
+        assert_eq!(episode.title, "The Constant");
+        assert_eq!(episode.episode, Some((4, 5)));
+        assert_eq!(episode.aired, "2008-02-28");
+    }
+
+    /// One number without the other names nothing, so neither is taken.
+    #[test]
+    fn half_an_episode_number_is_no_episode_number() {
+        assert_eq!(
+            parse("<episodedetails><season>4</season></episodedetails>").episode,
+            None
+        );
+        assert_eq!(
+            parse("<episodedetails><episode>5</episode></episodedetails>").episode,
+            None
+        );
+    }
+
+    /// A film carries neither, and must not be made to look like an episode.
+    #[test]
+    fn a_film_has_no_episode_number() {
+        let film = parse("<movie><title>Supergirl</title><year>2026</year></movie>");
+        assert_eq!(film.episode, None);
+        assert!(film.aired.is_empty());
+    }
 
     #[test]
     fn reads_streams_in_order() {

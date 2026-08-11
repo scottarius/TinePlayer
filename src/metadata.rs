@@ -37,6 +37,12 @@ pub struct Details {
     /// metadata and is wrong often enough to be worse than the raw string.
     pub title: String,
     pub year: Option<u32>,
+    /// Which episode this is, where a sidecar said so. Only an episode's
+    /// sidecar carries it, so this is also how the page tells one from a film.
+    pub episode: Option<(u32, u32)>,
+    /// The day an episode first went out, ready to read. Empty for a film, and
+    /// for an episode whose sidecar did not say.
+    pub aired: String,
     pub plot: String,
     /// Certificate, already reduced to the short form - "PG-13".
     pub certificate: String,
@@ -226,6 +232,8 @@ pub fn resolve(source: &Source, media: &Media) -> Details {
         // at all - a library put it there on purpose - but it is still a file
         // name, and a sidecar or a container tag is a statement.
         year: sidecar.year.or(media.tags.year).or(named_year),
+        episode: sidecar.episode,
+        aired: aired(&sidecar.aired),
         plot,
         certificate: sidecar.mpaa.clone(),
         rating: sidecar.rating,
@@ -264,6 +272,47 @@ fn flowed(text: &str) -> String {
 /// release ends in things like "1080p.DTS" - so this takes off a final piece
 /// only when it is short and entirely letters or digits, which is what a
 /// container extension looks like and what "2024" or "Part 2" does not.
+/// A broadcast date as the page shows it: "September 22, 2004".
+///
+/// Sidecars write `<aired>` as an ISO date, which is unambiguous and not how
+/// anybody says a date out loud. Anything that is not one is handed back
+/// untouched rather than dropped - a date this does not recognise is still a
+/// date the file is telling us, and showing it as written beats showing
+/// nothing.
+fn aired(raw: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+
+    let raw = raw.trim();
+    let mut parts = raw.split('-');
+    let (Some(year), Some(month), Some(day), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return raw.to_string();
+    };
+    let (Ok(month), Ok(day)) = (month.parse::<usize>(), day.parse::<u32>()) else {
+        return raw.to_string();
+    };
+    match MONTHS.get(month.wrapping_sub(1)) {
+        Some(name) if year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("{name} {day}, {year}")
+        }
+        _ => raw.to_string(),
+    }
+}
+
 /// Splits the year a media library wrote onto the end of a file name off the
 /// rest of the name.
 ///
@@ -379,11 +428,8 @@ fn find_poster(video: &Path, sidecar: &crate::nfo::Sidecar, media: &Media) -> Op
     let named = ["-poster", "-thumb"]
         .iter()
         .map(|suffix| format!("{stem}{suffix}"));
-    // `folder.jpg` is what is actually on the library here, written by
-    // Jellyfin; `poster.jpg` is Kodi's name for the same thing.
-    let shared = ["poster", "folder", "cover"].iter().map(|s| s.to_string());
-
-    beside(folder, named.chain(shared))
+    beside(folder, named.chain(shared_poster_names()))
+        .or_else(|| climbed(folder, shared_poster_names))
         .or_else(|| stated(&sidecar.poster))
         // Cover art inside the container, which is the last thing left and
         // the only one that needs no file at all. Real files do carry it -
@@ -404,11 +450,73 @@ fn find_backdrop(video: &Path, sidecar: &crate::nfo::Sidecar) -> Option<Art> {
     let named = ["-fanart", "-backdrop"]
         .iter()
         .map(|suffix| format!("{stem}{suffix}"));
-    let shared = ["backdrop", "fanart", "background"]
-        .iter()
-        .map(|s| s.to_string());
 
-    beside(folder, named.chain(shared)).or_else(|| stated(&sidecar.fanart))
+    beside(folder, named.chain(shared_art_names()))
+        .or_else(|| climbed(folder, shared_art_names))
+        .or_else(|| stated(&sidecar.fanart))
+}
+
+/// The names a backdrop goes by when it belongs to the folder rather than to
+/// one video in it.
+fn shared_art_names() -> impl Iterator<Item = String> {
+    ["backdrop", "fanart", "background"]
+        .iter()
+        .map(|name| name.to_string())
+}
+
+/// The same, for a poster. `folder.jpg` is what is actually in the library
+/// here, written by Jellyfin; `poster.jpg` is Kodi's name for the same thing.
+fn shared_poster_names() -> impl Iterator<Item = String> {
+    ["poster", "folder", "cover"]
+        .iter()
+        .map(|name| name.to_string())
+}
+
+/// A picture belonging to the series, for an episode that has none of its own.
+///
+/// Episodes are read generically here - an episode's title, plot and year are
+/// its own, and nothing goes looking for a series to describe it by. Artwork
+/// is the exception, and only because of where libraries put it: the layout
+/// Kodi, Jellyfin and Emby share keeps a per-episode `.nfo` and thumbnail
+/// beside each file, and one backdrop for the whole series at its root. An
+/// episode therefore has no backdrop of its own to find, and the one meant for
+/// it is one or two folders up.
+///
+/// **It climbs only on evidence, and that is the whole difficulty.** A folder
+/// above a video is not a series root just because it is above it: point this
+/// at a film in a library whose top folder happens to hold a `fanart.jpg` and
+/// every film in it would be drawn against the same picture. So it climbs when
+/// the video's folder is named like a season, or when the folder above holds a
+/// `tvshow.nfo` - the file that says outright what that folder is.
+fn climbed<I>(folder: &Path, names: fn() -> I) -> Option<Art>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut here = folder;
+    // Two, which is as deep as the layout goes: series, season, episode.
+    for _ in 0..2 {
+        let above = here.parent()?;
+        if !is_season_folder(here) && !above.join("tvshow.nfo").is_file() {
+            return None;
+        }
+        if let Some(art) = beside(above, names()) {
+            return Some(art);
+        }
+        here = above;
+    }
+    None
+}
+
+/// Whether a folder is named the way libraries name a season.
+///
+/// Case-insensitive, and "Specials" counts: it is season zero by convention
+/// and sits beside the numbered ones.
+fn is_season_folder(folder: &Path) -> bool {
+    let Some(name) = folder.file_name().map(|name| name.to_string_lossy()) else {
+        return false;
+    };
+    let name = name.trim().to_lowercase();
+    name == "specials" || (name.starts_with("season") && name[6..].trim().parse::<u32>().is_ok())
 }
 
 /// The first of the candidate names that exists in the folder, tried against
@@ -454,6 +562,55 @@ pub fn load_image(art: &Art) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use super::aired;
+
+    /// The shape every sidecar writes, and the one a viewer reads.
+    #[test]
+    fn an_iso_date_is_read_out_in_words() {
+        assert_eq!(aired("2004-09-22"), "September 22, 2004");
+        assert_eq!(aired("2010-01-05"), "January 5, 2010");
+        assert_eq!(aired(" 1999-12-31 "), "December 31, 1999");
+    }
+
+    /// Anything else is handed back as written. A date this does not
+    /// understand is still a date the file is telling us, and showing it
+    /// as-is beats showing nothing.
+    #[test]
+    fn anything_else_is_left_alone() {
+        assert_eq!(aired("22 September 2004"), "22 September 2004");
+        assert_eq!(aired("2004-13-01"), "2004-13-01");
+        assert_eq!(aired("2004-09"), "2004-09");
+        assert_eq!(aired("2004-09-22-01"), "2004-09-22-01");
+        assert_eq!(aired(""), "");
+    }
+
+    use super::is_season_folder;
+    use std::path::Path;
+
+    /// The names libraries actually use for a season folder, and the one that
+    /// is a season without saying so.
+    #[test]
+    fn season_folders_are_recognized() {
+        assert!(is_season_folder(Path::new("/x/Season 01")));
+        assert!(is_season_folder(Path::new("/x/season 1")));
+        assert!(is_season_folder(Path::new("/x/SEASON 12")));
+        assert!(is_season_folder(Path::new("/x/Specials")));
+    }
+
+    /// Nothing else climbs. A film's own folder must not be mistaken for a
+    /// season, or every film in a library with a picture at its root would be
+    /// drawn against that picture.
+    #[test]
+    fn nothing_else_is_a_season() {
+        assert!(!is_season_folder(Path::new("/x/Seasons of Love")));
+        assert!(!is_season_folder(Path::new("/x/Season Finale")));
+        assert!(!is_season_folder(Path::new(
+            "/x/(500) Days of Summer (2009)"
+        )));
+        assert!(!is_season_folder(Path::new("/x/Movies")));
+        assert!(!is_season_folder(Path::new("/")));
+    }
+
     use super::split_year;
 
     /// The file this rule was written for, and the reason it is anchored to

@@ -3288,7 +3288,25 @@ impl App {
         // what the comps do and what keeps a line of three facts from reading
         // as a sentence.
         let mut facts: Vec<String> = Vec::new();
-        facts.extend(details.year.map(|year| year.to_string()));
+        // An episode says when it went out, in place of the year a film shows:
+        // a date is what anybody would recognise an episode by, where a year
+        // barely distinguishes it from the twenty others made alongside it.
+        // Only where the sidecar gave one - an episode without a date falls
+        // back to the year like anything else.
+        match (&details.aired, details.year) {
+            (aired, _) if !aired.is_empty() => facts.push(aired.clone()),
+            (_, Some(year)) => facts.push(year.to_string()),
+            _ => {}
+        }
+        // Beside the date rather than near the title: which episode this is
+        // belongs with the facts about it, and the title is the episode's own
+        // name. Two digits each, which is how everything else writes it and
+        // what makes a column of them line up.
+        facts.extend(
+            details
+                .episode
+                .map(|(season, episode)| format!("S{season:02}E{episode:02}")),
+        );
         facts.extend(details.runtime());
         if !details.certificate.is_empty() {
             facts.push(details.certificate.clone());
