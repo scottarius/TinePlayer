@@ -48,16 +48,40 @@ pub enum Registration {
 }
 
 impl Registration {
-    /// What this state is called, wherever it is shown. The same two names
-    /// the wizard offers when choosing, so that picking one and later reading
-    /// it back are plainly the same thing.
+    /// What this state is called where it is read rather than chosen: the
+    /// value against the Player Type row.
     pub fn describe(self) -> &'static str {
         match self {
-            Registration::Absent => "Not set up",
-            Registration::Offered => "Optional Player",
+            Registration::Absent => "Not configured",
+            Registration::Offered => "Additional Player",
             Registration::Default => "Default Player",
         }
     }
+
+    /// What this state is called as an entry in the Player Type chooser.
+    ///
+    /// Differs from [`describe`] in one place, and only when something is
+    /// already set up: "Not configured" is a state to be in, but nobody
+    /// *chooses* it - they remove what is there. So the entry says what
+    /// pressing it does, and the two other entries, which are states either
+    /// way, keep their names.
+    ///
+    /// [`describe`]: Registration::describe
+    pub fn choice(self, configured: bool) -> &'static str {
+        match (self, configured) {
+            (Registration::Absent, true) => "Remove configuration",
+            _ => self.describe(),
+        }
+    }
+
+    /// Every state, in the order the chooser offers them. Removal last: it is
+    /// the one entry that takes something away, which is where the settings
+    /// screen puts Clear Saved Playback Data for the same reason.
+    pub const ALL: [Registration; 3] = [
+        Registration::Default,
+        Registration::Offered,
+        Registration::Absent,
+    ];
 }
 
 /// How the Kodi we found was installed.
@@ -92,21 +116,25 @@ impl Confinement {
 
     /// Why not, for the one case where it is not.
     pub fn unsupported_reason(self) -> Option<&'static str> {
-        (!self.supported()).then_some("Cannot start other programs")
+        (!self.supported()).then_some("Snap installs do not support external players.")
     }
 
-    /// What to add after the version to tell one Kodi from another, or
-    /// `None` when there is nothing worth saying.
+    /// What to add after the version to tell one Kodi from another.
     ///
-    /// An ordinary install gets no qualifier: the point of this is to flag a
-    /// sandbox, which changes how Kodi has to start TinePlayer, and calling
-    /// the usual case "installed normally" labels a thing by the quality it
-    /// does not have.
-    pub fn describe(self) -> Option<&'static str> {
+    /// Every install gets a qualifier, including the ordinary one. That is a
+    /// deliberate change: each installation now heads its own group of rows,
+    /// and a run of headings where some are qualified and some are bare reads
+    /// as though the bare ones are missing something. "Standard" is also the
+    /// answer to the question the qualifier raises - having seen "(Flatpak)",
+    /// the next thing anyone wants to know is what the other one is.
+    ///
+    /// Note this is not the whole qualifier: a folder named by hand is called
+    /// "custom" whatever it holds, which [`Setup::label`] decides.
+    pub fn describe(self) -> &'static str {
         match self {
-            Confinement::None => None,
-            Confinement::Flatpak => Some("Flatpak"),
-            Confinement::Snap => Some("Snap"),
+            Confinement::None => "Default Installation",
+            Confinement::Flatpak => "Flatpak",
+            Confinement::Snap => "Snap",
         }
     }
 }
@@ -117,6 +145,9 @@ pub struct Setup {
     pub file: PathBuf,
     pub state: Registration,
     pub confinement: Confinement,
+    /// Whether our entry here starts the film or opens the menu. Meaningless
+    /// while `state` is `Absent`, and the row that shows it is disabled then.
+    pub play: bool,
     /// What Kodi calls itself here, when that could be found out. `None` is a
     /// perfectly good answer: see [`version_of`].
     pub version: Option<String>,
@@ -225,16 +256,18 @@ impl Setup {
             Some(version) => format!("Kodi {version}"),
             None => "Kodi".to_string(),
         };
-        // Whichever qualifier applies, and at most one: a folder chosen by
-        // hand is only worth mentioning when nothing more specific is.
-        let qualifier = self
-            .confinement
-            .describe()
-            .map(str::to_string)
-            .or_else(|| (!self.is_standard_location()).then(|| "custom".to_string()));
-        if let Some(qualifier) = qualifier {
-            label.push_str(&format!(" ({qualifier})"));
-        }
+        // Whichever qualifier applies, and at most one, in this order: how it
+        // was installed when that is worth flagging, then whether the folder
+        // was named by hand, then the ordinary case. A sandbox outranks
+        // "custom" because it changes how Kodi has to start us, which is worth
+        // more than where the folder came from - and "custom" outranks
+        // "standard", or a hand-named folder would claim to be one of the
+        // places TinePlayer looks by itself.
+        let qualifier = match self.confinement {
+            Confinement::None if !self.is_standard_location() => "Custom",
+            confinement => confinement.describe(),
+        };
+        label.push_str(&format!(" ({qualifier})"));
         label
     }
 
@@ -382,10 +415,25 @@ pub fn find_all(extra: &[PathBuf]) -> Vec<Setup> {
         found.push(setup_at(userdata));
     }
 
-    // A directory Kodi has actually run from has guisettings.xml in it,
-    // written on first shutdown. One that does not is most likely left behind
-    // by an uninstalled Kodi, so it sorts last: still offered, since it might
-    // be a fresh install nothing has run yet, but never the first suggestion.
+    // The ones Kodi has actually run from first, then the rest.
+    //
+    // A directory Kodi has run from has guisettings.xml in it, written on
+    // first shutdown. One that does not is most likely left behind by an
+    // uninstalled Kodi, so it sorts last: still listed, since it might be a
+    // fresh install nothing has started yet, but never the first thing read.
+    //
+    // **Deliberately not sorted by whether TinePlayer is set up in it**, which
+    // is what this did first, on the reasoning that a configured installation
+    // is the one somebody came to look at. It is, and it still must not sort
+    // by that: configuring one changes its key, so the group moved to the top
+    // of the pane at the moment it was configured and the group that had been
+    // there dropped below it. The write went to the right file and the screen
+    // said otherwise - it read exactly as though the setting had been applied
+    // to the wrong installation.
+    //
+    // Everything left in this key is a fact about the machine rather than
+    // about anything a viewer can change from this screen, which is the
+    // property that keeps a group still while it is being worked on.
     found.sort_by_key(|setup| !setup.looks_used());
     found
 }
@@ -395,31 +443,60 @@ pub fn find_all(extra: &[PathBuf]) -> Vec<Setup> {
 /// may be pointing at a Kodi they are about to install.
 pub fn setup_at(userdata: PathBuf) -> Setup {
     let file = userdata.join("playercorefactory.xml");
-    let state = match std::fs::read_to_string(&file) {
-        Ok(existing) => read_state(&existing),
-        Err(_) => Registration::Absent,
+    let existing = std::fs::read_to_string(&file).ok();
+    let state = match &existing {
+        Some(existing) => read_state(existing),
+        None => Registration::Absent,
     };
+    let play = existing.as_deref().is_some_and(read_play);
     let confinement = confinement_of(&userdata);
     Setup {
         version: version_of(confinement, &userdata),
         confinement,
         file,
         state,
+        play,
     }
 }
 
-/// Turns whatever somebody typed into the directory to work in.
+/// Turns whatever somebody chose into the directory to work in.
 ///
 /// Both spellings people reach for are accepted: the userdata directory
-/// itself, and the player file inside it. `~` is expanded, because a path
-/// typed by hand is as likely to start with it as not.
+/// itself, and the directory that contains it.
 pub fn userdata_from(chosen: PathBuf) -> PathBuf {
-    // Asked to find "Kodi's userdata folder", somebody may reasonably stop at
+    // Asked to find "Kodi's user data folder", somebody may reasonably stop at
     // .kodi, which contains it. Taking the userdata inside is what they meant,
     // and writing playercorefactory.xml one level too high would produce a
     // file Kodi never reads and a setup that silently does nothing.
     let inside = chosen.join("userdata");
     if inside.is_dir() { inside } else { chosen }
+}
+
+/// Whether a directory looks like Kodi's user data folder.
+///
+/// Asked before a folder somebody browsed to is taken at its word. The hazard
+/// this exists for is quiet: pick the wrong folder and TinePlayer writes a
+/// perfectly good `playercorefactory.xml` somewhere Kodi never reads, so the
+/// rows say it is configured, Kodi carries on playing videos itself, and
+/// nothing anywhere explains why. The likeliest way to land there is a Kodi
+/// that has never been run, which has no user data folder yet at all - so the
+/// folder above it gets chosen instead, and it is the one folder that looks
+/// most like the right answer.
+///
+/// Deliberately generous, and never the last word: it decides whether to ask,
+/// not whether to allow. Kodi writes most of these on first run and the rest
+/// on first shutdown, and this is also the escape hatch for a layout nobody
+/// here thought of, so a folder that fails this can still be used.
+pub fn looks_like_userdata(path: &Path) -> bool {
+    const MARKERS: [&str; 6] = [
+        "guisettings.xml",
+        "advancedsettings.xml",
+        "sources.xml",
+        "profiles.xml",
+        "Database",
+        "addon_data",
+    ];
+    MARKERS.iter().any(|marker| path.join(marker).exists())
 }
 
 /// How Kodi was installed, worked out from where it keeps its settings, since
@@ -433,6 +510,39 @@ fn confinement_of(userdata: &Path) -> Confinement {
     } else {
         Confinement::None
     }
+}
+
+/// Whether our entry in this file starts the film or opens the menu.
+///
+/// Read from the `<args>` of our own `<player>` element and from nowhere else,
+/// which is the whole difficulty: the template carries a comment saying "Add
+/// --play to have the film start as soon as Kodi hands it over", so the string
+/// is in the file whichever way it is configured and only its place in the
+/// arguments means anything.
+///
+/// False for a file we are not in at all. That is not a claim about the file:
+/// the row this feeds is disabled until something is set up, and "show the
+/// menu" is what the absence of the flag means everywhere else.
+fn read_play(xml: &str) -> bool {
+    let Some(start) = xml.find("<player name=\"TinePlayer\"") else {
+        return false;
+    };
+    let block = &xml[start..];
+    // Ours ends where our player does, so a second player's arguments below it
+    // are never read as ours.
+    let block = match block.find("</player>") {
+        Some(end) => &block[..end],
+        None => block,
+    };
+    let Some(open) = block.find("<args>") else {
+        return false;
+    };
+    let args = &block[open..];
+    let args = match args.find("</args>") {
+        Some(close) => &args[..close],
+        None => args,
+    };
+    args.contains("--play")
 }
 
 /// What a file says about us: whether our player is in it, and whether a rule
@@ -580,23 +690,6 @@ pub fn manual_step(confinement: Confinement) -> Option<ManualStep> {
     }
 }
 
-/// The same thing as flowing text, for the summary at the end and for anyone
-/// reading the message rather than the wizard.
-fn permission_note(confinement: Confinement) -> Option<String> {
-    let step = manual_step(confinement)?;
-    let mut note = format!("{}\n\n{}", step.what, step.why);
-    if let Some(command) = step.command {
-        note.push_str(&format!(
-            "\n\nRun this once, in a terminal:\n\n    {command}"
-        ));
-    }
-    note.push_str(&format!("\n\n{}", step.cost));
-    if let Some(undo) = step.undo {
-        note.push_str(&format!("\n\nTo undo it:\n\n    {undo}"));
-    }
-    Some(note)
-}
-
 /// Our `<player>` element, taken from the template so there is one copy of it
 /// rather than a second buried in this file.
 fn player_element(launch: &Launch) -> Result<String, String> {
@@ -733,13 +826,18 @@ fn back_up(file: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Sets Kodi up, or takes us back out of it. Returns what to tell the viewer.
+/// Sets Kodi up, changes how it is set up, or takes us back out of it.
+///
+/// Says nothing on success. It used to return a sentence for the wizard's last
+/// screen to show, and that screen is gone: the rows on the Integrations pane
+/// state what is configured by reading it back out of the file, so a message
+/// saying what was just done would only repeat the row that says it.
 pub fn apply(
     setup: &Setup,
     want: Registration,
     backup: Option<&Path>,
     play: bool,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let existing = std::fs::read_to_string(&setup.file).ok();
 
     let xml = match (&existing, want) {
@@ -749,7 +847,7 @@ pub fn apply(
             &launch(setup.confinement, play)?,
             want == Registration::Default,
         )?,
-        (None, Registration::Absent) => return Ok("Kodi was not set up to begin with.".to_string()),
+        (None, Registration::Absent) => return Ok(()),
         (None, _) => fresh(
             &launch(setup.confinement, play)?,
             want == Registration::Default,
@@ -758,21 +856,16 @@ pub fn apply(
 
     // Nothing to do, so nothing done: no write, and above all no backup.
     if existing.as_deref() == Some(xml.as_str()) {
-        return Ok("Kodi is already set up that way.".to_string());
+        return Ok(());
     }
 
-    // Asked for, rather than decided here. The wizard offers it with a
-    // sensible default - on when TinePlayer has never touched this file, off
-    // when we are only updating our own entry - but the choice is the
-    // viewer's, and removal never takes one: undoing our own edit is not
-    // something worth keeping a copy of the file for.
-    let backup = match backup.filter(|_| want != Registration::Absent && setup.file.exists()) {
-        Some(to) => {
-            back_up(&setup.file, to)?;
-            Some(to.to_path_buf())
-        }
-        None => None,
-    };
+    // Decided by the caller, which takes one the first time TinePlayer edits a
+    // file and not on later changes to our own entry. Removal never takes one:
+    // undoing our own edit is not something worth keeping a copy of the file
+    // for.
+    if let Some(to) = backup.filter(|_| want != Registration::Absent && setup.file.exists()) {
+        back_up(&setup.file, to)?;
+    }
 
     if let Some(folder) = setup.file.parent() {
         std::fs::create_dir_all(folder)
@@ -781,29 +874,7 @@ pub fn apply(
     std::fs::write(&setup.file, xml)
         .map_err(|e| format!("Couldn't write {}: {e}", setup.file.display()))?;
 
-    let done = match want {
-        Registration::Absent => "TinePlayer removed from Kodi.",
-        Registration::Offered => "TinePlayer is now an optional player in Kodi.",
-        Registration::Default => "TinePlayer is now Kodi's default player.",
-    };
-    let mut message = match backup {
-        Some(backup) => format!(
-            "{done}\nThe previous file was copied to {}.\nRestart Kodi for it to notice.",
-            backup.display()
-        ),
-        None => format!("{done}\nRestart Kodi for it to notice."),
-    };
-
-    // Only when there is something to run: taking us back out of Kodi needs no
-    // permission, and there is no point telling somebody to widen what Kodi
-    // may do at the moment they stop using it.
-    if want != Registration::Absent
-        && let Some(note) = permission_note(setup.confinement)
-    {
-        message.push_str("\n\n");
-        message.push_str(&note);
-    }
-    Ok(message)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -991,18 +1062,132 @@ mod tests {
     }
 
     /// A confined Kodi cannot start anything without being allowed to, and the
-    /// viewer is the one who has to allow it.
+    /// viewer is the one who has to allow it. Shown on the Sandbox Permission
+    /// row, which exists only for the installation that has one of these.
     #[test]
     fn a_confined_kodi_says_what_has_to_be_done_by_hand() {
-        assert!(permission_note(Confinement::None).is_none());
-        let flatpak = permission_note(Confinement::Flatpak).expect("a Flatpak Kodi needs a note");
-        assert!(flatpak.contains("flatpak override"));
-        assert!(flatpak.contains("tv.kodi.Kodi"));
+        assert!(manual_step(Confinement::None).is_none());
+        let flatpak = manual_step(Confinement::Flatpak).expect("a Flatpak Kodi needs a step");
+        let command = flatpak.command.expect("and a command to run");
+        assert!(command.contains("flatpak override"));
+        assert!(command.contains("tv.kodi.Kodi"));
         // Says what it costs, rather than only how to do it.
-        assert!(flatpak.contains("anything on this machine"));
+        assert!(flatpak.cost.contains("anything on this machine"));
         // A Snap is refused before it can be configured, so it has no
         // manual step to describe.
-        assert!(permission_note(Confinement::Snap).is_none());
+        assert!(manual_step(Confinement::Snap).is_none());
+    }
+
+    /// The handover row reads its value back out of the file, and the file is
+    /// laid out to make that easy to get wrong: our own template carries a
+    /// comment saying to add `--play`, so the string is there either way.
+    #[test]
+    fn the_handover_is_read_from_the_arguments_and_not_the_comments() {
+        let playing = Launch {
+            filename: "/opt/tineplayer".to_string(),
+            prefix: String::new(),
+            play: true,
+        };
+        // Written into a file of our own making, comments and all, which is
+        // the case the naive check gets wrong.
+        assert!(read_play(&fresh(&playing, false)));
+        assert!(!read_play(&fresh(&direct(), false)));
+        // And into somebody else's file, where only our element is ours to
+        // read.
+        assert!(read_play(&insert(FOREIGN, &playing, false).unwrap()));
+        assert!(!read_play(&insert(FOREIGN, &direct(), false).unwrap()));
+        // A file we are not in at all says "menu", which is what no flag
+        // means everywhere else.
+        assert!(!read_play(FOREIGN));
+    }
+
+    /// A folder browsed to by hand is checked before it is taken at its word,
+    /// because getting it wrong fails silently: TinePlayer writes a good file
+    /// somewhere Kodi never reads.
+    ///
+    /// The case worth naming is a Kodi that has never been run, which has no
+    /// user data folder at all - so the folder above it is what gets chosen,
+    /// and that is the one folder most likely to look right.
+    #[test]
+    fn a_folder_is_checked_for_being_kodis_user_data() {
+        let temp = std::env::temp_dir().join("tineplayer-userdata-test");
+        let never_run = temp.join(".kodi");
+        let userdata = never_run.join("userdata");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&never_run).unwrap();
+
+        // Kodi installed and never started: the folder exists, the user data
+        // inside it does not, and nothing in it says otherwise.
+        assert!(!looks_like_userdata(&never_run));
+        // And resolving stops there rather than inventing a userdata folder,
+        // which is exactly why the check above has to exist.
+        assert_eq!(userdata_from(never_run.clone()), never_run);
+
+        // Once Kodi has run, both answers change.
+        std::fs::create_dir_all(&userdata).unwrap();
+        std::fs::write(userdata.join("guisettings.xml"), "<settings/>").unwrap();
+        assert!(looks_like_userdata(&userdata));
+        assert!(!looks_like_userdata(&never_run));
+        // Stopping at the folder above is a reasonable reading of "Kodi's
+        // folder", and lands on the right one.
+        assert_eq!(userdata_from(never_run.clone()), userdata);
+        assert_eq!(userdata_from(userdata.clone()), userdata);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// Nothing a viewer can change from the pane may change where a group
+    /// sits on it.
+    ///
+    /// The ordering is what puts `Item::KodiType(n)` against an installation,
+    /// so a key that moves when a setting is applied moves the groups under
+    /// the hand that applied it. Configuring the second of two installations
+    /// sent it to the top and dropped the other one below it, which reads as
+    /// the setting having landed on the wrong installation - the file written
+    /// was right and the screen said it was not.
+    #[test]
+    fn ordering_does_not_depend_on_anything_this_screen_can_change() {
+        let temp = std::env::temp_dir().join("tineplayer-order-test");
+        let _ = std::fs::remove_dir_all(&temp);
+        let ours = temp.join("custom");
+        std::fs::create_dir_all(&ours).unwrap();
+
+        // The same folder, before and after being configured. Nothing else
+        // about it differs, so its place in the list must not either.
+        let before = setup_at(ours.clone());
+        assert_eq!(before.state, Registration::Absent);
+        let key_before = !before.looks_used();
+
+        std::fs::write(&before.file, fresh(&direct(), false)).unwrap();
+        let after = setup_at(ours.clone());
+        assert_eq!(after.state, Registration::Offered);
+        assert_eq!(key_before, !after.looks_used());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// The qualifier on a heading, which is every installation's name now that
+    /// each one heads its own group of rows.
+    #[test]
+    fn every_installation_says_how_it_was_installed() {
+        assert_eq!(Confinement::None.describe(), "Default Installation");
+        assert_eq!(Confinement::Flatpak.describe(), "Flatpak");
+        assert_eq!(Confinement::Snap.describe(), "Snap");
+    }
+
+    /// Removal is an entry in the Player Type chooser rather than an action of
+    /// its own, and it is the one entry that says what pressing it does rather
+    /// than what state it leaves behind.
+    #[test]
+    fn the_chooser_names_removal_only_when_there_is_something_to_remove() {
+        assert_eq!(Registration::Absent.describe(), "Not configured");
+        assert_eq!(Registration::Absent.choice(false), "Not configured");
+        assert_eq!(Registration::Absent.choice(true), "Remove configuration");
+        // The other two are states either way, so they read alike in both.
+        for state in [Registration::Offered, Registration::Default] {
+            assert_eq!(state.choice(false), state.describe());
+            assert_eq!(state.choice(true), state.describe());
+        }
     }
 
     #[test]

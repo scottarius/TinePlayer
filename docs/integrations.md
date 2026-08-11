@@ -60,7 +60,7 @@ watch percentage back to Kodi.
 There are two ways to set it up:
 
 * **Default Player** - Kodi hands every video straight to TinePlayer.
-* **Optional Player** - Kodi keeps playing videos itself, and TinePlayer
+* **Additional Player** - Kodi keeps playing videos itself, and TinePlayer
   appears under **Play using...** in a video's context menu.
 
 > [!IMPORTANT]
@@ -70,55 +70,72 @@ There are two ways to set it up:
 > * On Kodi 20 and earlier, only under **Videos → Files**, not in the
 >   libraries.
 >
-> This affects **Optional Player** only. **Default Player** works the same on
+> This affects **Additional Player** only. **Default Player** works the same on
 > every version.
 
 ### From TinePlayer
 
-The easiest way to configure Kodi is from TinePlayer itself. In
-TinePlayer, open **Settings** and choose **Kodi**. You will see a list of any install of Kodi that was found, and how each one is
-configured.
+The easiest way to configure Kodi is from TinePlayer itself. Open **Settings**
+and choose **Kodi**. Every install of Kodi that was found has its own
+group of settings, headed by its name and how it was installed - for example
+**KODI 21.1 (DEFAULT INSTALLATION)** or **KODI 20.5 (FLATPAK)**.
 
-**Add Configuration** starts the configuration wizard with the
-following steps:
+Under each heading is which `playercorefactory.xml` that group will change, and
+**Open File Location** to see it. That folder is also what tells two
+installations apart.
 
-1. **Choose a Kodi Installation**
+Each group has these settings:
 
-   Choose one of the detected installs. Picking one that is already configured
-   will update its configuration. If yours is somewhere unusual, **Custom
-   install location** opens a folder browser to point at Kodi's `userdata`
-   folder.
+* **Configure As**
 
-2. **How to Configure**
+  **Default Player** or **Additional Player**, as above, or **Not configured**.
+  Setting this is what registers TinePlayer with that Kodi.
 
-   Default Player or Optional Player, as above.
+  Once something is configured, this is also where it is removed: the same
+  setting offers **Remove configuration**.
 
-3. **When TinePlayer Starts**
+* **When Kodi Opens TinePlayer**
 
-   **Play Video** starts the film right away, using the tracks remembered for
-   that video or your language preferences. **Show the Menu** opens
-   TinePlayer's menu so the audio tracks and subtitles can be chosen for each
-   video.
+  **Show Track Selection Menu** opens TinePlayer's menu so the audio tracks and
+  subtitles can be chosen for each video. **Play Video Immediately** starts the
+  film right away, using the tracks remembered for that video or your language
+  preferences.
 
-4. **Confirm Configuration**
+If your Kodi is somewhere unusual and was not found - a portable install, for
+example - **Add User Data Folder** opens a folder browser to point at it. It
+then appears as a group of its own like any other.
 
-   Shows the file that will be changed, the backup that will be kept, and what
-   will be added. Choose **Configure** to write the configuration.
+> [!IMPORTANT]
+> This asks for Kodi's **user data** folder, which is not the folder Kodi
+> itself is installed in. It is the one holding `guisettings.xml`, listed under
+> [Manual Installation](#manual-installation) below.
+>
+> Kodi creates that folder the first time it runs, so a Kodi that has been
+> installed but never started does not have one yet and cannot be pointed at.
+> Start Kodi once and close it, and TinePlayer will find it on its own without
+> any of this.
 
-To remove a configuration from Kodi, choose it in the list and confirm.
+The first time TinePlayer changes a given Kodi's configuration file, it asks
+first, and names the file it will change and the backup it will keep. Changing
+a setting after that is not asked about again, because by then it is
+TinePlayer's own entry being edited. Removing a configuration always asks.
 
 An existing `playercorefactory.xml` is edited in place rather than replaced.
 Other players in it, and your own comments and formatting, are left exactly as
-they are. A backup is made before editing just in case.
+they are.
 
-Restart Kodi for the changes to take effect.
+Kodi reads this file when it starts, so restart Kodi for any change to take
+effect.
 
 #### If Kodi is sandboxed
 
 Kodi installed on Linux as a Flatpak starts an external player *inside its own sandbox*,
 where TinePlayer is not installed and your files are not visible. TinePlayer
 writes a command that steps out to the machine first, but Kodi does not ship
-with permission to do that, so the setup shows you the one command to run:
+with permission to do that.
+
+Such an install gets a third setting, **Sandbox Permission**, which shows the
+one command to run:
 
 ```sh
 flatpak override --user --talk-name=org.freedesktop.Flatpak tv.kodi.Kodi
@@ -131,9 +148,10 @@ flatpak override --user --talk-name=org.freedesktop.Flatpak tv.kodi.Kodi
 > you have set for Kodi.
 
 If Kodi is installed as a **Snap** it is not supported as Snap confinement offers
-no way to start a program outside itself. TinePlayer lists such an install
-and marks it unsupported rather than letting it be configured. Use a Kodi from
-your distribution's packages, or from Flathub.
+no way to start a program outside itself. TinePlayer still lists such an
+install, with its **Configure As** reading **Not supported** and saying why,
+rather than leaving it out and having you wonder whether it was found. Use a
+Kodi from your distribution's packages, or from Flathub.
 
 ### Manual Installation
 

@@ -177,12 +177,13 @@ Restart Kodi first. It reads `playercorefactory.xml` once, at startup, so a
 change made while it is running has no effect until then.
 
 If it still does, check which way it was set up: **Settings → Kodi** in
-TinePlayer lists each Kodi it is configured in and what that one is set to do.
+TinePlayer lists each Kodi it found, and each one's **Configure As** says what
+that Kodi is set to do.
 
 * **Default Player** hands every video over automatically. If it is set to
   this and Kodi is still playing videos itself, something is wrong - see
   [Choosing TinePlayer does nothing](#choosing-tineplayer-does-nothing) below.
-* **Optional Player** leaves Kodi playing videos as usual, and TinePlayer has
+* **Additional Player** leaves Kodi playing videos as usual, and TinePlayer has
   to be picked per video. In Kodi, highlight a video and open its context menu
   - <kbd>C</kbd> on a keyboard, <kbd>Menu</kbd> on a remote, or a long press
   on a touchscreen - then choose **Play using...** and pick TinePlayer.
@@ -190,8 +191,8 @@ TinePlayer lists each Kodi it is configured in and what that one is set to do.
 If **Play using...** is not in that menu at all, see [There is no "Play
 using..." anywhere](#there-is-no-play-using-anywhere).
 
-Re-running the setup and choosing **Default Player** switches it over if you
-would rather not pick each time.
+Setting **Configure As** to **Default Player** switches it over if you would
+rather not pick each time.
 
 ### There is no "Play using..." anywhere
 
