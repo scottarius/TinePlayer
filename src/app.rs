@@ -658,6 +658,10 @@ pub struct App {
     /// Settings when you meant Play is a button's width of travel every time.
     nav_header_entry: RefCell<Option<gtk::Button>>,
     controls: RefCell<Option<Rc<Controls>>>,
+    /// Whether the window was already maximized when fullscreen was entered,
+    /// so that leaving fullscreen can put back the state it found rather than
+    /// the one fullscreen implies. See [`App::toggle_fullscreen`].
+    maximized_before_fullscreen: Cell<bool>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -783,6 +787,7 @@ impl App {
             art_generation: Cell::new(0),
             device_names: RefCell::new(Vec::new()),
             device_scan: Cell::new(false),
+            maximized_before_fullscreen: Cell::new(false),
             resize_settle: RefCell::new(None),
             built_poster: Cell::new(0.0),
             tracks: RefCell::new(Vec::new()),
@@ -1863,9 +1868,32 @@ impl App {
         }
         let wanted = !self.window.is_fullscreen();
         if wanted {
+            // Read before the change, because a fullscreen window reports
+            // itself maximized whether or not anybody maximized it.
+            self.maximized_before_fullscreen
+                .set(self.window.is_maximized());
             self.window.fullscreen();
         } else {
             self.window.unfullscreen();
+            // Put back the state fullscreen was entered from, said outright
+            // in both directions rather than left to GTK.
+            //
+            // Leaving fullscreen does not restore it: a window that was never
+            // maximized comes back maximized, because fullscreen implies
+            // maximized and that is the state handed back - and one launched
+            // fullscreen comes back maximized having never been drawn at its
+            // own size at all. Asking only for the un-maximize fixed those two
+            // and broke the third: a window maximized on purpose came back
+            // windowed, because GTK restores the size it had and not the fact
+            // that it was maximized. So both halves are asked for.
+            //
+            // The flag is only ever set on the way in, so a window launched
+            // fullscreen has never set it and takes the default - which is the
+            // right answer for exactly that case.
+            match self.maximized_before_fullscreen.get() {
+                true => self.window.maximize(),
+                false => self.window.unmaximize(),
+            }
             // The pointer only hides in fullscreen, and leaving takes the
             // countdown that would have brought it back with it.
             if let Some(controls) = self.controls.borrow().as_ref() {
@@ -2168,6 +2196,15 @@ impl App {
     /// there was one. Left and right do nothing else on this screen, so they
     /// are free to mean this where a slider is sitting.
     fn settings_slider(self: &Rc<Self>, direction: isize) -> bool {
+        // On that screen and no other. The sliders are held on the application
+        // rather than on the page they belong to, and they outlive it: leaving
+        // settings does not empty the list, so this went on matching by row
+        // number against whatever screen came next. Backing out to the media
+        // page and pressing Left moved the interface size, because the row
+        // selected there had the same number as the row the size sits on.
+        if *self.screen.borrow() != Screen::Settings {
+            return false;
+        }
         let Some(index) = self
             .nav_list
             .borrow()
@@ -2512,41 +2549,26 @@ impl App {
     /// backdrop, which is what makes it read as a window opening over the
     /// menu rather than as another screen replacing it.
     fn build_menu_page(self: &Rc<Self>) -> (gtk::Widget, Option<gtk::ListBox>) {
+        // What a resize compares against to decide whether rebuilding this
+        // page would change anything - recorded here, for every menu page,
+        // rather than where the poster is built.
+        //
+        // Only the media page has a poster, so recording it there left the
+        // empty page's figure at whatever it happened to be, which never
+        // matched and so always answered "yes, rebuild". The page was then
+        // rebuilt every quarter second for as long as it was on screen, and
+        // the surface layout that followed each rebuild scheduled the next.
+        //
+        // It was close to invisible, because the page it kept rebuilding looks
+        // the same each time - but the pointer's idea of what is under it does
+        // not survive the widget being destroyed and made again, so hovering a
+        // button only lit it while the mouse was moving, and a click only
+        // landed if it happened to arrive between two rebuilds.
+        self.built_poster.set(self.poster_height(self.scale.get()));
         if self.file.borrow().is_none() {
             return (self.build_empty_page().upcast(), None);
         }
         let (page, list) = self.build_media_page();
-        if std::env::var("TINE_MEASURE").is_ok() {
-            let page2 = page.clone();
-            glib::idle_add_local_once(move || {
-                let v = gtk::Orientation::Vertical;
-                eprintln!("MEASURE overlay {:?}", page2.measure(v, -1));
-                let mut stack: Vec<(gtk::Widget, usize)> = page2
-                    .first_child()
-                    .map(|c| vec![(c, 0usize)])
-                    .unwrap_or_default();
-                while let Some((w, depth)) = stack.pop() {
-                    let (min, nat, _, _) = w.measure(v, -1);
-                    if min > 300 && depth < 7 {
-                        eprintln!(
-                            "MEASURE {:indent$}{} min={} nat={}",
-                            "",
-                            w.type_().name(),
-                            min,
-                            nat,
-                            indent = depth * 2
-                        );
-                    }
-                    let mut child = w.first_child();
-                    while let Some(c) = child {
-                        child = c.next_sibling();
-                        if depth < 7 {
-                            stack.push((c, depth + 1));
-                        }
-                    }
-                }
-            });
-        }
         (page.upcast(), Some(list))
     }
 
@@ -3095,9 +3117,6 @@ impl App {
         // rather than a constraint: being a little out until the next rebuild
         // costs nothing that anyone can see.
         let height = self.poster_height(scale);
-        // Recorded so a resize can tell whether rebuilding the page would
-        // change anything. Past the ceiling below it would not.
-        self.built_poster.set(height);
         // Two by three, which every poster in every library is drawn to.
         let width = height * 2.0 / 3.0;
 
@@ -4090,6 +4109,11 @@ impl App {
                     list.select_row(Some(&row));
                     settle_on(&row);
                 } else {
+                    // Nothing to settle on, but the claim is still worth
+                    // making: it supersedes any settling left pending by the
+                    // row this popover opened over, which would otherwise come
+                    // due and pull the focus back out to the page.
+                    claim_settling();
                     list.grab_focus();
                 }
             })
@@ -9595,6 +9619,7 @@ fn about_text(text: &str) -> gtk::Label {
 /// So the scroll is done by hand, and not until the row has been mapped -
 /// which is the point at which it knows where it is.
 fn settle_on(row: &gtk::ListBoxRow) {
+    let ticket = claim_settling();
     // The row itself, so a screen reader has a focus change to announce.
     row.grab_focus();
     // Setting the window's child maps the new page there and then, so by the
@@ -9602,18 +9627,63 @@ fn settle_on(row: &gtk::ListBoxRow) {
     // waiting for the signal would be waiting forever. Only the first screen
     // of a session arrives unmapped, because the window itself is not up yet.
     if row.is_mapped() {
-        after_layout(row);
+        after_layout(row, ticket);
     } else {
-        row.connect_map(after_layout);
+        row.connect_map(move |row| after_layout(row, ticket));
     }
+}
+
+thread_local! {
+    /// Which settling is the current one. See [`claim_settling`].
+    static SETTLING: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Claims the right to be the row the deferred work below settles on, and
+/// supersedes whatever claimed it before.
+///
+/// Settling a row is not finished when [`settle_on`] returns: where the row is
+/// and how far the scroller can travel are only known after a layout pass, so
+/// the last of it waits for an idle. Nothing about that idle was tied to the
+/// row still being the one wanted, and holding an arrow key queues one per
+/// press - so the earlier ones came due against rows already left behind, and
+/// scrolled them back into view. Arrowing quickly down a list threw the page
+/// back to wherever the cursor had been a few presses ago.
+///
+/// A ticket rather than cancelling the pending idle: several things settle
+/// rows - the arrow keys, a screen being built, a popover opening over one -
+/// and none of them knows about the others. Each takes the next number, and
+/// deferred work runs only while its number is still the current one, so the
+/// most recent claim always wins without anybody having to be told.
+///
+/// This does not replace [`focus_is_outside`], which covers what a ticket
+/// cannot: moving from the top row up to a header button focuses the button
+/// without settling anything, so no new ticket is taken and only the focus
+/// check sees that the row is no longer where the viewer is.
+fn claim_settling() -> u64 {
+    SETTLING.with(|settling| {
+        let ticket = settling.get().wrapping_add(1);
+        settling.set(ticket);
+        ticket
+    })
+}
+
+/// Whether this settling is still the one in force.
+fn settling_is_current(ticket: u64) -> bool {
+    SETTLING.with(|settling| settling.get() == ticket)
 }
 
 /// Runs once the page has been through a layout pass, which is when a row
 /// finally knows where it is and the scroller knows how much of it there is
 /// to move.
-fn after_layout(row: &gtk::ListBoxRow) {
+fn after_layout(row: &gtk::ListBoxRow, ticket: u64) {
     let row = row.clone();
     glib::idle_add_local_once(move || {
+        // Only while this is still the row being settled on. Anything settled
+        // since - the next row under a held arrow key, another screen, a
+        // popover opening - has taken a later ticket and this one is stale.
+        if !settling_is_current(ticket) {
+            return;
+        }
         // Only if the focus is still in this list. The grab below is a second
         // attempt, for the one case where the first one was too early to take
         // - and a second attempt that runs unconditionally is a second attempt
@@ -9628,7 +9698,12 @@ fn after_layout(row: &gtk::ListBoxRow) {
         if focus_is_outside(&row) {
             return;
         }
-        row.grab_focus();
+        // Only if it has not already taken. A focus grab inside a scroller
+        // makes GTK scroll the row into view, so repeating one that already
+        // succeeded sets a second scroll going against the one below.
+        if !row.has_focus() {
+            row.grab_focus();
+        }
         show_row(&row);
     });
 }
@@ -9648,9 +9723,22 @@ fn focus_is_outside(row: &gtk::ListBoxRow) -> bool {
     }
 }
 
-/// Moves the scroller so a row is on screen, a third of the way down rather
-/// than jammed against an edge: a row against the top of the frame looks like
-/// the first row, which is exactly the confusion being avoided.
+/// Moves the scroller so a row is fully on screen, by the smallest amount
+/// that does it.
+///
+/// The minimum on purpose, and it used to place the row a third of the way
+/// down the frame instead - which looks better in isolation and is the wrong
+/// rule here, because this is not the only thing scrolling. Focusing a row
+/// inside a scroller makes GTK bring it into view too, by the smallest amount.
+/// Two rules that disagree about where a row belongs produce whichever answer
+/// ran last: arrowing down kept the row at the bottom edge on the presses
+/// where GTK's scroll had already satisfied this one, and threw the row up
+/// near the top on the presses where it had not. Nothing about the input
+/// differed, so it read as random.
+///
+/// Agreeing with GTK is what makes it predictable, and it is also the better
+/// behaviour while arrowing: the row stays where it is and the list moves one
+/// row under it, rather than the page jumping every time the edge is reached.
 fn show_row(row: &gtk::ListBoxRow) {
     let Some(list) = row.parent() else { return };
     let mut ancestor = list.parent();
@@ -9664,24 +9752,37 @@ fn show_row(row: &gtk::ListBoxRow) {
         }
     };
 
-    // Measured against whatever the scroller actually scrolls, not against
-    // the list. On the media page the list is not the scroller's child - the
-    // film's description sits above it inside the same scrolled area - and
-    // coordinates relative to the list are short by the height of everything
-    // above it, which scrolls every row to the wrong place.
-    let scrolled = scroller.child().unwrap_or_else(|| list.clone());
-    let Some((_, top)) = row.translate_coordinates(&scrolled, 0.0, 0.0) else {
-        return;
-    };
+    // The row's own allocation inside the list, which is where it sits in the
+    // content and does not move when the content is scrolled.
+    //
+    // Asked of the widget tree with `translate_coordinates` before, which
+    // looks equivalent and is not. The step above this one grabs the row's
+    // focus, and GTK answers a focus grab inside a scroller by scrolling the
+    // row into view itself - moving the adjustment and re-allocating the list
+    // underneath us. `translate_coordinates` then reported whichever
+    // allocation happened to be current: the row's place in the list on one
+    // press, its place on screen on the next.
+    //
+    // On screen it is always the same place, hard against the bottom edge, so
+    // every other press computed the same destination near the top of the list
+    // and jumped there - and the two answers diverged further the further down
+    // the list you had gone.
+    let top = f64::from(row.allocation().y());
     let adjustment = scroller.vadjustment();
     let page = adjustment.page_size();
     // Already on screen: leave it where it is rather than jumping the page
     // about under someone who can see the row perfectly well.
+    let value = adjustment.value();
     let bottom = top + f64::from(row.height());
-    if top >= adjustment.value() && bottom <= adjustment.value() + page {
+    let wanted = if top < value {
+        // Off the top: bring its top edge to the top of the frame.
+        top
+    } else if bottom > value + page {
+        // Off the bottom: bring its bottom edge to the bottom of the frame.
+        bottom - page
+    } else {
         return;
-    }
-    let wanted = top - page / 3.0;
+    };
     adjustment.set_value(wanted.clamp(adjustment.lower(), (adjustment.upper() - page).max(0.0)));
 }
 
