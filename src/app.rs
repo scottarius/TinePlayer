@@ -452,6 +452,20 @@ struct Choices {
 /// has changed - which for a device list is a moment after it opens.
 type Fill = dyn Fn(&Rc<App>);
 
+/// What the file browser was opened to find.
+///
+/// Held on the application rather than passed down, because stepping into a
+/// folder re-enters the browser and would otherwise forget the errand.
+#[derive(Clone, Copy, PartialEq, Default)]
+enum Errand {
+    #[default]
+    Video,
+    /// A separate soundtrack for one of the two outputs.
+    Audio(Role),
+    /// A subtitle file from somewhere other than beside the video.
+    Subtitle,
+}
+
 /// A screen's navigation, held while a popover borrows the keyboard.
 struct NavState {
     list: Option<gtk::ListBox>,
@@ -558,7 +572,10 @@ pub struct App {
     /// Which output the browser is picking a soundtrack for, or `None` when it
     /// is picking a video. Held here because stepping into a folder re-enters
     /// the browser and would otherwise lose the errand it was opened on.
-    browse_audio_for: Cell<Option<Role>>,
+    /// What the browser is open for. One value rather than a flag per errand:
+    /// the browser, the system dialog and the row handler all ask this, and
+    /// two flags could answer differently.
+    errand: Cell<Errand>,
     /// What alignment worked out for each output, in milliseconds, ready to
     /// add to whatever the viewer has set. Already negated: alignment reports
     /// how late the audio runs, and a sink is held back by a negative offset.
@@ -806,7 +823,7 @@ impl App {
             tracks: RefCell::new(Vec::new()),
             primary_file: RefCell::new(None),
             secondary_file: RefCell::new(None),
-            browse_audio_for: Cell::new(None),
+            errand: Cell::new(Errand::Video),
             primary_baseline: Cell::new(0.0),
             secondary_baseline: Cell::new(0.0),
             duration_s: Cell::new(0.0),
@@ -3966,11 +3983,15 @@ impl App {
                     if chosen.as_ref() == Some(&option.choice()) {
                         current = Some(position);
                     }
-                    entries.push((
-                        crate::languages::describe_tag(option.label()),
-                        Some(position),
-                    ));
+                    entries.push((subtitle_label(option), Some(position)));
                 }
+                // Last, after everything the video came with, the same way the
+                // track lists offer one: a subtitle file from somewhere else
+                // is the answer when what is wanted is not beside the film.
+                entries.push((
+                    "Browse...".to_string(),
+                    Some(self.subtitle_options.borrow().len()),
+                ));
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
                 entries.push(("None".to_string(), None));
@@ -4418,7 +4439,7 @@ impl App {
             .borrow()
             .iter()
             .find(|option| option.choice() == chosen)
-            .map(|option| crate::languages::describe_tag(option.label()))
+            .map(subtitle_label)
             .unwrap_or_else(|| "None".to_string())
     }
 
@@ -4515,6 +4536,13 @@ impl App {
             }
             Setting::Subtitles => {
                 let options = self.subtitle_options.borrow();
+                // The row after the last option is the browse one, which opens
+                // a screen instead of settling anything here.
+                if choice == Some(options.len()) {
+                    drop(options);
+                    self.browse_for_subtitle();
+                    return true;
+                }
                 let picked = choice
                     .and_then(|index| options.get(index))
                     .map(|o| o.choice());
@@ -4569,12 +4597,12 @@ impl App {
         // system file dialog on each platform.
         // Which errand this is on, decided the same way the built-in browser
         // decides it, so the two always agree about what is being chosen.
-        let for_audio = self.browse_audio_for.get().is_some();
+        let errand = self.errand.get();
         let chooser = gtk::FileChooserNative::new(
-            Some(if for_audio {
-                "Choose an audio file"
-            } else {
-                "Choose a video"
+            Some(match errand {
+                Errand::Audio(_) => "Choose an audio file",
+                Errand::Subtitle => "Choose a subtitle file",
+                _ => "Choose a video",
             }),
             Some(&self.window),
             gtk::FileChooserAction::Open,
@@ -4587,7 +4615,9 @@ impl App {
         // about what will actually play. Anything GStreamer can demux works,
         // which is why "All files" stays available below.
         let filter = gtk::FileFilter::new();
-        let (name, extensions) = if for_audio {
+        let (name, extensions) = if errand == Errand::Subtitle {
+            ("Subtitle files", &crate::subtitles::EXTENSIONS[..])
+        } else if matches!(errand, Errand::Audio(_)) {
             ("Audio files", crate::browser::AUDIO_EXTENSIONS)
         } else {
             ("Video files", &crate::browser::VIDEO_EXTENSIONS[..])
@@ -4624,9 +4654,13 @@ impl App {
             held.borrow_mut().take();
 
             match chosen {
-                // A soundtrack for the video already loaded, rather than a
-                // video to load.
-                Some(path) if for_audio => {
+                // A subtitle or a soundtrack for the video already loaded,
+                // rather than a video to load.
+                Some(path) if errand == Errand::Subtitle => {
+                    app.set_subtitle_file(&path);
+                    app.show_menu();
+                }
+                Some(path) if matches!(errand, Errand::Audio(_)) => {
                     app.set_audio_file(&path);
                     app.show_menu();
                 }
@@ -4730,7 +4764,7 @@ impl App {
 
         let duration_ns = media.duration_ns;
         let tracks = media.audio;
-        let options = crate::subtitles::options(source.local(), &media.subtitles);
+        let mut options = crate::subtitles::options(source.local(), &media.subtitles);
 
         let (primary_language, secondary_language, subtitle_language, described) = {
             let config = self.config.borrow();
@@ -4888,6 +4922,16 @@ impl App {
                 )
             }
         };
+        // A file chosen by hand is not beside the video, so nothing above
+        // found it. Put it back before the check below, or the choice would be
+        // dropped as unrecognised every time the file was loaded again - and
+        // only if it is still on disk, since a remembered path can outlive the
+        // file it names.
+        if let Some(crate::subtitles::SubtitleChoice::File(path)) = subtitle.as_ref()
+            && path.is_file()
+        {
+            options.push(crate::subtitles::chosen_file(path));
+        }
         *self.subtitle.borrow_mut() =
             subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
         *self.subtitle_options.borrow_mut() = options;
@@ -5280,9 +5324,10 @@ impl App {
         // Which of the two is in hand is held on the application rather than
         // passed down, because stepping into a folder re-enters here and would
         // otherwise forget what was being looked for.
-        let mode = match self.browse_audio_for.get() {
-            Some(_) => Browse::Audio,
-            None => Browse::Videos,
+        let mode = match self.errand.get() {
+            Errand::Audio(_) => Browse::Audio,
+            Errand::Subtitle => Browse::Subtitles,
+            Errand::Video => Browse::Videos,
         };
         let directory = crate::browser::rooted(directory);
         let page = self.browser_page(&directory, mode);
@@ -5321,7 +5366,11 @@ impl App {
                     // video: it replaces whatever track that output was on and
                     // hands straight back to the menu, where the row now names
                     // the file.
-                    Some(path) if app.browse_audio_for.get().is_some() => {
+                    Some(path) if app.errand.get() == Errand::Subtitle => {
+                        app.set_subtitle_file(path);
+                        app.show_menu();
+                    }
+                    Some(path) if matches!(app.errand.get(), Errand::Audio(_)) => {
                         app.set_audio_file(path);
                         app.show_menu();
                     }
@@ -5530,9 +5579,9 @@ impl App {
             browse.connect_clicked(move |_| match mode {
                 Browse::Videos => app.open_file_chooser(&here),
                 Browse::Folders => app.choose_kodi_folder_natively(&here),
-                // The same dialog, filtered to audio: it reads which errand it
-                // is on for itself.
-                Browse::Audio => app.open_file_chooser(&here),
+                // The same dialog, filtered to whatever is being looked for:
+                // it reads which errand it is on for itself.
+                Browse::Audio | Browse::Subtitles => app.open_file_chooser(&here),
             });
         }
 
@@ -5724,7 +5773,7 @@ impl App {
     /// pointer-only button in the footer.
     fn browse_for_file(self: &Rc<Self>) {
         // Whatever errand the browser was last on, this one is a video.
-        self.browse_audio_for.set(None);
+        self.errand.set(Errand::Video);
         self.open_browser();
     }
 
@@ -5735,7 +5784,7 @@ impl App {
     /// when it is not, the film's folder is still a better place to start from
     /// than wherever a video was last chosen.
     fn browse_for_audio(self: &Rc<Self>, role: Role) {
-        self.browse_audio_for.set(Some(role));
+        self.errand.set(Errand::Audio(role));
         let beside = self
             .file
             .borrow()
@@ -5885,8 +5934,45 @@ impl App {
     }
 
     /// Puts a chosen audio file on the output the browser was opened for.
+    /// Opens the browser to find a subtitle file, starting where the video is.
+    fn browse_for_subtitle(self: &Rc<Self>) {
+        self.errand.set(Errand::Subtitle);
+        let beside = self
+            .file
+            .borrow()
+            .as_ref()
+            .and_then(|file| file.local().and_then(|path| path.parent()))
+            .map(|folder| folder.to_path_buf());
+        match beside {
+            Some(folder) => self.show_browser(&folder, None),
+            None => self.open_browser(),
+        }
+    }
+
+    /// Takes a subtitle file chosen by hand.
+    ///
+    /// Added to the options as well as chosen, so the menu can show it and the
+    /// chooser can show it selected. Everything else in that list was found by
+    /// looking beside the video, and this one never would be.
+    fn set_subtitle_file(self: &Rc<Self>, path: &std::path::Path) {
+        let option = crate::subtitles::chosen_file(path);
+        let choice = option.choice();
+        {
+            let mut options = self.subtitle_options.borrow_mut();
+            if !options.iter().any(|other| other.choice() == choice) {
+                options.push(option);
+            }
+        }
+        *self.subtitle.borrow_mut() = Some(choice);
+        // Choosing a subtitle is asking to see it, whatever the toggle was
+        // doing for the last one.
+        self.subtitles_hidden.set(false);
+        self.errand.set(Errand::Video);
+        self.remember_tracks();
+    }
+
     fn set_audio_file(self: &Rc<Self>, path: &std::path::Path) {
-        let Some(role) = self.browse_audio_for.get() else {
+        let Errand::Audio(role) = self.errand.get() else {
             return;
         };
         let source = Source::File(path.to_path_buf());
@@ -5894,7 +5980,7 @@ impl App {
             Role::Primary => *self.primary_file.borrow_mut() = Some(source),
             Role::Secondary => *self.secondary_file.borrow_mut() = Some(source),
         }
-        self.browse_audio_for.set(None);
+        self.errand.set(Errand::Video);
         // Written down here, not left to playback to save: choosing a
         // soundtrack and then quitting without pressing play is choosing it,
         // and every other chooser on this screen remembers itself the same way.
@@ -10079,6 +10165,19 @@ fn last_row_index(list: &gtk::ListBox) -> i32 {
     last
 }
 
+/// How a subtitle reads in a list.
+///
+/// The label of anything found beside the video is a language tag, written the
+/// way the convention writes it - "en", "en.hi", "pt-BR" - and is put into
+/// words. A file chosen by hand is labelled with its own name, which is not a
+/// tag and would come out mangled if it were read as one.
+fn subtitle_label(option: &Subtitle) -> String {
+    match option {
+        Subtitle::File { label, .. } => label.clone(),
+        other => crate::languages::describe_tag(other.label()),
+    }
+}
+
 fn describe_audio_track(track: &AudioTrack) -> String {
     // Checked against the title, which is where a language most often gets
     // named twice: a track tagged `eng` and titled "English Commentary" needs
@@ -10199,6 +10298,8 @@ enum Browse {
     /// A separate soundtrack for the video already chosen: the same screen,
     /// listing audio files instead.
     Audio,
+    /// A subtitle file from somewhere other than beside the video.
+    Subtitles,
     Folders,
 }
 
@@ -10212,6 +10313,7 @@ impl Browse {
     fn wants(self) -> crate::browser::Kind {
         match self {
             Browse::Audio => crate::browser::Kind::Audio,
+            Browse::Subtitles => crate::browser::Kind::Subtitle,
             _ => crate::browser::Kind::Video,
         }
     }
@@ -10321,6 +10423,7 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
         let icon = match (entry.is_dir, mode) {
             (true, _) => RowIcon::Folder,
             (false, Browse::Audio) => RowIcon::Audio,
+            (false, Browse::Subtitles) => RowIcon::Subtitle,
             (false, _) => RowIcon::Video,
         };
         entries.push(BrowserEntry {
@@ -10370,10 +10473,6 @@ enum RowIcon {
     Folder,
     Video,
     Audio,
-    /// Not reachable yet: there is no subtitle browser. Bundled with the other
-    /// two because it was drawn as one of a set of three, and a matching mark
-    /// found later is a mark that does not match.
-    #[allow(dead_code)]
     Subtitle,
     /// A notice rather than a file - "Nothing here" - which draws no mark.
     None,

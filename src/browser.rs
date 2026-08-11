@@ -64,6 +64,8 @@ fn has_extension(path: &Path, known: &[&str]) -> bool {
 pub enum Kind {
     Video,
     Audio,
+    /// Subtitle files, for choosing one that does not sit beside the video.
+    Subtitle,
 }
 
 impl Kind {
@@ -71,6 +73,7 @@ impl Kind {
         match self {
             Kind::Video => is_video(path),
             Kind::Audio => is_audio(path),
+            Kind::Subtitle => has_extension(path, &crate::subtitles::EXTENSIONS),
         }
     }
 }
