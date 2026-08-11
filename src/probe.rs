@@ -228,47 +228,101 @@ pub struct Media {
 /// summary, so those are what is read. Anything empty is left empty rather
 /// than filled with a placeholder, because an absent tag and a blank one mean
 /// the same thing to whatever is going to fall back past it.
+/// The file's own tags, without the ones belonging to the tracks inside it.
+///
+/// `DiscovererInfo::tags` is the whole file merged - the container's tags and
+/// every stream's, with repeated tags concatenated into one value. That is the
+/// wrong list to describe a film by, and it goes wrong in a way that reads as
+/// real data rather than as a mistake: a Matroska file whose audio tracks are
+/// named "English" and "Romany" answers a global `Title` of "English, Romany",
+/// and the page prints it in the largest type on the screen. Those same track
+/// names are read deliberately elsewhere here, to label the tracks - the merged
+/// list was picking them up a second time as the name of the film.
+///
+/// Asks for the container's own tags first. Measured 2026-08-11 on a Matroska
+/// file: `container_streams` is empty and the top-level `stream_info` carries
+/// no tags at all through these bindings, so this falls through to the merged
+/// list in practice - which is why [`without_stream_titles`] exists to clean
+/// up after it. Kept because it costs nothing and is right where it answers.
+fn container_tags(info: &pbutils::DiscovererInfo) -> Option<gst::TagList> {
+    info.container_streams()
+        .first()
+        .and_then(|container| container.tags())
+        .or_else(|| info.stream_info().and_then(|stream| stream.tags()))
+        .or_else(|| info.tags())
+}
+
+/// Whether a title is nothing but the names of the tracks inside the file.
+///
+/// The tag list this comes from is every tag in the file flattened into one,
+/// and `title` may be set on any stream. A Matroska file whose subtitle tracks
+/// are named "English" and "Romany" therefore answers a whole-file title of
+/// "Romany, English" - the two track names, joined by the same comma that
+/// separates any repeated tag. Printed as the name of the film, in the largest
+/// type on the page, it reads as real information rather than as a mistake.
+///
+/// The track names are already known here, having been read from each stream
+/// to label it, so this asks the plain question: is every part of this title
+/// one of them? If it is, the file has said nothing about itself and the name
+/// belongs to the tracks.
+///
+/// A file whose one track happens to be named after the film loses its title
+/// to this, and falls back to the file name. That is the right way round: a
+/// name evidenced only by a track label is not the film's name, and the file
+/// name is something the viewer can read and judge.
+fn without_stream_titles(title: &str, stream_titles: &[String]) -> bool {
+    let title = title.trim();
+    if title.is_empty() || stream_titles.is_empty() {
+        return false;
+    }
+    let mut parts = title
+        .split(',')
+        .map(|part| part.trim().to_lowercase())
+        .filter(|part| !part.is_empty())
+        .peekable();
+    parts.peek().is_some() && parts.all(|part| stream_titles.contains(&part))
+}
+
 fn read_tags(tags: &gst::TagList) -> Tags {
     let text = |value: Option<String>| value.map(|v| v.trim().to_string()).unwrap_or_default();
 
     Tags {
         title: text(tags.get::<gst::tags::Title>().map(|t| t.get().to_string())),
-        // Two spellings of the same fact, and files carry either. `Date` is a
-        // plain calendar date and `DateTime` a timestamp; both reduce to the
-        // year, which is all the facts line shows.
+        // `Date` only, and deliberately not `DateTime`.
+        //
+        // They are not two spellings of one fact, which is what this used to
+        // assume. `Date` comes from a release date a muxer was told; `DateTime`
+        // is when the file itself was written, which Matroska carries as a
+        // matter of course. Read together, a 2009 film muxed in 2010 announced
+        // itself as 2010 in the largest facts line on the page - and there is
+        // nothing about the number that says which of the two it was.
         year: tags
             .get::<gst::tags::Date>()
             .map(|d| d.get().year() as u32)
-            .or_else(|| {
-                tags.get::<gst::tags::DateTime>()
-                    .map(|d| d.get().year() as u32)
-            })
             // A container with a nonsense date is worse than one with none:
             // some muxers write the epoch when they were given nothing.
             .filter(|year| (1870..=2200).contains(year)),
-        description: {
-            let comment = text(
-                tags.get::<gst::tags::Comment>()
-                    .map(|t| t.get().to_string()),
-            );
-            if comment.is_empty() {
-                text(
-                    tags.get::<gst::tags::Description>()
-                        .map(|t| t.get().to_string()),
-                )
-            } else {
-                comment
-            }
-        },
-        // `Image` is the cover proper and `PreviewImage` the thumbnail some
-        // muxers write instead; either is better than none.
+        // `Description` only, and deliberately not `Comment`, which used to be
+        // preferred over it.
+        //
+        // `Description` is the field Matroska and iTunes mean for a synopsis.
+        // `Comment` is where the tools that made the file write about
+        // themselves: an encoder banner, a settings dump, a release note, the
+        // address of wherever it came from. None of that is about the film,
+        // and the page gives a summary the largest block of text it has - so a
+        // wrong one is three confident lines of somebody else's advertising.
+        description: text(
+            tags.get::<gst::tags::Description>()
+                .map(|t| t.get().to_string()),
+        ),
+        // `Image` is the cover proper. `PreviewImage` used to stand in for it
+        // and no longer does: it is a thumbnail, and what muxers put there is
+        // usually a frame from somewhere in the film. Hung in a poster frame,
+        // two by three, a random frame does not read as artwork the file
+        // happened to lack - it reads as the wrong picture.
         image: tags
             .get::<gst::tags::Image>()
-            .and_then(|tag| image_bytes(&tag.get()))
-            .or_else(|| {
-                tags.get::<gst::tags::PreviewImage>()
-                    .and_then(|tag| image_bytes(&tag.get()))
-            }),
+            .and_then(|tag| image_bytes(&tag.get())),
     }
 }
 
@@ -398,13 +452,32 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
         })
         .unwrap_or_default();
 
+    let stream_titles: Vec<String> = tracks
+        .iter()
+        .map(|track| track.title.trim().to_lowercase())
+        .chain(
+            subtitles
+                .iter()
+                .map(|track| track.title.trim().to_lowercase()),
+        )
+        .filter(|title| !title.is_empty())
+        .collect();
+
     let mut media = Media {
         audio: tracks,
         subtitles,
         duration_ns: info.duration().map(|d| d.nseconds()).unwrap_or(0),
         video,
-        tags: info.tags().as_ref().map(read_tags).unwrap_or_default(),
+        tags: container_tags(&info)
+            .as_ref()
+            .map(read_tags)
+            .unwrap_or_default(),
     };
+    // The whole-file tag list carries the tracks' own titles too, and this is
+    // where they are recognisable: the track names have just been read.
+    if without_stream_titles(&media.tags.title, &stream_titles) {
+        media.tags.title.clear();
+    }
 
     // What a media library already worked out about this file, where one has
     // been kept beside it. Only ever adds to what the pipeline found - a

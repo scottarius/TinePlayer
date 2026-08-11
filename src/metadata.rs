@@ -194,15 +194,18 @@ pub fn resolve(source: &Source, media: &Media) -> Details {
     // The film's name if anything knows it, and otherwise the file's own -
     // without its extension. ".mkv" is not part of what the film is called,
     // and as the largest text on the page it read as though it were. The rest
-    // of the name is left exactly as it is: release tags and all, because a
-    // name half-cleaned by guesswork looks like metadata and is wrong often
-    // enough to be worse than the raw string. The row below still names the
-    // file in full.
-    let title = first_of([
-        sidecar.title.as_str(),
-        media.tags.title.as_str(),
-        &without_extension(&source.label()),
-    ]);
+    // The rest of the name is left exactly as it is: release tags and all,
+    // because a name half-cleaned by guesswork looks like metadata and is
+    // wrong often enough to be worse than the raw string. The one exception is
+    // a year in brackets at the very end, which comes off - it is shown in the
+    // facts line directly underneath, and a title carrying it too reads as
+    // part of what the film is called. The row below still names the file in
+    // full.
+    // The file's own name, and the year a library may have written on the end
+    // of it, taken off. Both come from the one place so they cannot disagree
+    // about whether there was a year there at all.
+    let (named, named_year) = split_year(&without_extension(&source.label()));
+    let title = first_of([sidecar.title.as_str(), media.tags.title.as_str(), &named]);
     let plot = flowed(&first_of([
         sidecar.plot.as_str(),
         media.tags.description.as_str(),
@@ -218,7 +221,11 @@ pub fn resolve(source: &Source, media: &Media) -> Details {
 
     Details {
         title,
-        year: sidecar.year.or(media.tags.year),
+        // The name is asked last, after anything that was actually written
+        // about the film. It is the most reliable of the three when it answers
+        // at all - a library put it there on purpose - but it is still a file
+        // name, and a sidecar or a container tag is a statement.
+        year: sidecar.year.or(media.tags.year).or(named_year),
         plot,
         certificate: sidecar.mpaa.clone(),
         rating: sidecar.rating,
@@ -257,6 +264,49 @@ fn flowed(text: &str) -> String {
 /// release ends in things like "1080p.DTS" - so this takes off a final piece
 /// only when it is short and entirely letters or digits, which is what a
 /// container extension looks like and what "2024" or "Part 2" does not.
+/// Splits the year a media library wrote onto the end of a file name off the
+/// rest of the name.
+///
+/// Guesswork about file names is avoided everywhere else here - the title
+/// keeps its release tags rather than being half-cleaned - so this is
+/// deliberately the narrowest rule that covers the convention Kodi, Plex and
+/// Jellyfin share: four digits in brackets at the very end, nothing after them.
+///
+/// Anchored to the end, and that is what makes it safe rather than clever. The
+/// film this was written for is called "(500) Days of Summer (2009)": a rule
+/// that took the first bracketed number would date it to the year 500, and one
+/// that took any bracketed number would find candidates in half the release
+/// tags people put in file names. At the end, in brackets, exactly four
+/// digits, is a library having written a year.
+///
+/// The name comes back whole when there is no year to take off it, and also
+/// when taking it off would leave nothing - a file actually named "(2009)"
+/// keeps that as its title, since something is better to show than nothing.
+fn split_year(name: &str) -> (String, Option<u32>) {
+    let whole = || (name.to_string(), None);
+    let name = name.trim_end();
+    let Some((rest, digits)) = name.strip_suffix(')').and_then(|n| n.rsplit_once('(')) else {
+        return whole();
+    };
+    if digits.len() != 4 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return whole();
+    }
+    // The same span the container's own dates are held to: early enough for
+    // the first films, late enough not to argue with anybody's plans.
+    let Some(year) = digits
+        .parse()
+        .ok()
+        .filter(|year| (1870..=2200).contains(year))
+    else {
+        return whole();
+    };
+    let rest = rest.trim_end();
+    match rest.is_empty() {
+        true => whole(),
+        false => (rest.to_string(), Some(year)),
+    }
+}
+
 fn without_extension(name: &str) -> String {
     let Some((stem, extension)) = name.rsplit_once('.') else {
         return name.to_string();
@@ -404,6 +454,44 @@ pub fn load_image(art: &Art) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use super::split_year;
+
+    /// The file this rule was written for, and the reason it is anchored to
+    /// the end: the title opens with a bracketed number that is not a year.
+    #[test]
+    fn a_library_year_comes_off_the_end() {
+        let (name, year) = split_year("(500) Days of Summer (2009)");
+        assert_eq!(name, "(500) Days of Summer");
+        assert_eq!(year, Some(2009));
+    }
+
+    /// A bracketed number anywhere but the end is left alone, however much it
+    /// looks like a year. Release tags are full of them.
+    #[test]
+    fn only_at_the_very_end() {
+        assert_eq!(split_year("Some Film (2009) 1080p BluRay").1, None);
+        assert_eq!(split_year("(500) Days of Summer").1, None);
+        assert_eq!(split_year("Apollo (13)").1, None);
+    }
+
+    /// Four digits exactly, and inside a span a film could have been made in.
+    #[test]
+    fn implausible_years_are_not_years() {
+        assert_eq!(split_year("Film (20099)").1, None);
+        assert_eq!(split_year("Film (209)").1, None);
+        assert_eq!(split_year("Film (1860)").1, None);
+        assert_eq!(split_year("Film (2201)").1, None);
+        assert_eq!(split_year("Film (20a9)").1, None);
+    }
+
+    /// Taking the year off would leave nothing to call the film, so it stays.
+    #[test]
+    fn a_name_that_is_only_a_year_keeps_it() {
+        let (name, year) = split_year("(2009)");
+        assert_eq!(name, "(2009)");
+        assert_eq!(year, None);
+    }
+
     use super::*;
 
     fn details() -> Details {
