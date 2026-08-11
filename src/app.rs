@@ -1087,6 +1087,17 @@ impl App {
             });
         }
 
+        {
+            let weak = Rc::downgrade(&app);
+            let motion = gtk::EventControllerMotion::new();
+            motion.connect_motion(move |_, _, _| {
+                if let Some(app) = weak.upgrade() {
+                    app.show_pointer();
+                }
+            });
+            window.add_controller(motion);
+        }
+
         app.install_key_handling();
         app.install_accelerators(gtk_app);
 
@@ -1332,6 +1343,7 @@ impl App {
         let primary = primary_mask();
         let app = self.clone();
         controller.connect_key_pressed(move |_, key, _, state| {
+            app.hide_pointer();
             let playing = app.playback.borrow().is_some();
             match key {
                 // Only claimed during playback - the menus need Space for
@@ -2076,6 +2088,29 @@ impl App {
         // on the way out changed how the application started for ever after.
     }
 
+    /// Takes the pointer off the screen once something else is driving.
+    ///
+    /// Fullscreen only. A window sits on a desktop the pointer belongs to as
+    /// much as to us - there is a title bar above it and other windows behind -
+    /// and one that vanishes while crossing an application is one somebody
+    /// then has to go hunting for. Fullscreen is the case where this is all
+    /// there is, and a pointer left over the menu is just something on screen.
+    ///
+    /// The playback strip does the same for itself against the picture; this
+    /// is the menus, which had no reason to think about the pointer until they
+    /// filled a television.
+    fn hide_pointer(&self) {
+        if self.window.is_fullscreen() {
+            self.window.set_cursor_from_name(Some("none"));
+        }
+    }
+
+    /// And puts it back the moment it moves, which is the only signal that
+    /// somebody has picked the mouse up again.
+    fn show_pointer(&self) {
+        self.window.set_cursor(None);
+    }
+
     /// Records what the gamepad should be moving through. Screens built from
     /// buttons alone pass `None`, and fall back to GTK's directional focus.
     fn set_nav(&self, list: Option<&gtk::ListBox>, header: &[gtk::Button], footer: &[gtk::Button]) {
@@ -2119,6 +2154,7 @@ impl App {
 
     fn handle_action(self: &Rc<Self>, action: crate::gamepad::Action) {
         use crate::gamepad::Action;
+        self.hide_pointer();
         match action {
             Action::Up if self.playback.borrow().is_some() => self.enter_controls(),
             Action::Down if self.playback.borrow().is_some() => self.leave_controls(),
@@ -2233,6 +2269,20 @@ impl App {
         let header = self.nav_header.borrow().clone();
 
         let Some(list) = list else {
+            // A screen of buttons and no rows. Between the two rows by name,
+            // since a directional search cannot reliably get from one to the
+            // other when they are not above one another on the page.
+            let focused = |buttons: &[gtk::Button]| buttons.iter().any(|button| button.has_focus());
+            let landing = match delta {
+                _ if delta > 0 && focused(&header) => footer.first(),
+                _ if delta < 0 && focused(&footer) => header.first(),
+                _ => None,
+            };
+            if let Some(button) = landing {
+                self.sounds.borrow().click();
+                button.grab_focus();
+                return;
+            }
             let direction = if delta < 0 {
                 gtk::DirectionType::Up
             } else {
@@ -3819,10 +3869,22 @@ impl App {
         }
         content.append(&footer);
 
-        let mut stops: Vec<gtk::Button> = vec![browse.clone(), address];
-        stops.push(gear);
-        stops.extend(fullscreen);
-        self.set_nav(None, &[], &stops);
+        // Two rows rather than one run of four: the pair that chooses a
+        // video, and the pair in the corner. Up and down move between the
+        // rows, which is what they look like they should do - as one list they
+        // fell through to GTK's own directional search, and it will not find a
+        // button in the bottom corner from one in the middle of the page.
+        let header = [browse.clone(), address];
+        let mut footer = vec![gear];
+        footer.extend(fullscreen);
+        self.set_nav(None, &header, &footer);
+        // And the arrows have to be sent somewhere. `wire_navigation` does
+        // this for every screen built around a list, and this one is not - so
+        // without it the keys reached a focused button, which does nothing
+        // with them, and stopped there.
+        for button in header.iter().chain(footer.iter()) {
+            self.wire_arrows(button.upcast_ref());
+        }
         // Deferred until the page is actually in the window. This is built
         // before `show_menu` installs it, and focus cannot be taken by a
         // widget that is not on screen yet - the same reason `settle_on`
@@ -4119,6 +4181,11 @@ impl App {
             }
             Setting::Subtitles => {
                 entries.push(("None".to_string(), None));
+                // Under "None", and again above the row that leaves the film
+                // to go looking on disk. What sits between is what the file
+                // itself offers, and the two either side of it are answers of
+                // a different kind.
+                dividers.push(1);
                 let chosen = self.subtitle.borrow().clone();
                 for (position, option) in self.subtitle_options.borrow().iter().enumerate() {
                     if chosen.as_ref() == Some(&option.choice()) {
@@ -4129,6 +4196,7 @@ impl App {
                 // Last, after everything the video came with, the same way the
                 // track lists offer one: a subtitle file from somewhere else
                 // is the answer when what is wanted is not beside the film.
+                dividers.push(entries.len());
                 entries.push((
                     "Browse...".to_string(),
                     Some(self.subtitle_options.borrow().len()),
@@ -4136,6 +4204,7 @@ impl App {
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
                 entries.push(("None".to_string(), None));
+                dividers.push(1);
                 let role = if setting == Setting::PrimaryTrack {
                     Role::Primary
                 } else {
@@ -4154,6 +4223,7 @@ impl App {
                 // is most films with one soundtrack and a description track
                 // downloaded beside them.
                 let audio_file = entries.len() - 1;
+                dividers.push(entries.len());
                 if let Some(file) = file.as_ref() {
                     current = Some(audio_file);
                     entries.push((format!("Audio File: {}", file.label()), Some(audio_file)));
@@ -6787,6 +6857,12 @@ impl App {
                     }
                     _ => None,
                 };
+                // Where Ctrl+A and Ctrl+C look for text. Set here as well as
+                // in `settings_stage`, because choosing a category refills the
+                // pane without going through it - so About selected from the
+                // column had a body on screen and nothing pointing at it.
+                *app.copy_root.borrow_mut() =
+                    app.settings_body.borrow().clone().map(|body| body.upcast());
                 while let Some(row) = list.row_at_index(0) {
                     list.remove(&row);
                 }
@@ -11436,15 +11512,24 @@ fn style_css(scale: f64) -> String {
            setting it explains, so a column of them reads as annotation rather
            than as more rows. */
         .tp-row-note {{ font-size: {note}px; opacity: 0.55; }}
-        /* The link in a note is the same words as the rest of it, underlined.
-           A theme's link blue on a line of dimmed grey reads as a different
-           kind of thing entirely, and there is only one kind of thing here.
+        /* Every link in the application, in the interface's own ink rather
+           than a theme's blue. There is one palette here and blue is the
+           accent that marks where the cursor is - a link wearing it reads as a
+           selection, and a purple visited one reads as nothing else in the
+           interface has ever used.
 
-           Written as `a` first, which is HTML and not GTK: the parser accepts
-           it, matches nothing, and leaves the link exactly as the theme had
-           it. GTK gives each markup link its own node named `link`, and puts
-           the widget in the `:link` state - both are named here because which
-           one carries the colour has moved between versions. */
+           Named twice because GTK has said it both ways: each markup link gets
+           its own node called `link`, and the widget also carries the `:link`
+           state. Not `a`, which is HTML - the parser accepts it, matches
+           nothing, and leaves the theme colour exactly where it was.
+
+           Slightly held back at rest so it does not shout over the sentence it
+           sits in, and full strength under the pointer. */
+        link, *:link, *:visited {{ color: rgba(255, 255, 255, 0.78); }}
+        link:hover, *:link:hover, *:visited:hover {{ color: #ffffff; }}
+        /* Except inside a note, which is dimmed as a whole: a link held back
+           again there would end up quieter than the text around it, which is
+           backwards for the one part of the line that can be pressed. */
         .tp-row-note link,
         .tp-row-note *:link {{ color: #ffffff; }}
         /* Sized with the rest of the interface: the theme's default switch is
