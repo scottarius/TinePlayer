@@ -2168,6 +2168,15 @@ impl App {
     /// there was one. Left and right do nothing else on this screen, so they
     /// are free to mean this where a slider is sitting.
     fn settings_slider(self: &Rc<Self>, direction: isize) -> bool {
+        // On that screen and no other. The sliders are held on the application
+        // rather than on the page they belong to, and they outlive it: leaving
+        // settings does not empty the list, so this went on matching by row
+        // number against whatever screen came next. Backing out to the media
+        // page and pressing Left moved the interface size, because the row
+        // selected there had the same number as the row the size sits on.
+        if *self.screen.borrow() != Screen::Settings {
+            return false;
+        }
         let Some(index) = self
             .nav_list
             .borrow()
