@@ -5325,13 +5325,15 @@ impl App {
                         app.set_audio_file(path);
                         app.show_menu();
                     }
-                    Some(path) => {
-                        let source = Source::File(path.to_path_buf());
-                        match app.set_file(&source) {
-                            Ok(()) => app.show_menu(),
-                            Err(e) => app.show_source_error(&source, &e, false),
-                        }
-                    }
+                    // Through the same screen a URL opens through, rather
+                    // than reading the file here and moving when it is done.
+                    // Probing is not instant - it starts a GStreamer
+                    // discoverer, and a file on a network share can take a
+                    // second or two - and doing it on this thread left the
+                    // browser standing there with the row lit, looking like
+                    // the press had been missed. This puts the spinner up
+                    // first and reads the file behind it.
+                    Some(path) => app.show_opening(Source::File(path.to_path_buf())),
                     // Up. Only offered when there is somewhere above to go:
                     // at the top of the tree the column to the left is how
                     // you reach anywhere else.
