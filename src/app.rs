@@ -2512,41 +2512,26 @@ impl App {
     /// backdrop, which is what makes it read as a window opening over the
     /// menu rather than as another screen replacing it.
     fn build_menu_page(self: &Rc<Self>) -> (gtk::Widget, Option<gtk::ListBox>) {
+        // What a resize compares against to decide whether rebuilding this
+        // page would change anything - recorded here, for every menu page,
+        // rather than where the poster is built.
+        //
+        // Only the media page has a poster, so recording it there left the
+        // empty page's figure at whatever it happened to be, which never
+        // matched and so always answered "yes, rebuild". The page was then
+        // rebuilt every quarter second for as long as it was on screen, and
+        // the surface layout that followed each rebuild scheduled the next.
+        //
+        // It was close to invisible, because the page it kept rebuilding looks
+        // the same each time - but the pointer's idea of what is under it does
+        // not survive the widget being destroyed and made again, so hovering a
+        // button only lit it while the mouse was moving, and a click only
+        // landed if it happened to arrive between two rebuilds.
+        self.built_poster.set(self.poster_height(self.scale.get()));
         if self.file.borrow().is_none() {
             return (self.build_empty_page().upcast(), None);
         }
         let (page, list) = self.build_media_page();
-        if std::env::var("TINE_MEASURE").is_ok() {
-            let page2 = page.clone();
-            glib::idle_add_local_once(move || {
-                let v = gtk::Orientation::Vertical;
-                eprintln!("MEASURE overlay {:?}", page2.measure(v, -1));
-                let mut stack: Vec<(gtk::Widget, usize)> = page2
-                    .first_child()
-                    .map(|c| vec![(c, 0usize)])
-                    .unwrap_or_default();
-                while let Some((w, depth)) = stack.pop() {
-                    let (min, nat, _, _) = w.measure(v, -1);
-                    if min > 300 && depth < 7 {
-                        eprintln!(
-                            "MEASURE {:indent$}{} min={} nat={}",
-                            "",
-                            w.type_().name(),
-                            min,
-                            nat,
-                            indent = depth * 2
-                        );
-                    }
-                    let mut child = w.first_child();
-                    while let Some(c) = child {
-                        child = c.next_sibling();
-                        if depth < 7 {
-                            stack.push((c, depth + 1));
-                        }
-                    }
-                }
-            });
-        }
         (page.upcast(), Some(list))
     }
 
@@ -3095,9 +3080,6 @@ impl App {
         // rather than a constraint: being a little out until the next rebuild
         // costs nothing that anyone can see.
         let height = self.poster_height(scale);
-        // Recorded so a resize can tell whether rebuilding the page would
-        // change anything. Past the ceiling below it would not.
-        self.built_poster.set(height);
         // Two by three, which every poster in every library is drawn to.
         let width = height * 2.0 / 3.0;
 
