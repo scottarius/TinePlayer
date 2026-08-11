@@ -96,6 +96,35 @@ else
     failed=1
 fi
 
+# --- Everything shipped has to have its terms in the bundle -------------
+#
+# `licenses.sh` accounts for a library by asking Homebrew which formula owns
+# it, so anything built outside Homebrew is invisible to it and lands in a
+# list headed "built into TinePlayer itself, or part of macOS" - which is a
+# false statement about somebody else's library, in the one file whose job is
+# to be accurate about exactly that.
+#
+# That is how libaccesskit-c came to be shipped with its license nowhere in
+# the bundle. Caught here rather than at release time, because README and
+# THIRD-PARTY.md both promise a packaged build carries the paperwork.
+echo "Checking every bundled library is accounted for..."
+report="$app/Contents/Resources/licenses/BUNDLED-VERSIONS.txt"
+if [[ ! -f "$report" ]]; then
+    echo "  no BUNDLED-VERSIONS.txt at all" >&2
+    failed=1
+else
+    orphans="$(awk '/^Not owned by any Homebrew formula/,0' "$report" |
+        grep -E '^\s+lib.*\.(dylib|so)$' || true)"
+    if [[ -n "$orphans" ]]; then
+        echo "Shipped with no license text and no owner:" >&2
+        printf '%s\n' "$orphans" >&2
+        echo "  Put its license under \$TINEPLAYER_GTK_PREFIX/share/licenses/<name>/." >&2
+        failed=1
+    else
+        echo "  all accounted for"
+    fi
+fi
+
 if (( failed )); then
     echo "Bundle verification failed." >&2
     exit 1

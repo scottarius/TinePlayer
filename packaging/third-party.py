@@ -44,6 +44,7 @@ Loaded at runtime rather than compiled in.
 | GTK 4 | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/gtk |
 | GLib | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/glib |
 | FFmpeg | LGPL-2.1-or-later | https://ffmpeg.org |
+| AccessKit | Apache-2.0 OR MIT | https://github.com/AccessKit/accesskit |
 
 - The Windows and macOS packages include them, with their license texts.
 - The Linux package includes none of them. It declares them as dependencies,
@@ -52,6 +53,17 @@ Loaded at runtime rather than compiled in.
 
 Where included they are unmodified, and being separate shared libraries they
 can be replaced with your own build of the same version.
+
+> [!NOTE]
+> AccessKit is what lets a screen reader read TinePlayer on Windows and macOS.
+> GTK reaches it through a C binding, `accesskit-c`, whose license texts ship
+> beside it; parts of AccessKit derive from Chromium under a BSD-style license,
+> included with the rest.
+>
+> The macOS package carries a GTK built from the released source with one
+> option Homebrew leaves off, `-Daccesskit=enabled`. Nothing else about it
+> differs, and no source was changed. Without it a screen reader sees the
+> window and nothing inside it.
 
 > [!NOTE]
 > The GPL-licensed `a52dec` and `dtsdec` plugins are included in no package.
