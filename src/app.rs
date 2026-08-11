@@ -662,6 +662,14 @@ pub struct App {
     /// so that leaving fullscreen can put back the state it found rather than
     /// the one fullscreen implies. See [`App::toggle_fullscreen`].
     maximized_before_fullscreen: Cell<bool>,
+    /// The size the window last had while it was an ordinary window, kept so
+    /// it can be written down on the way out.
+    ///
+    /// Tracked rather than read at the end, because by then it may not be one:
+    /// a window closed while maximized or fullscreen reports the screen, and
+    /// saving that would mean opening at screen size for ever after with
+    /// nothing to go back to.
+    windowed_size: Cell<(i32, i32)>,
     /// Kept so the interface can be re-scaled after the fact.
     styles: gtk::CssProvider,
     /// The scale in force, which the settings screen reports and the
@@ -761,7 +769,11 @@ impl App {
 
         let sounds = Sounds::new(config.sounds, config.primary_sink.clone());
 
-        let (width, height) = default_window_size(scale, monitor.as_ref());
+        let (width, height) = default_window_size(
+            scale,
+            monitor.as_ref(),
+            (config.window_width, config.window_height),
+        );
         let window = gtk::ApplicationWindow::builder()
             .application(gtk_app)
             .title("TinePlayer")
@@ -788,6 +800,7 @@ impl App {
             device_names: RefCell::new(Vec::new()),
             device_scan: Cell::new(false),
             maximized_before_fullscreen: Cell::new(false),
+            windowed_size: Cell::new((0, 0)),
             resize_settle: RefCell::new(None),
             built_poster: Cell::new(0.0),
             tracks: RefCell::new(Vec::new()),
@@ -884,9 +897,9 @@ impl App {
             if let Some(surface) = window.surface() {
                 let weak = Rc::downgrade(&app);
                 surface.connect_layout(move |_, _, _| {
-                    if let Some(app) = weak.upgrade() {
-                        app.rebuild_when_resize_ends();
-                    }
+                    let Some(app) = weak.upgrade() else { return };
+                    app.note_windowed_size();
+                    app.rebuild_when_resize_ends();
                 });
             }
         });
@@ -927,6 +940,16 @@ impl App {
                 true => window.connect_maximized_notify(watch),
                 false => window.connect_fullscreened_notify(watch),
             };
+        }
+
+        {
+            let weak = Rc::downgrade(&app);
+            window.connect_close_request(move |_| {
+                if let Some(app) = weak.upgrade() {
+                    app.remember_window_size();
+                }
+                glib::Propagation::Proceed
+            });
         }
 
         app.install_key_handling();
@@ -3048,6 +3071,41 @@ impl App {
     /// for it.
     fn poster_height(&self, scale: f64) -> f64 {
         (self.page_height(scale) * POSTER_SHARE).clamp(120.0, 620.0 * scale)
+    }
+
+    /// Remembers the window's size while it is an ordinary window.
+    ///
+    /// Neither maximized nor fullscreen: both report the screen's dimensions,
+    /// and a size taken then is not a size the window can be restored to.
+    fn note_windowed_size(&self) {
+        if self.window.is_maximized() || self.window.is_fullscreen() {
+            return;
+        }
+        let (width, height) = (self.window.width(), self.window.height());
+        if width > 0 && height > 0 {
+            self.windowed_size.set((width, height));
+        }
+    }
+
+    /// Writes down where the window was left, on the way out.
+    ///
+    /// Every way of leaving goes through `window.close()`, which is what makes
+    /// this one handler enough - the close button, Ctrl+Q, the confirmation,
+    /// and a fatal error all end here.
+    fn remember_window_size(&self) {
+        let (width, height) = self.windowed_size.get();
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let mut config = self.config.borrow_mut();
+        if config.window_width == Some(width) && config.window_height == Some(height) {
+            return;
+        }
+        config.window_width = Some(width);
+        config.window_height = Some(height);
+        if let Err(e) = config.save() {
+            eprintln!("Could not save the window size: {e}");
+        }
     }
 
     /// Rebuilds the media page once a drag-resize has stopped moving.
@@ -10460,13 +10518,26 @@ fn suppress_error_bell() {
 /// 4K display ends up with a window too small for its own contents. Capped to
 /// most of the monitor so a large scale on a modest screen still opens
 /// something that fits, panels and decoration included.
-fn default_window_size(scale: f64, monitor: Option<&gdk::Monitor>) -> (i32, i32) {
-    const BASE_WIDTH: f64 = 1100.0;
-    const BASE_HEIGHT: f64 = 700.0;
+fn default_window_size(
+    scale: f64,
+    monitor: Option<&gdk::Monitor>,
+    saved: (Option<i32>, Option<i32>),
+) -> (i32, i32) {
+    // Sixteen by nine, and a good deal larger than it was. The old size was
+    // 1100x700 - close to 11:7, and so a shape no film is - which left the
+    // media page holding a column of empty air down the sides of its artwork
+    // before anybody had touched a window edge.
+    const BASE_WIDTH: f64 = 1600.0;
+    const BASE_HEIGHT: f64 = 900.0;
     const MAX_FRACTION: f64 = 0.9;
 
-    let mut width = BASE_WIDTH * scale;
-    let mut height = BASE_HEIGHT * scale;
+    // Where it was left, if it was left anywhere. Held to the same fraction of
+    // the screen as the default below: a size remembered from a larger monitor
+    // would otherwise open off the edge of a smaller one.
+    let (mut width, mut height) = match saved {
+        (Some(width), Some(height)) if width > 0 && height > 0 => (width as f64, height as f64),
+        _ => (BASE_WIDTH * scale, BASE_HEIGHT * scale),
+    };
     if let Some(monitor) = monitor {
         let geometry = monitor.geometry();
         width = width.min(geometry.width() as f64 * MAX_FRACTION);
