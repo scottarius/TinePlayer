@@ -165,9 +165,11 @@ step "install GTK" meson install -C "$gtk_src/_build"
 
 gtk_licenses="$prefix/share/licenses/gtk4-accesskit"
 mkdir -p "$gtk_licenses"
-for name in COPYING; do
-    [[ -f "$gtk_src/$name" ]] && cp "$gtk_src/$name" "$gtk_licenses/"
-done
+# An if rather than `[[ -f ]] && cp`: under set -e that form exits the script
+# when the file is absent, which is the opposite of what guarding it is for.
+if [[ -f "$gtk_src/COPYING" ]]; then
+    cp "$gtk_src/COPYING" "$gtk_licenses/"
+fi
 echo "gtk $gtk_version, built with -Daccesskit=enabled" > "$gtk_licenses/VERSION"
 
 # --- Say what came out ---------------------------------------------------
