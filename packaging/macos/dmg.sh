@@ -26,14 +26,13 @@ for volume in /Volumes/TinePlayer*; do
     hdiutil detach "$volume" -force -quiet 2>/dev/null && echo "Ejected stale $volume"
 done
 
-version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
 out="dist/macos"
-# Named for the architecture it was built on, because the two packages are not
-# interchangeable and the release carries both. uname -m is the right source
-# for the name: it prints arm64 or x86_64, which is what macOS itself calls
-# them, and it describes the machine that actually did the build rather than
-# what a caller believed about it.
-dmg="$out/TinePlayer-$version-macos-$(uname -m).dmg"
+# Repo-root-relative, because the cd above has already happened: deriving this
+# from $0 would resolve against the wrong directory when the script is run
+# from inside packaging/macos rather than from the root.
+# shellcheck source=packaging/macos/dmg-name.sh
+. packaging/macos/dmg-name.sh
+dmg="$(dmg_path)"
 mkdir -p "$out"
 rm -f "$dmg"
 

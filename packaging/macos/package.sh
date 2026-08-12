@@ -60,8 +60,9 @@ echo "=== Building the disk image ==="
 #
 # Left unset, the bundle keeps its ad-hoc signature, which runs on the
 # machine that built it and nowhere else without a warning.
-version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
-dmg="dist/macos/TinePlayer-$version-macos.dmg"
+# shellcheck source=packaging/macos/dmg-name.sh
+. "$here/dmg-name.sh"
+dmg="$(dmg_path)"
 
 if [[ -n "${TINE_SIGN_IDENTITY:-}" ]]; then
     echo
@@ -226,4 +227,4 @@ fi
 
 echo
 echo "Done. In dist/:"
-ls -1sh "dist/macos/TinePlayer-$version-macos.dmg" 2>/dev/null || true
+ls -1sh "$dmg" 2>/dev/null || true
