@@ -10,6 +10,13 @@
 #
 # Callers must have cd'd to the repository root, which every script here does.
 
+# The version in Cargo.toml. Here too because the disk image needs it twice
+# over - once in the file name below, once as the volume name the Finder
+# window shows - and reading it in two places invites them to disagree.
+app_version() {
+    grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2
+}
+
 # Prints the path the disk image should have, relative to the repository root.
 #
 # The architecture is part of it because a release carries both and they are
@@ -17,7 +24,5 @@
 # which is what macOS itself calls them, and it describes the machine that did
 # the build rather than what a caller believed about it.
 dmg_path() {
-    local version
-    version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
-    echo "dist/macos/TinePlayer-$version-macos-$(uname -m).dmg"
+    echo "dist/macos/TinePlayer-$(app_version)-macos-$(uname -m).dmg"
 }

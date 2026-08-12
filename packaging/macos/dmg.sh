@@ -33,6 +33,8 @@ out="dist/macos"
 # shellcheck source=packaging/macos/dmg-name.sh
 . packaging/macos/dmg-name.sh
 dmg="$(dmg_path)"
+# The volume name the Finder window shows, which is not the file name.
+version="$(app_version)"
 mkdir -p "$out"
 rm -f "$dmg"
 
