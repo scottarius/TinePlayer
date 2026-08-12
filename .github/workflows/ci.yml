@@ -146,15 +146,32 @@ jobs:
         run: cargo build --release --locked
 
   macos:
-    name: macOS
-    # Pinned like the others, and Apple Silicon, which is what the project is
-    # developed on. Unlike the other two, the dependency versions cannot be
-    # pinned to match: Homebrew always serves current, with no equivalent of
-    # winget's version argument or apt's frozen archive. A GStreamer release
-    # can therefore break this job without any commit doing so - the one place
-    # in this workflow where red does not strictly mean "this commit is
-    # broken".
-    runs-on: macos-15
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      # One architecture failing should not cancel the other, as on Linux:
+      # knowing whether a break is arch-specific is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    # Pinned like the others. Both are macOS 15, so Homebrew serves the same
+    # formula versions to each and a difference between them is a real
+    # architecture difference rather than an OS one.
+    #
+    # Unlike the other two platforms, the dependency versions cannot be pinned
+    # to match: Homebrew always serves current, with no equivalent of winget's
+    # version argument or apt's frozen archive. A GStreamer release can
+    # therefore break this job without any commit doing so - the one place in
+    # this workflow where red does not strictly mean "this commit is broken".
+    #
+    # macos-15-intel is retired in fall 2027, and macos-26-intel succeeds it,
+    # so Intel support does not end with it. Both entries move together when
+    # that upgrade comes: keeping the two on one OS version is what makes a
+    # difference between them an architecture difference rather than an OS one.
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
 
@@ -188,8 +205,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: macos-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-cargo-
+          # Keyed on the architecture as well: target/ holds compiled objects
+          # for one of them, and a cache shared between the two would restore
+          # the wrong ones.
+          key: macos-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-${{ matrix.arch }}-cargo-
 
       - name: Verify GTK 4 and GStreamer share one prefix
         run: |

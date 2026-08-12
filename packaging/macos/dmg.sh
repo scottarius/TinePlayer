@@ -28,7 +28,12 @@ done
 
 version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
 out="dist/macos"
-dmg="$out/TinePlayer-$version-macos.dmg"
+# Named for the architecture it was built on, because the two packages are not
+# interchangeable and the release carries both. uname -m is the right source
+# for the name: it prints arm64 or x86_64, which is what macOS itself calls
+# them, and it describes the machine that actually did the build rather than
+# what a caller believed about it.
+dmg="$out/TinePlayer-$version-macos-$(uname -m).dmg"
 mkdir -p "$out"
 rm -f "$dmg"
 

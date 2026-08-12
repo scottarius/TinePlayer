@@ -93,17 +93,30 @@ jobs:
             dist/windows/*-setup.exe
 
   macos:
-    name: macOS package
+    name: macOS package (${{ matrix.arch }})
     # Whether there is a certificate to sign with. Carried into an env var
     # because the secrets context cannot be read from a step's `if`, only from
     # `env` and `with` - and a workflow that tries is rejected outright, with
     # no jobs and no log to say why.
     env:
       SIGNING: ${{ secrets.MACOS_CERT_P12 != '' }}
-    # Apple Silicon only, which is a deliberate decision: Apple stopped
-    # selling Intel Macs in 2023 and macOS 26 is their last release. An Intel
-    # package would be this same job on an Intel runner, added if anyone asks.
-    runs-on: macos-15
+    strategy:
+      # One architecture failing should not cancel the other, matching Linux.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    # Both are macOS 15, so each gets the same Homebrew formula versions and
+    # the GTK build below matches the same release on either.
+    #
+    # macos-15-intel is retired in fall 2027, and macos-26-intel succeeds it.
+    # Both entries move together when that upgrade comes, rather than one at a
+    # time: two packages built on different OS versions would differ in more
+    # than their architecture.
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
 
@@ -249,7 +262,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: macos
+          name: macos-${{ matrix.arch }}
           path: dist/macos/*.dmg
 
   linux:
@@ -374,14 +387,16 @@ jobs:
 
           setup="$(only 'artifacts/windows/*setup.exe')"
           zip="$(only 'artifacts/windows/*.zip')"
-          dmg="$(only 'artifacts/macos/*.dmg')"
+          mac_arm="$(only 'artifacts/macos-arm64/*.dmg')"
+          mac_intel="$(only 'artifacts/macos-x86_64/*.dmg')"
           amd64="$(only 'artifacts/linux-amd64/*.deb')"
           arm64="$(only 'artifacts/linux-arm64/*.deb')"
 
           {
             echo "setup=$setup"
             echo "zip=$zip"
-            echo "dmg=$dmg"
+            echo "mac_arm=$mac_arm"
+            echo "mac_intel=$mac_intel"
             echo "amd64=$amd64"
             echo "arm64=$arm64"
           } >>"$GITHUB_OUTPUT"
@@ -391,7 +406,8 @@ jobs:
         with:
           files: |
             artifacts/windows/*
-            artifacts/macos/*
+            artifacts/macos-arm64/*
+            artifacts/macos-x86_64/*
             artifacts/linux-amd64/*
             artifacts/linux-arm64/*
           # Left as a draft so the notes can be finished, and the packages
@@ -422,7 +438,8 @@ jobs:
             | --- | --- | --- |
             | Windows | `${{ steps.files.outputs.setup }}` | The usual install, with a Start menu entry |
             | | `${{ steps.files.outputs.zip }}` | No installation, runs from wherever you unpack it |
-            | Mac | `${{ steps.files.outputs.dmg }}` | Any M1 or newer Mac |
+            | Mac | `${{ steps.files.outputs.mac_arm }}` | Apple silicon: any M1 or newer Mac |
+            | | `${{ steps.files.outputs.mac_intel }}` | Intel: Macs sold before late 2020 |
             | Linux | `${{ steps.files.outputs.amd64 }}` | Most desktops and laptops, Intel or AMD |
             | | `${{ steps.files.outputs.arm64 }}` | Raspberry Pi 4 or 5, and other ARM single-board computers |
 
@@ -437,6 +454,8 @@ jobs:
             ### Mac
 
             Download and open the .dmg file and drag TinePlayer.app into your Applications folder.
+
+            If you are not sure which of the two you need, open the Apple menu and choose **About This Mac**. A line reading **Chip** means Apple silicon; one reading **Processor** means Intel.
 
             ### Linux
 
