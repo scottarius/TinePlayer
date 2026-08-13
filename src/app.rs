@@ -3333,6 +3333,59 @@ impl App {
     /// position Kodi's own interface was just showing and the two never
     /// visibly disagree. Its answer stands even when it holds no resume point:
     /// a film Kodi considers unwatched starts at the beginning rather than
+    /// Works out where a chosen subtitle actually comes from.
+    ///
+    /// The three kinds resolve against three different things - the video's
+    /// own folder, the path as given, and the paired server - which is why
+    /// this is here rather than in the pipeline: only the application knows
+    /// all three. A library's subtitle resolves to a URL carrying the access
+    /// token, and that URL is built here, used, and never stored.
+    fn locate_subtitle(
+        &self,
+        source: &Source,
+        choice: Option<&crate::subtitles::SubtitleChoice>,
+    ) -> Result<Option<crate::subtitles::SubtitleSource>, String> {
+        use crate::subtitles::{SubtitleChoice, SubtitleSource};
+
+        let uri_for = |path: std::path::PathBuf| {
+            glib::filename_to_uri(&path, None)
+                .map(|uri| SubtitleSource::Uri(uri.to_string()))
+                .map_err(|e| format!("Can't open {}: {e}", path.display()))
+        };
+
+        match choice {
+            None => Ok(None),
+            Some(SubtitleChoice::Embedded(index)) => Ok(Some(SubtitleSource::Embedded(*index))),
+            // A name, which means the folder the video is in. A source with no
+            // folder - anything opened by URL - has no subtitle files beside
+            // it to have chosen in the first place.
+            Some(SubtitleChoice::External(name)) => source
+                .local()
+                .and_then(|video| video.parent())
+                .map(|folder| folder.join(name))
+                .ok_or_else(|| format!("Can't find {name}: it sits beside a local video"))
+                .and_then(uri_for)
+                .map(Some),
+            // A path, which means itself. Chosen by hand from somewhere else
+            // on disk, or named on the command line, and so not tied to where
+            // the video happens to live.
+            Some(SubtitleChoice::File(path)) => uri_for(path.clone()).map(Some),
+            // Only a video the library is playing has these, and both halves
+            // are needed: the client holds the address and token, the item
+            // holds which media source the index counts against.
+            Some(SubtitleChoice::Library(index)) => {
+                let client = self.jellyfin.borrow().clone();
+                let item = self.jellyfin_item.borrow().clone();
+                match (client, item) {
+                    (Some(client), Some(item)) => Ok(Some(SubtitleSource::Uri(
+                        client.subtitle_url(&item, *index),
+                    ))),
+                    _ => Err("Can't fetch that subtitle: it belongs to a library this video did not come from".to_string()),
+                }
+            }
+        }
+    }
+
     /// wherever our own file happens to remember. Only a Kodi that does not
     /// answer at all falls back to `positions.json`.
     ///
@@ -5717,7 +5770,17 @@ impl App {
 
         let duration_ns = media.duration_ns;
         let tracks = media.audio;
-        let mut options = crate::subtitles::options(source.local(), &media.subtitles);
+        // What the library holds beside the video, which only a cast video has.
+        // These are files on the server rather than streams in the container,
+        // so they are offered alongside the embedded ones rather than counted
+        // among them.
+        let library = self
+            .jellyfin_item
+            .borrow()
+            .as_ref()
+            .map(|item| item.streams.subtitle_options())
+            .unwrap_or_default();
+        let mut options = crate::subtitles::options(source.local(), &media.subtitles, &library);
 
         let (primary_language, secondary_language, subtitle_language, described) = {
             let config = self.config.borrow();
@@ -10071,11 +10134,30 @@ impl App {
         // inline because the reveal below waits for playback to reach it.
         let resume = (!restart).then(|| self.resume_position()).flatten();
 
+        // Worked out here rather than in the pipeline, because locating one
+        // can need the server address and access token, which are ours to
+        // know. A subtitle that cannot be found gives up the subtitle and not
+        // the film: it is the least of what somebody pressed play for.
+        let located = match self.locate_subtitle(&path, subtitle.as_ref()) {
+            Ok(located) => located,
+            Err(e) => {
+                eprintln!("{e}");
+                None
+            }
+        };
+        // Either there is something to switch to, or something already chosen.
+        // The second half is not redundant: `--play` goes straight past the
+        // page that fills the list in, so a subtitle named on the command line
+        // would otherwise resolve correctly and then have no overlay to be
+        // drawn by.
+        let offers_subtitles = !self.subtitle_options.borrow().is_empty() || located.is_some();
+
         let result = Playback::start(
             &path,
             primary_audio.as_ref(),
             secondary_audio.as_ref(),
-            subtitle.as_ref(),
+            located.as_ref(),
+            offers_subtitles,
             &self.config.borrow(),
             resume,
             self.storage_key().unwrap_or_default(),

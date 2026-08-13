@@ -427,6 +427,22 @@ impl Client {
     /// and with its track names intact - the names matter as much as the
     /// count, since described tracks are found by reading them.
     ///
+    /// Where to fetch one of the server's own subtitle files.
+    ///
+    /// `index` is Jellyfin's numbering across every stream in the item, not a
+    /// position among the subtitles - an external subtitle commonly sits at 0,
+    /// before the video. It is quoted back exactly as it was given.
+    ///
+    /// Asked for as `.srt` rather than the format it is stored in: Jellyfin
+    /// converts on the way out, so one request shape covers every text format
+    /// the library holds, and `subparse` needs no help identifying it.
+    pub fn subtitle_url(&self, item: &Item, index: u32) -> String {
+        format!(
+            "{}/Videos/{}/{}/Subtitles/{index}/Stream.srt?api_key={}",
+            self.server, item.id, item.media_source_id, self.token
+        )
+    }
+
     /// The token rides in the query string because GStreamer opens this URL
     /// itself and carries no headers of ours.
     ///
@@ -712,6 +728,28 @@ impl Streams {
 
     pub fn external_subtitles(&self) -> impl Iterator<Item = &Stream> {
         self.subtitles.iter().filter(|stream| stream.external)
+    }
+
+    /// The server's own subtitle files, as entries for the chooser.
+    ///
+    /// Only the external ones. The embedded ones are already offered by
+    /// position through `as_media`, and listing them twice would give two
+    /// entries that play the same subtitle by two different routes.
+    ///
+    /// Labelled the same way an embedded track is, so a list holding both
+    /// reads as one list rather than as two that were joined.
+    pub fn subtitle_options(&self) -> Vec<crate::subtitles::Subtitle> {
+        self.external_subtitles()
+            .map(|stream| crate::subtitles::Subtitle::Library {
+                index: stream.index,
+                label: match (stream.language.is_empty(), stream.title.is_empty()) {
+                    (false, false) => format!("{} — {}", stream.language, stream.title),
+                    (false, true) => stream.language.clone(),
+                    (true, false) => stream.title.clone(),
+                    (true, true) => "Subtitles".to_string(),
+                },
+            })
+            .collect()
     }
 }
 

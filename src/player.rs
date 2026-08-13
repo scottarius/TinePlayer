@@ -126,14 +126,25 @@ impl Playback {
         source: &Source,
         primary_audio: Option<&crate::pipeline::AudioSource>,
         secondary_audio: Option<&crate::pipeline::AudioSource>,
-        subtitle: Option<&crate::subtitles::SubtitleChoice>,
+        subtitle: Option<&crate::subtitles::SubtitleSource>,
+        // Whether the video has any subtitle to offer, which is not the same
+        // as one being chosen. The overlay is built either way so that
+        // subtitles can be switched on later; see `build_pipeline`.
+        offers_subtitles: bool,
         config: &Config,
         resume_ns: Option<u64>,
         key: String,
         kodi_file: String,
         on_ended: impl Fn(Ended) + 'static,
     ) -> Result<Rc<Self>, String> {
-        let pipeline = build_pipeline(source, primary_audio, secondary_audio, subtitle, config)?;
+        let pipeline = build_pipeline(
+            source,
+            primary_audio,
+            secondary_audio,
+            subtitle,
+            offers_subtitles,
+            config,
+        )?;
 
         // gtk4paintablesink renders into a GdkPaintable rather than creating
         // its own window; handing that to a gtk::Picture is what embeds the
@@ -536,6 +547,33 @@ impl Playback {
         }
     }
 
+    /// Sends a seek to the subtitle chain, which has a source of its own.
+    ///
+    /// The same hand delivery the external audio needs, and for the same
+    /// reason: this chain is fed by its own source rather than by the video's,
+    /// so a seek sent through the pipeline does not reliably reach it. Without
+    /// this the subtitles carry on from where they were while the picture
+    /// moves, which reads as them being wrong rather than merely behind.
+    fn seek_external_subtitle(&self, target: gst::ClockTime) {
+        let Some(source) = self
+            .pipeline
+            .by_name(crate::pipeline::EXTERNAL_SUBTITLE_SOURCE)
+        else {
+            return;
+        };
+        let seek = gst::event::Seek::new(
+            1.0,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            gst::SeekType::Set,
+            target,
+            gst::SeekType::None,
+            gst::ClockTime::NONE,
+        );
+        if !source.send_event(seek) {
+            eprintln!("Failed to seek the subtitle source");
+        }
+    }
+
     fn run_seek(&self) {
         let Some(target) = self.seek_target.get() else {
             return;
@@ -574,6 +612,7 @@ impl Playback {
         // reach. Seeking the same target twice is harmless - both branches are
         // being sent to the same place.
         self.seek_external_audio(target);
+        self.seek_external_subtitle(target);
 
         if workaround {
             for role in ["primary", "secondary"] {
@@ -680,12 +719,18 @@ impl Playback {
         self.bus_watch.borrow_mut().take();
     }
 
-    /// Whether this playback has subtitles to turn on and off at all.
+    /// Whether there are subtitles to turn on and off right now.
     ///
-    /// The overlay is only built when a subtitle was chosen, so its absence is
-    /// the same question as "was anything selected".
+    /// The overlay alone stopped being the answer. It is built whenever the
+    /// video offers a subtitle rather than only when one was chosen, so that
+    /// they can be switched on later - which means it is often sitting there
+    /// with nothing feeding it. Asking whether anything is attached is what
+    /// keeps the button from offering to show what is not there.
     pub fn has_subtitles(&self) -> bool {
-        self.pipeline.by_name("suboverlay").is_some()
+        self.pipeline
+            .by_name("suboverlay")
+            .and_then(|overlay| overlay.static_pad("subtitle_sink"))
+            .is_some_and(|pad| pad.is_linked())
     }
 
     /// Turns subtitles on or off mid-playback, returning whether they are now

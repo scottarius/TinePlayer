@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
@@ -8,7 +7,7 @@ use gstreamer as gst;
 use crate::config::Config;
 use crate::devices::find_audio_output_device;
 use crate::source::Source;
-use crate::subtitles::SubtitleChoice;
+use crate::subtitles::SubtitleSource;
 
 /// Pango leaves the family unspecified by default, which resolves to a serif
 /// face. Bold with the renderer's black outline is what stays legible against
@@ -53,6 +52,10 @@ struct Targets {
 /// Sending one to `urisourcebin` instead reaches `filesrc`, which cannot
 /// answer it, and the seek is simply refused.
 pub const EXTERNAL_AUDIO_DECODER: &str = "extaudio_dec_";
+
+/// The subtitle chain's own source, named so a seek can be delivered to it by
+/// hand. There is only ever one, so it needs no number after it.
+pub const EXTERNAL_SUBTITLE_SOURCE: &str = "extsub_src";
 
 /// Where one output's audio comes from.
 ///
@@ -107,7 +110,12 @@ pub fn build_pipeline(
     source: &Source,
     primary_audio: Option<&AudioSource>,
     secondary_audio: Option<&AudioSource>,
-    subtitle: Option<&SubtitleChoice>,
+    subtitle: Option<&SubtitleSource>,
+    // Whether the video offers any subtitle at all, chosen or not. Distinct
+    // from `subtitle` being set, and the distinction is the whole point: the
+    // overlay has to exist before anybody can switch subtitles on, and a film
+    // started with them off would otherwise have nothing to switch into.
+    offers_subtitles: bool,
     config: &Config,
 ) -> Result<gst::Pipeline, String> {
     let pipeline = gst::Pipeline::new();
@@ -152,34 +160,22 @@ pub fn build_pipeline(
             .unwrap_or(DEFAULT_SUBTITLE_FONT),
         config.subtitle_size.unwrap_or(DEFAULT_SUBTITLE_SIZE)
     );
-    let (video_head, overlay) = build_video_branch(&pipeline, subtitle.is_some(), &font)?;
+    let (video_head, overlay) = build_video_branch(&pipeline, offers_subtitles, &font)?;
 
-    // A subtitle file beside the video is its own small source chain, fed
-    // into the same overlay an embedded stream would use.
-    // Stored as a name, so the folder comes from the video itself. A source
-    // with no folder - anything opened by URL - has no subtitle files beside
-    // it to have chosen in the first place.
-    if let Some(overlay) = overlay.as_ref() {
-        let file = match subtitle {
-            // A name, which means the folder the video is in. A source with no
-            // folder - anything opened by URL - has no subtitle files beside
-            // it to have chosen in the first place.
-            Some(SubtitleChoice::External(name)) => Some(
-                source
-                    .local()
-                    .and_then(|video| video.parent())
-                    .map(|folder| folder.join(name))
-                    .ok_or_else(|| format!("Can't find {name}: it sits beside a local video"))?,
-            ),
-            // A path, which means itself. Chosen by hand from somewhere else
-            // on disk, or named on the command line, and so not tied to where
-            // the video happens to live.
-            Some(SubtitleChoice::File(path)) => Some(path.clone()),
-            _ => None,
-        };
-        if let Some(file) = file {
-            attach_external_subtitle(&pipeline, overlay, &file)?;
-        }
+    // A subtitle that is not inside the video is its own small source chain,
+    // fed into the same overlay an embedded stream would use.
+    if let Some(overlay) = overlay.as_ref()
+        && let Some(SubtitleSource::Uri(uri)) = subtitle
+    {
+        attach_external_subtitle(&pipeline, overlay, uri)?;
+    }
+
+    // Nothing selected, so the overlay is there to be switched on rather than
+    // to draw anything yet. `silent` means not drawn, despite the name.
+    if let Some(overlay) = overlay.as_ref()
+        && subtitle.is_none()
+    {
+        overlay.set_property("silent", true);
     }
 
     // Grouped by where the audio comes from, so that one decoded stream can
@@ -214,7 +210,7 @@ pub fn build_pipeline(
 
     let wanted: Vec<u32> = roles_by_track.keys().copied().collect();
     let wanted_subtitle = match subtitle {
-        Some(SubtitleChoice::Embedded(index)) => Some(*index),
+        Some(SubtitleSource::Embedded(index)) => Some(*index),
         _ => None,
     };
     let targets = Arc::new(Targets {
@@ -392,17 +388,39 @@ fn attach_external_audio(
 fn attach_external_subtitle(
     pipeline: &gst::Pipeline,
     overlay: &gst::Element,
-    file: &Path,
+    uri: &str,
 ) -> Result<(), String> {
-    let src = make("filesrc")?;
-    src.set_property("location", file.to_string_lossy().to_string());
+    // `urisourcebin` rather than `filesrc`, so a subtitle held by a media
+    // server opens by exactly the same route as one on disk. It streams the
+    // file rather than saving it anywhere: a subtitle is tens of kilobytes,
+    // so there is nothing a cache would buy that a second request would not.
+    let src = make("urisourcebin")?;
+    src.set_property("uri", uri);
+    // Named so a seek can be delivered here by hand, for the same reason the
+    // external audio source is - this chain has a source of its own and does
+    // not reliably hear a seek sent through the video's. See `run_seek`.
+    src.set_property("name", EXTERNAL_SUBTITLE_SOURCE);
     let parse = make("subparse")?;
 
     pipeline
         .add_many([&src, &parse])
         .map_err(|e| e.to_string())?;
-    src.link(&parse)
-        .map_err(|_| "Failed to link subtitle file".to_string())?;
+    // `urisourcebin` has no pads until it has opened what it was given, so the
+    // link waits for one to arrive rather than being made now.
+    {
+        let parse = parse.clone();
+        src.connect_pad_added(move |_, pad| {
+            let Some(sink) = parse.static_pad("sink") else {
+                return;
+            };
+            if sink.is_linked() {
+                return;
+            }
+            if let Err(e) = pad.link(&sink) {
+                eprintln!("Failed to link the subtitle source: {e}");
+            }
+        });
+    }
 
     let sink_pad = overlay
         .static_pad("subtitle_sink")
