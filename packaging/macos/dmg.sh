@@ -26,9 +26,15 @@ for volume in /Volumes/TinePlayer*; do
     hdiutil detach "$volume" -force -quiet 2>/dev/null && echo "Ejected stale $volume"
 done
 
-version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
 out="dist/macos"
-dmg="$out/TinePlayer-$version-macos.dmg"
+# Repo-root-relative, because the cd above has already happened: deriving this
+# from $0 would resolve against the wrong directory when the script is run
+# from inside packaging/macos rather than from the root.
+# shellcheck source=packaging/macos/dmg-name.sh
+. packaging/macos/dmg-name.sh
+dmg="$(dmg_path)"
+# The volume name the Finder window shows, which is not the file name.
+version="$(app_version)"
 mkdir -p "$out"
 rm -f "$dmg"
 
