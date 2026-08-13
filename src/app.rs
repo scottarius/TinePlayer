@@ -703,6 +703,23 @@ pub struct App {
     /// Held so that returning from a chooser redraws the page instantly. The
     /// menu is rebuilt on every trip in and out of one, and re-reading a
     /// backdrop from a network share each time is both slow and visible.
+    /// Whether the page being built already has artwork that has only just
+    /// arrived, and so should fade rather than appear.
+    ///
+    /// A page opened with its pictures already in hand draws them; it does not
+    /// perform.
+    fade_art: Cell<bool>,
+    /// The two places artwork is drawn, kept so that a picture arriving late
+    /// can be put into the page that is already on screen.
+    ///
+    /// Rebuilding the page instead would be simpler and is what this used to
+    /// do. It is wrong: artwork can take seconds - a backdrop over a network
+    /// especially - and by then somebody may be part-way down the track lists
+    /// choosing what to watch. Rebuilding under them moves their focus and
+    /// undoes what they were doing, to deliver a picture they did not ask for
+    /// yet.
+    backdrop_widget: RefCell<Option<crate::artwork::Artwork>>,
+    poster_frame: RefCell<Option<gtk::Box>>,
     poster_art: RefCell<Option<gdk::Texture>>,
     backdrop_art: RefCell<Option<gdk::Texture>>,
     /// Bumped whenever a different file is loaded, so artwork still arriving
@@ -1018,6 +1035,9 @@ impl App {
             file: RefCell::new(None),
             details: RefCell::new(Default::default()),
             now_playing_queued: Cell::new(false),
+            fade_art: Cell::new(false),
+            backdrop_widget: RefCell::new(None),
+            poster_frame: RefCell::new(None),
             poster_art: RefCell::new(None),
             backdrop_art: RefCell::new(None),
             art_generation: Cell::new(0),
@@ -1848,6 +1868,146 @@ impl App {
 
     // --- Jellyfin ------------------------------------------------------
 
+    /// Puts artwork into the page that is already on screen.
+    ///
+    /// Only the two widgets it belongs in are touched, so focus, the row
+    /// somebody is on, and anything they have open all stay exactly as they
+    /// were. This is what a picture arriving three seconds after the page did
+    /// should cost: a picture appearing, and nothing else moving.
+    fn show_late_art(self: &Rc<Self>) {
+        if let Some(backdrop) = self.backdrop_widget.borrow().as_ref()
+            && let Some(texture) = self.backdrop_art.borrow().clone()
+        {
+            backdrop.set_texture(Some(texture));
+            fade_in(backdrop);
+        }
+
+        // The poster is a picture where the placeholder was, so the frame's
+        // child is replaced rather than a texture set: with no artwork the
+        // frame holds a mark rather than an empty picture.
+        let (Some(frame), Some(texture)) = (
+            self.poster_frame.borrow().clone(),
+            self.poster_art.borrow().clone(),
+        ) else {
+            return;
+        };
+        while let Some(child) = frame.first_child() {
+            frame.remove(&child);
+        }
+        let picture = crate::artwork::Artwork::poster();
+        picture.set_texture(Some(texture));
+        picture.set_hexpand(true);
+        picture.set_vexpand(true);
+        fade_in(&picture);
+        frame.append(&picture);
+    }
+
+    /// Fills the page in from the library, for a video that came from one.
+    ///
+    /// Only the fields Jellyfin actually answered: an empty overview or a
+    /// missing year leaves whatever the container had, on the grounds that
+    /// something is better than nothing and the library is not always fuller
+    /// than the file. The title is not among them - that already comes through
+    /// `launcher_title` at the head of the same chain everything else uses.
+    fn overlay_jellyfin_details(self: &Rc<Self>) {
+        let Some(item) = self.jellyfin_item.borrow().clone() else {
+            return;
+        };
+        {
+            let mut details = self.details.borrow_mut();
+            if !item.plot.is_empty() {
+                details.plot = item.plot.clone();
+            }
+            if item.year.is_some() {
+                details.year = item.year;
+            }
+            if !item.certificate.is_empty() {
+                details.certificate = item.certificate.clone();
+            }
+            if item.rating.is_some() {
+                details.rating = item.rating;
+            }
+            if !item.genres.is_empty() {
+                details.genres = item.genres.clone();
+            }
+            if item.episode.is_some() {
+                details.episode = item.episode;
+            }
+            if !item.aired.is_empty() {
+                details.aired = item.aired.clone();
+            }
+            // The stream measures itself, so a runtime is only worth taking
+            // where the container could not say.
+            if details.duration_s <= 0.0
+                && let Some(runtime) = item.runtime_ns
+            {
+                details.duration_s = runtime as f64 / 1e9;
+            }
+        }
+        self.load_jellyfin_art(&item);
+    }
+
+    /// Fetches the poster and backdrop, and redraws when they land.
+    ///
+    /// Separately from the details, and after the page is already up, because
+    /// these are the slow part - a backdrop is a picture from across the
+    /// house. The page is perfectly good without them until they arrive, which
+    /// is the same bargain artwork beside a file already makes.
+    fn load_jellyfin_art(self: &Rc<Self>, item: &crate::jellyfin::Item) {
+        let Some(client) = self.jellyfin.borrow().clone() else {
+            return;
+        };
+        if item.poster_tag.is_none() && item.backdrop_tag.is_none() {
+            return;
+        }
+
+        let id = item.id.clone();
+        let poster_tag = item.poster_tag.clone();
+        let backdrop_tag = item.backdrop_tag.clone();
+        // The film these belong to, so a viewer who casts one and immediately
+        // casts another does not get the first one's backdrop.
+        let generation = self.art_generation.get();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // Asked for at the size they are drawn rather than whole: a
+            // library backdrop can be several megabytes untouched.
+            let poster = poster_tag
+                .and_then(|tag| client.image(&id, "Primary", &tag, 600).ok())
+                .map(crate::metadata::Art::Embedded);
+            let backdrop = backdrop_tag
+                .and_then(|tag| client.image(&id, "Backdrop/0", &tag, 1920).ok())
+                .map(crate::metadata::Art::Embedded);
+            let _ = sender.send((poster, backdrop));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            let (poster, backdrop) = match receiver.try_recv() {
+                Ok(pair) => pair,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            // Another video was opened while these were coming down.
+            if app.art_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+            {
+                let mut details = app.details.borrow_mut();
+                if poster.is_some() {
+                    details.poster = poster;
+                }
+                if backdrop.is_some() {
+                    details.backdrop = backdrop;
+                }
+            }
+            app.start_art_load();
+            glib::ControlFlow::Break
+        });
+    }
+
     /// Reaches the paired server, if there is one, and stays reachable.
     ///
     /// Everything here is allowed to fail quietly. A server that is off, a
@@ -2017,9 +2177,12 @@ impl App {
     /// nothing to do with the library, and reporting it would put a position
     /// against an item nobody watched.
     fn report_to_jellyfin(&self, moment: JellyfinMoment) {
-        let (Some(client), Some(item)) = (
+        let (Some(client), Some(id)) = (
             self.jellyfin.borrow().clone(),
-            self.jellyfin_item.borrow().clone(),
+            self.jellyfin_item
+                .borrow()
+                .as_ref()
+                .map(|item| item.id.clone()),
         ) else {
             return;
         };
@@ -2046,11 +2209,9 @@ impl App {
         // film is playing. Nothing waits on the answer.
         std::thread::spawn(move || {
             let result = match moment {
-                JellyfinMoment::Started => client.started(&item.id, &play_session, position),
-                JellyfinMoment::Progress => {
-                    client.progress(&item.id, &play_session, position, paused)
-                }
-                JellyfinMoment::Stopped => client.stopped(&item.id, &play_session, position),
+                JellyfinMoment::Started => client.started(&id, &play_session, position),
+                JellyfinMoment::Progress => client.progress(&id, &play_session, position, paused),
+                JellyfinMoment::Stopped => client.stopped(&id, &play_session, position),
             };
             if let Err(e) = result {
                 eprintln!("Jellyfin would not take the position: {e}");
@@ -3698,7 +3859,13 @@ impl App {
     /// two from being two designs.
     fn behind_artwork(self: &Rc<Self>, content: &gtk::Box) -> gtk::Overlay {
         let backdrop = crate::artwork::Artwork::backdrop();
-        backdrop.set_texture(self.backdrop_art.borrow().clone());
+        let texture = self.backdrop_art.borrow().clone();
+        let arrived = texture.is_some() && self.fade_art.get();
+        backdrop.set_texture(texture);
+        if arrived {
+            fade_in(&backdrop);
+        }
+        *self.backdrop_widget.borrow_mut() = Some(backdrop.clone());
 
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&backdrop));
@@ -3913,6 +4080,9 @@ impl App {
                 picture.set_texture(Some(texture));
                 picture.set_hexpand(true);
                 picture.set_vexpand(true);
+                if self.fade_art.get() {
+                    fade_in(&picture);
+                }
                 frame.append(&picture);
             }
             // Nothing found, which is the common case: of the 123 film folders
@@ -3921,6 +4091,7 @@ impl App {
             // it keeps its place inside it at every window size.
             None => frame.append(&video_file_image(width * 0.42)),
         }
+        *self.poster_frame.borrow_mut() = Some(frame.clone());
         column.append(&frame);
 
         let facts = gtk::Box::builder()
@@ -4556,10 +4727,10 @@ impl App {
             *app.poster_art.borrow_mut() = decode(poster);
             *app.backdrop_art.borrow_mut() = decode(backdrop);
 
-            // Only worth redrawing the page that shows it, and only while it
-            // is still the page on screen.
+            // Put into the page rather than rebuilding it, so that somebody
+            // already choosing their tracks is left where they were.
             if *app.screen.borrow() == Screen::Menu {
-                app.show_menu();
+                app.show_late_art();
             }
             glib::ControlFlow::Break
         });
@@ -5701,6 +5872,10 @@ impl App {
         // Now that the video and its audio files are both settled, whatever
         // was measured about that pairing applies again.
         self.load_baselines();
+        // What the library says, over what the stream could be asked. A cast
+        // video has no sidecar beside it and its container tags are thin, so
+        // without this it arrives with a title and an empty page.
+        self.overlay_jellyfin_details();
         // The page can be drawn without artwork and filled in when it lands,
         // so this is started rather than waited for.
         self.start_art_load();
@@ -13180,6 +13355,37 @@ mod settings_rows {
             }
         }
     }
+}
+
+/// Brings a widget up from nothing over a quarter of a second.
+///
+/// Artwork is loaded after the page is already up, so without this it appears
+/// at full strength between one frame and the next - which reads as a fault
+/// rather than as something finishing loading.
+///
+/// Opacity rather than a `Revealer`, which is what the controls use for their
+/// panels: a revealer that is not revealed takes no space, and a poster
+/// collapsing its frame and then pushing it back open would be a worse jolt
+/// than the one being fixed. Opacity never touches the layout.
+///
+/// Driven by the frame clock rather than a timer, so it runs at whatever rate
+/// the screen is actually drawing and finishes on a frame rather than between
+/// two.
+fn fade_in(widget: &impl IsA<gtk::Widget>) {
+    const OVER: f64 = 0.5;
+
+    let widget = widget.clone().upcast::<gtk::Widget>();
+    widget.set_opacity(0.0);
+    let started = std::time::Instant::now();
+    widget.add_tick_callback(move |widget, _| {
+        let progress = (started.elapsed().as_secs_f64() / OVER).clamp(0.0, 1.0);
+        // Eased out, so it arrives softly rather than stopping dead.
+        widget.set_opacity(1.0 - (1.0 - progress).powi(3));
+        match progress >= 1.0 {
+            true => glib::ControlFlow::Break,
+            false => glib::ControlFlow::Continue,
+        }
+    });
 }
 
 /// Which of Jellyfin's three reporting endpoints a moment belongs to.

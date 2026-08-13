@@ -321,20 +321,82 @@ impl Client {
     /// What is known about one item, in the units TinePlayer counts in.
     pub fn item(&self, id: &str) -> Result<Item, Error> {
         let body = self.get(&format!("/Users/{}/Items/{id}", self.user_id))?;
+        let text = |name: &str| {
+            body.get(name)
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let number = |name: &str| {
+            body.get(name)
+                .and_then(|value| value.as_u64())
+                .map(|value| value as u32)
+        };
         Ok(Item {
             id: id.to_string(),
-            title: body
-                .get("Name")
-                .and_then(|name| name.as_str())
-                .unwrap_or_default()
-                .to_string(),
+            title: text("Name"),
             runtime_ns: body.get("RunTimeTicks").and_then(from_ticks),
             resume_ns: body
                 .get("UserData")
                 .and_then(|data| data.get("PlaybackPositionTicks"))
                 .and_then(from_ticks)
                 .filter(|position| *position > 0),
+            plot: text("Overview"),
+            year: number("ProductionYear"),
+            certificate: text("OfficialRating"),
+            rating: body.get("CommunityRating").and_then(|value| value.as_f64()),
+            genres: body
+                .get("Genres")
+                .and_then(|genres| genres.as_array())
+                .map(|genres| {
+                    genres
+                        .iter()
+                        .filter_map(|genre| genre.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            // Both or neither: a season without an episode is not something
+            // the page can say anything useful about.
+            episode: number("ParentIndexNumber").zip(number("IndexNumber")),
+            // The date arrives as a full timestamp and the page wants a day.
+            aired: text("PremiereDate")
+                .split('T')
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+            poster_tag: body
+                .get("ImageTags")
+                .and_then(|tags| tags.get("Primary"))
+                .and_then(|tag| tag.as_str())
+                .map(str::to_string),
+            backdrop_tag: body
+                .get("BackdropImageTags")
+                .and_then(|tags| tags.as_array())
+                .and_then(|tags| tags.first())
+                .and_then(|tag| tag.as_str())
+                .map(str::to_string),
         })
+    }
+
+    /// One picture, as bytes ready to decode.
+    ///
+    /// Asked for at a size rather than whole: a library's backdrop can be
+    /// several megabytes at full resolution, and the page draws it behind
+    /// text at the width of a screen. The tag is what makes the answer
+    /// cacheable, and quoting the wrong one gets a picture from before the
+    /// artwork was changed.
+    pub fn image(&self, id: &str, kind: &str, tag: &str, width: u32) -> Result<Vec<u8>, Error> {
+        let response = minreq::get(format!(
+            "{}/Items/{id}/Images/{kind}?tag={tag}&maxWidth={width}&api_key={}",
+            self.server, self.token
+        ))
+        .with_timeout(TIMEOUT)
+        .send()
+        .map_err(|e| Error::Failed(e.to_string()))?;
+        match response.status_code {
+            200 => Ok(response.into_bytes()),
+            code => Err(failed(code, "")),
+        }
     }
 
     /// The original file, not a transcode.
@@ -347,6 +409,7 @@ impl Client {
     ///
     /// The token rides in the query string because GStreamer opens this URL
     /// itself and carries no headers of ours.
+    ///
     pub fn stream_url(&self, id: &str) -> String {
         format!(
             "{}/Videos/{id}/stream?static=true&api_key={}",
@@ -425,7 +488,14 @@ impl Client {
 }
 
 /// A video as Jellyfin describes it, converted into what TinePlayer counts in.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Everything the media page draws, because a cast video has no sidecar beside
+/// it and a stream's container tags are thin - without this it arrives with a
+/// title and nothing else. The pictures are deliberately not here: this is
+/// cloned on every progress report, and megabytes of artwork going round every
+/// ten seconds would be a poor trade for tidiness. Their tags are, which is
+/// what asking for them needs.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Item {
     pub id: String,
     /// The library title, which is the whole reason to ask: "Avengers:
@@ -435,6 +505,23 @@ pub struct Item {
     /// Where this viewer stopped, or `None` for one they have not started -
     /// which includes a video watched to the end.
     pub resume_ns: Option<u64>,
+    pub plot: String,
+    pub year: Option<u32>,
+    /// Already the short form Jellyfin stores - "PG-13" - which is the form
+    /// the page wants.
+    pub certificate: String,
+    /// Out of ten, as the page shows it.
+    pub rating: Option<f64>,
+    pub genres: Vec<String>,
+    /// Season and episode, for something that has them. Also how the page
+    /// tells an episode from a film.
+    pub episode: Option<(u32, u32)>,
+    /// The day it first went out, for an episode.
+    pub aired: String,
+    /// What to quote when asking for each picture. Absent when the library has
+    /// none, which is how not to ask for one that is not there.
+    pub poster_tag: Option<String>,
+    pub backdrop_tag: Option<String>,
 }
 
 /// Jellyfin counts in ticks of a hundred nanoseconds and TinePlayer counts in
