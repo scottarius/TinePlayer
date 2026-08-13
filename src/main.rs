@@ -283,20 +283,51 @@ fn list_devices() -> Result<(), String> {
     if names.is_empty() {
         return Err("No audio output devices found.".to_string());
     }
-    for name in names {
-        println!("{name}");
+
+    // The blank line first is not decoration. A GUI-subsystem program does
+    // not keep the shell waiting, so on Windows the prompt for the next
+    // command is already drawn by the time any of this prints, and without a
+    // line of its own the first device sits against that prompt and the whole
+    // block reads as something that went wrong rather than as an answer.
+    println!();
+    println!();
+    println!("Audio output devices ({}):", names.len());
+    println!();
+    for name in &names {
+        println!("  {name}");
     }
+    println!();
     Ok(())
 }
 
 fn list_tracks(source: &source::Source) -> Result<(), String> {
     let media = probe::probe_media(source)?;
 
-    println!("Audio tracks in {}:", source.label());
-    println!("  0  None");
+    // The same list the menu offers, in the same order, so the numbers here
+    // are the ones `--subtitle` takes. Includes subtitle files sitting beside
+    // the video, not just what is inside it.
+    let subtitles = subtitles::options(source.local(), &media.subtitles);
+
+    // Indices right-aligned to the widest of them, so a file with ten or more
+    // tracks keeps its numbers in a column instead of stepping sideways. Both
+    // lists share one width, so the two blocks line up with each other too.
+    let width = media
+        .audio
+        .len()
+        .max(subtitles.len())
+        .to_string()
+        .chars()
+        .count();
+
+    // See list_devices for why this starts with a blank line.
+    println!();
+    println!();
+    println!("Audio tracks ({}):", media.audio.len());
+    println!();
+    println!("  {:>width$}  None", 0);
     for (position, track) in media.audio.iter().enumerate() {
         let mut line = format!(
-            "  {}  {} — {} {}ch",
+            "  {:>width$}  {} — {} {}ch",
             position + 1,
             track.language,
             track.codec,
@@ -308,16 +339,15 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
         println!("{line}");
     }
 
-    // The same list the menu offers, in the same order, so the numbers here
-    // are the ones `--subtitle` takes. Includes subtitle files sitting beside
-    // the video, not just what is inside it.
-    let subtitles = subtitles::options(source.local(), &media.subtitles);
     println!();
-    println!("Subtitles:");
-    println!("  0  None");
+    println!("Subtitles ({}):", subtitles.len());
+    println!();
+    println!("  {:>width$}  None", 0);
     for (position, option) in subtitles.iter().enumerate() {
-        println!("  {}  {}", position + 1, option.label());
+        println!("  {:>width$}  {}", position + 1, option.label());
     }
+
+    println!();
     Ok(())
 }
 
