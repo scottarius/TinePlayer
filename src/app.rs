@@ -692,6 +692,11 @@ pub struct App {
     /// there is no file, and default is a perfectly good page - most files
     /// have no sidecar and the layout is designed up from that case.
     details: RefCell<crate::metadata::Details>,
+    /// Whether a now-playing update is already queued behind the main loop.
+    ///
+    /// Set while one is pending so that a scrub, which commits a seek on every
+    /// release, does not queue a copy of the poster for each of them.
+    now_playing_queued: Cell<bool>,
     /// Artwork already decoded for the file on screen, keyed by nothing more
     /// than being the current file: it is dropped whenever one is loaded.
     ///
@@ -991,6 +996,7 @@ impl App {
             update_badges: RefCell::new(Vec::new()),
             file: RefCell::new(None),
             details: RefCell::new(Default::default()),
+            now_playing_queued: Cell::new(false),
             poster_art: RefCell::new(None),
             backdrop_art: RefCell::new(None),
             art_generation: Cell::new(0),
@@ -1718,11 +1724,95 @@ impl App {
     }
 
     /// Pause or resume, keeping the display-awake hold in step with it.
-    fn toggle_pause(&self) {
+    /// Everything that pauses goes through here.
+    ///
+    /// The button on the controls and the gamepad used to call the pipeline
+    /// directly, each repeating the two lines below. That was harmless until
+    /// there were three of them and one had something extra to do: pausing
+    /// from the screen left the system's now-playing widget still showing a
+    /// pause button, and pressing it did nothing, while the media key on the
+    /// keyboard - which did come through here - worked.
+    fn toggle_pause(self: &Rc<Self>) {
         if let Some(playback) = self.playback.borrow().as_ref() {
             playback.toggle_pause();
             self.awake.set(playback.is_playing());
         }
+        self.publish_now_playing();
+    }
+
+    /// Tells the system what is playing, where the system cares.
+    ///
+    /// Called when the answer changes rather than on the tick: what is
+    /// published is a position and a rate, and macOS extrapolates between
+    /// them, so a film left playing stays correct without being told again.
+    /// The four moments that do change it are playback starting, pausing,
+    /// seeking, and stopping.
+    ///
+    /// Silent everywhere but macOS. See `media_keys::NowPlaying` for why it
+    /// is not merely cosmetic there: it is what decides who receives a media
+    /// key at all.
+    fn publish_now_playing(self: &Rc<Self>) {
+        // Queued behind the main loop rather than done here.
+        //
+        // Telling the system what is playing means writing the poster to disk
+        // and several calls into another process, and `begin_playback` reaches
+        // this by way of `stop_playback` - so all of that was running in the
+        // middle of building the pipeline. On 2026-08-13 that was enough to
+        // hang TinePlayer outright: the main thread ended up blocked inside
+        // `gst_pad_push_event`, waiting on a lock a streaming thread held,
+        // with the delay this introduced landing squarely in the window where
+        // that race is possible.
+        //
+        // Nothing here needs to be immediate. The panel wants to know within a
+        // moment, and the main loop is idle a moment later by definition.
+        if self.now_playing_queued.replace(true) {
+            return;
+        }
+        let app = self.clone();
+        glib::idle_add_local_once(move || {
+            app.now_playing_queued.set(false);
+            app.send_now_playing();
+        });
+    }
+
+    /// Gathers what is playing and hands it to the platform.
+    fn send_now_playing(&self) {
+        // Nothing chosen at all: the panel goes away rather than sitting
+        // there empty. An empty one is worse than none, because the name it
+        // shows when it has no title is the application's own identifier.
+        if self.file.borrow().is_none() {
+            crate::media_keys::set_now_playing(None);
+            return;
+        }
+        let seconds = |time: Option<gstreamer::ClockTime>| {
+            time.map(|time| time.nseconds() as f64 / 1e9).unwrap_or(0.0)
+        };
+        // A video chosen but not started is published too, stopped rather than
+        // absent, so the panel names what is about to be watched and its play
+        // button has something to do. Without it the media page showed a panel
+        // with no title at all.
+        let playback = self.playback.borrow();
+        let (duration_s, elapsed_s, playing) = match playback.as_ref() {
+            Some(playback) => (
+                seconds(playback.duration()),
+                seconds(playback.position()),
+                playback.is_playing(),
+            ),
+            None => (self.details.borrow().duration_s, 0.0, false),
+        };
+        drop(playback);
+        crate::media_keys::set_now_playing(Some(crate::media_keys::NowPlaying {
+            // The same title as the titlebar and the media page, from the one
+            // chain that resolves it.
+            title: self.file_label().unwrap_or_default(),
+            duration_s,
+            elapsed_s,
+            playing,
+            // The poster the page found, cloned rather than borrowed: this
+            // runs a handful of times per film, and the alternative is a
+            // lifetime threaded through a platform boundary for nothing.
+            artwork: self.details.borrow().poster.clone(),
+        }));
     }
 
     /// What a media key means, wherever the platform reported it from: a
@@ -1730,20 +1820,31 @@ impl App {
     /// used, which Windows needs in order to decide whether to pass the key
     /// on to whatever else would have played.
     ///
-    /// Nothing here means anything without a film, and there is no menu
-    /// action a transport key would obviously map to, so the menus leave
-    /// these alone entirely.
+    /// With a video chosen but not started, play begins it: the media page is
+    /// where somebody arrives before pressing anything, and a play key that
+    /// does nothing there reads as a broken key rather than as a deliberate
+    /// silence. Everything else needs a film already running, and says so by
+    /// declining the key so it can go to whatever else would have played.
     fn handle_media(self: &Rc<Self>, command: crate::media_keys::Command) -> bool {
         use crate::media_keys::Command;
 
         // Read and released before anything below can borrow it again.
-        let Some(is_playing) = self
+        let playing = self
             .playback
             .borrow()
             .as_ref()
-            .map(|playback| playback.is_playing())
-        else {
-            return false;
+            .map(|playback| playback.is_playing());
+
+        let Some(is_playing) = playing else {
+            // Nothing is loaded to start, or there is nowhere to play it.
+            let ready = self.file.borrow().is_some() && self.config.borrow().primary_sink.is_some();
+            return match command {
+                Command::Play | Command::PlayPause if ready => {
+                    self.start_playback(false);
+                    true
+                }
+                _ => false,
+            };
         };
 
         let flip = || {
@@ -1828,6 +1929,13 @@ impl App {
         // here rather than given a timer of its own so that it stops when
         // playback does, without anything extra to tear down.
         let mut since_report = 0u32;
+        // What was last published to the system as the running time. Playback
+        // can begin before GStreamer has worked the duration out, and a
+        // now-playing entry claiming a film is zero seconds long stays wrong
+        // until something else happens to republish it. Kept beside
+        // `since_report` as closure state for the same reason: it belongs to
+        // this timer and stops when it does.
+        let mut published_duration = 0f64;
         let source = glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             let Some(app) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
@@ -1839,6 +1947,20 @@ impl App {
             match (playback, controls) {
                 (Some(playback), Some(controls)) => {
                     controls.update(&playback);
+
+                    // Only when it changes, which is normally once a film.
+                    // The position is deliberately not pushed on the tick:
+                    // the system extrapolates it from the rate, so it stays
+                    // right on its own between the moments that do change it.
+                    let duration = playback
+                        .duration()
+                        .map(|time| time.nseconds() as f64 / 1e9)
+                        .unwrap_or(0.0);
+                    if duration != published_duration {
+                        published_duration = duration;
+                        app.publish_now_playing();
+                    }
+
                     since_report += 1;
                     // Every 30 seconds, so that a player killed outright still
                     // leaves Kodi's library close to where you actually got to.
@@ -2266,10 +2388,7 @@ impl App {
                     self.press_activate();
                     return;
                 }
-                if let Some(playback) = self.playback.borrow().as_ref() {
-                    playback.toggle_pause();
-                    self.awake.set(playback.is_playing());
-                }
+                self.toggle_pause();
                 self.wake_controls();
             }
             Action::Activate => self.activate_focused(),
@@ -2714,7 +2833,7 @@ impl App {
         }
     }
 
-    fn stop_playback(&self) {
+    fn stop_playback(self: &Rc<Self>) {
         self.finish_playback(false);
     }
 
@@ -2744,7 +2863,7 @@ impl App {
     /// reached Kodi. That only matters when the process is about to end, since
     /// the report goes out on a detached thread and exiting would take it
     /// along; everywhere else it would be a stall for nothing.
-    fn finish_playback(&self, wait_for_kodi: bool) {
+    fn finish_playback(self: &Rc<Self>, wait_for_kodi: bool) {
         // Whatever else happens below, stop holding the display awake: this
         // is reached from the window closing as well as from playback ending.
         self.awake.set(false);
@@ -2764,6 +2883,8 @@ impl App {
             }
         }
         self.window.set_title(Some("TinePlayer"));
+        // After the playback is dropped above, so this reads "nothing".
+        self.publish_now_playing();
     }
 
     /// Where playback should pick up, and the title to show for the file.
@@ -5304,6 +5425,14 @@ impl App {
             config.last_video = Some(path.to_path_buf());
             let _ = config.save();
         }
+
+        // The video is loaded and its page is about to be shown, so the system
+        // is told what it is now rather than at the first play. Otherwise the
+        // panel in the task bar sits there enabled with no title, and Windows
+        // fills the gap with the application's own identifier - which is how
+        // "Scottarius.TinePlayer" ended up where a film's name belongs, until
+        // something had been played once.
+        self.publish_now_playing();
         Ok(())
     }
 
@@ -9261,13 +9390,52 @@ impl App {
             .build();
         self.window.set_child(Some(&waiting));
 
-        // A timeout rather than an idle callback: idle can run before the
-        // frame it was queued behind has actually been drawn, which puts the
-        // block back where it started.
-        let app = self.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(16), move || {
-            app.begin_playback(restart);
-        });
+        // Playback begins on a frame that has actually been drawn.
+        //
+        // This used to wait 16 milliseconds and hope - one frame at 60Hz - and
+        // that held from a button press, where GTK is already mid-way through
+        // dispatching an event and will draw shortly after. It did not hold
+        // when the play came from a media key, which arrives on an idle
+        // callback: the pipeline was built against a surface that had never
+        // been presented, and on an AV1 video being resumed the D3D12 decoder
+        // deadlocked in `gst_video_decoder_finish_frame` while holding the pad
+        // lock the seek's flush needed. TinePlayer stopped drawing entirely,
+        // and only from that entry point, and only on the first play of a
+        // session. Found 2026-08-13 with a debugger on the hung process.
+        //
+        // The tick callback is GTK's own answer to "after the next frame", so
+        // there is nothing to tune and nothing to be unlucky with.
+        let started = Rc::new(Cell::new(false));
+        {
+            let app = self.clone();
+            let started = started.clone();
+            waiting.add_tick_callback(move |_, _| {
+                if !started.replace(true) {
+                    // Queued rather than run here. A tick callback fires in
+                    // the frame clock's update phase, which is before the
+                    // frame is painted - building the pipeline in it left the
+                    // surface still unpresented and deadlocked in the same
+                    // place, with the menu visibly still on screen. An idle
+                    // queued from here runs once that whole frame, paint
+                    // included, has finished.
+                    let app = app.clone();
+                    glib::idle_add_local_once(move || app.begin_playback(restart));
+                }
+                glib::ControlFlow::Break
+            });
+        }
+        // And a way out for a window that is never drawn at all - minimized,
+        // or hidden behind something full screen - where no frame arrives and
+        // the tick callback would never run. Waiting forever there would be a
+        // worse bug than the one above.
+        {
+            let app = self.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+                if !started.replace(true) {
+                    app.begin_playback(restart);
+                }
+            });
+        }
     }
 
     /// Swaps the black surface for the video once a frame from the resume
@@ -9531,10 +9699,7 @@ impl App {
                 {
                     let app = self.clone();
                     controls.connect_play_pause(move || {
-                        if let Some(playback) = app.playback.borrow().as_ref() {
-                            playback.toggle_pause();
-                            app.awake.set(playback.is_playing());
-                        }
+                        app.toggle_pause();
                         app.wake_controls();
                     });
                 }
@@ -9622,6 +9787,7 @@ impl App {
                                 if let Some(target) = pending.take() {
                                     playback.aim_at(gstreamer::ClockTime::from_nseconds(target));
                                     playback.commit_seek();
+                                    app.publish_now_playing();
                                 }
                                 playback.release_from_scrub();
                             }
@@ -9666,6 +9832,7 @@ impl App {
                             if let Some(target) = pending.take() {
                                 playback.aim_at(gstreamer::ClockTime::from_nseconds(target));
                                 playback.commit_seek();
+                                app.publish_now_playing();
                             }
                             if scrubbing.get() {
                                 return glib::ControlFlow::Continue;
@@ -9708,6 +9875,7 @@ impl App {
                 self.window
                     .set_title(Some(&self.file_label().unwrap_or_default()));
                 *self.playback.borrow_mut() = Some(playback);
+                self.publish_now_playing();
                 // Playback begins playing, so the display is held from here
                 // until it is paused or torn down.
                 self.awake.set(true);

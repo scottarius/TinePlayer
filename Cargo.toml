@@ -117,9 +117,62 @@ winresource = "0.1"
 # terminal it was started from, and the window subclass that receives the
 # media keys - which Windows sends as WM_APPCOMMAND rather than as keys.
 windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_System_Registry", "Win32_System_Power", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+# SystemMediaTransportControls: the panel behind the volume button in the task
+# bar, with transport buttons and artwork. WinRT rather than Win32, so it needs
+# this crate rather than windows-sys - already compiled here as a dependency of
+# gilrs, so this is features rather than another tree.
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Media",
+    "Storage_Streams",
+    # ISystemMediaTransportControlsInterop, which is how a plain Win32 window
+    # gets hold of controls that were designed for a packaged application.
+    "Win32_System_WinRT",
+    "Win32_Foundation",
+] }
+# AsyncStatus, for waiting on the one asynchronous call in the panel code.
+# The `windows` crate re-exports windows-core but not this, so it is named.
+windows-future = "0.3"
 # No GL feature here: the `winegl` feature needs gstreamer-gl-egl, and the
 # official GStreamer Windows build ships gstreamer-gl without any EGL
 # variant, so enabling it fails at link time with unresolved
 # gst_gl_display_egl_* symbols. The sink falls back to CPU-side frame
 # handling, which desktop GPUs handle comfortably.
 gst-plugin-gtk4 = "0.13.7"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The media keys, which macOS never delivers as key events: it routes them to
+# whichever application it believes is playing, which is why they drive
+# whatever else is open while TinePlayer is in front. MPRemoteCommandCenter is
+# the sanctioned way to be that application, and it covers the buttons on
+# AirPods and a headset as well as the keys on a keyboard.
+#
+# MPNowPlayingInfoCenter comes with it rather than as an extra: what is
+# published there is how macOS decides who is playing, so without it the
+# commands are never routed here at all. It also puts the film in Control
+# Center and on the lock screen, with its title and how far in it is.
+#
+# Every crate in this tree is MIT, Apache-2.0 or Zlib, checked 2026-08-13 over
+# the whole transitive set rather than the two named here - objc2-media-player
+# pulls in app-kit, av-foundation and core-foundation behind it. Nothing is
+# copyleft, which the packaging depends on.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSValue", "NSData"] }
+objc2-media-player = { version = "0.3", features = [
+    "MPRemoteCommandCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandEvent",
+    "MPNowPlayingInfoCenter",
+    "MPMediaItem",
+    "block2",
+    # MPMediaItemArtwork hands back an NSImage, so the poster needs AppKit and
+    # the CGSize the request handler is asked for.
+    "objc2-app-kit",
+    "objc2-core-foundation",
+] }
+# NSImage, for the poster in the now-playing widget. Already in the tree
+# behind objc2-media-player; named here because this uses it directly.
+objc2-app-kit = { version = "0.3", features = ["NSImage"] }
+# CGSize, which the artwork request handler is asked for and answers with.
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
+block2 = "0.6"

@@ -153,6 +153,37 @@ fn disable_broken_dtsdec() {
     }
 }
 
+/// `d3d12av1dec` deadlocks against the flush that begins a seek.
+///
+/// Captured 2026-08-13 with a debugger on a hung TinePlayer, twice. The
+/// decoder's streaming thread sits in `gst_video_decoder_finish_frame` inside
+/// `gstd3d12`, blocked on one of that plugin's own mutexes while holding the
+/// pad's stream lock. The main thread is pushing the flush that starts a seek
+/// and cannot have that lock, so neither moves again and the window stops
+/// drawing. `gst_av1_decoder` is named in the stack.
+///
+/// It only shows on an AV1 video being *resumed*, since that is what sends a
+/// flush, and it is a race: made near-certain by starting playback from a
+/// media key, still reachable about one time in nine after that was fixed.
+/// Rare is not the same as absent, and a viewer whose player freezes when
+/// resuming a film does not care how narrow the window was.
+///
+/// AV1 alone, deliberately. The other D3D12 decoders are left ranked as they
+/// are, so H.264, H.265 and VP9 - which is nearly everything - keep using
+/// them. Every GPU with AV1 decode at all offers it through D3D11 too, so
+/// `d3d11av1dec` takes over and the hardware path is kept; a machine with
+/// neither falls back to libav in software.
+///
+/// The fault is inside the plugin and nothing this side of it can release
+/// that mutex, so this stands until it is fixed upstream.
+#[cfg(target_os = "windows")]
+fn disable_deadlocking_av1_decoder() {
+    if let Some(factory) = gstreamer::ElementFactory::find("d3d12av1dec") {
+        use gstreamer::prelude::PluginFeatureExtManual;
+        factory.set_rank(gstreamer::Rank::NONE);
+    }
+}
+
 /// A GUI-subsystem binary has no console of its own, so output vanishes
 /// even when the user ran it from a terminal. Reattaching to the parent's
 /// console restores it for that case, and fails harmlessly when there
@@ -168,6 +199,36 @@ fn attach_parent_console() {
 
 #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
 fn attach_parent_console() {}
+
+/// What Windows should call this application.
+///
+/// Windows identifies a desktop application by an "AppUserModelID" rather than
+/// by its executable, and resolves the name to show from a Start menu shortcut
+/// carrying the same one. Without it the media panel in the task bar says
+/// "Unknown app" over a film that is playing perfectly well.
+///
+/// Set before any window exists, which is what the documentation asks: the
+/// identity is stamped on windows as they are created, and one made first
+/// keeps whatever it was given.
+///
+/// The installer puts the same string on its shortcuts. A copy run from the
+/// ZIP has no shortcut for Windows to look up, so it stays unnamed - which is
+/// a smaller thing than it sounds, being the case where somebody has
+/// deliberately not installed anything.
+#[cfg(target_os = "windows")]
+fn name_this_process() {
+    let id: Vec<u16> = "Scottarius.TinePlayer"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: a null-terminated wide string that outlives the call.
+    unsafe {
+        let _ = windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(id.as_ptr());
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn name_this_process() {}
 
 /// Gives the terminal back, once it is certain that a window is what happens
 /// next rather than a line of output.
@@ -693,6 +754,8 @@ fn use_bundled_fonts() {
 
 fn main() -> std::process::ExitCode {
     attach_parent_console();
+    // Before any window is made, which is when the identity is stamped on.
+    name_this_process();
     // Before anything reads the environment, and before GStreamer starts.
     use_bundled_resources();
     enable_accessibility();
@@ -704,6 +767,8 @@ fn main() -> std::process::ExitCode {
     gstreamer::init().expect("Failed to initialize GStreamer");
     #[cfg(target_os = "windows")]
     disable_broken_dtsdec();
+    #[cfg(target_os = "windows")]
+    disable_deadlocking_av1_decoder();
     silence_upstream_unref_spam();
 
     // gtk4paintablesink is statically linked into this binary rather than

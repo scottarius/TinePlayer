@@ -102,6 +102,12 @@ cat >"$app/Contents/Info.plist" <<PLIST
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
+    <!-- What kind of application this is, which is how macOS files it: the
+         Applications folder arranged by category, and anywhere else that
+         groups by one. Without it the application has no category at all and
+         is filed under nothing. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.entertainment</string>
 </dict>
 </plist>
 PLIST
