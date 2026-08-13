@@ -28,6 +28,12 @@ enum Storage {
     /// per-user directories are: the split exists because the operating
     /// system asks for it, and a folder someone carries on a stick is easier
     /// to understand whole.
+    ///
+    /// Windows only, and gated rather than merely unused elsewhere: the macOS
+    /// bundle and the Linux package are both installed rather than unpacked,
+    /// so `resolve_storage` there can never build one, and a variant nothing
+    /// constructs is a warning that CI treats as an error.
+    #[cfg(windows)]
     Portable(PathBuf),
     /// The operating system's per-user directories, which is every installed
     /// copy and every platform that has no portable form.
@@ -122,6 +128,7 @@ pub fn app_dir_for_fontconfig() -> Option<PathBuf> {
 /// the two, which is why the argument is ignored rather than joined onto.
 fn app_dir(base: PathBuf) -> PathBuf {
     let dir = match &storage().0 {
+        #[cfg(windows)]
         Storage::Portable(dir) => dir.clone(),
         Storage::PerUser => base.join(DIR_NAME),
     };
