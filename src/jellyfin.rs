@@ -332,6 +332,12 @@ impl Client {
                 .and_then(|value| value.as_u64())
                 .map(|value| value as u32)
         };
+        // The first media source, which is the file itself for anything that
+        // has not been given a second version.
+        let source = body
+            .get("MediaSources")
+            .and_then(|sources| sources.as_array())
+            .and_then(|sources| sources.first());
         Ok(Item {
             id: id.to_string(),
             title: text("Name"),
@@ -375,6 +381,20 @@ impl Client {
                 .and_then(|tags| tags.first())
                 .and_then(|tag| tag.as_str())
                 .map(str::to_string),
+            container: source
+                .and_then(|source| source.get("Container"))
+                .and_then(|container| container.as_str())
+                // Belt and braces: if this ever arrives as a list too, the
+                // first name in it is the one to use.
+                .and_then(|container| container.split(',').next())
+                .unwrap_or_default()
+                .to_string(),
+            media_source_id: source
+                .and_then(|source| source.get("Id"))
+                .and_then(|id| id.as_str())
+                .unwrap_or(id)
+                .to_string(),
+            streams: source.map(read_streams).unwrap_or_default(),
         })
     }
 
@@ -410,10 +430,24 @@ impl Client {
     /// The token rides in the query string because GStreamer opens this URL
     /// itself and carries no headers of ours.
     ///
-    pub fn stream_url(&self, id: &str) -> String {
+    /// The container goes on the end as an extension, and that is not
+    /// cosmetic. Asked for as a bare `/stream`, Jellyfin answered a QuickTime
+    /// file with `Content-Type: video/x-msvideo` - AVI's type - and GStreamer
+    /// believed it, chose the AVI demuxer, and sat waiting for structures that
+    /// were never coming. Every Harry Potter film in the library failed that
+    /// way on 2026-08-14 while the Matroska ones were fine, which is what made
+    /// it look like a problem with particular titles. With `.mov` on the end
+    /// the same request answers `video/quicktime`. Matroska is unaffected
+    /// either way, so this costs nothing where it was already working.
+    pub fn stream_url(&self, item: &Item) -> String {
+        let id = &item.id;
+        let extension = match item.container.is_empty() {
+            true => String::new(),
+            false => format!(".{}", item.container),
+        };
         format!(
-            "{}/Videos/{id}/stream?static=true&api_key={}",
-            self.server, self.token
+            "{}/Videos/{id}/stream{extension}?static=true&mediaSourceId={}&api_key={}",
+            self.server, item.media_source_id, self.token
         )
     }
 
@@ -522,6 +556,17 @@ pub struct Item {
     /// none, which is how not to ask for one that is not there.
     pub poster_tag: Option<String>,
     pub backdrop_tag: Option<String>,
+    /// Every stream the library found, which is what spares TinePlayer from
+    /// reading a four-gigabyte file across the house to learn the same thing.
+    pub streams: Streams,
+    /// The container, as the media source names it: `mkv`, `mov`.
+    ///
+    /// Taken from the media source rather than the item's own `Container`,
+    /// which is ffmpeg's list of everything the format could be called -
+    /// `mov,mp4,m4a,3gp,3g2,mj2` - and no use as an extension.
+    pub container: String,
+    /// Which source to stream, for an item that has more than one.
+    pub media_source_id: String,
 }
 
 /// Jellyfin counts in ticks of a hundred nanoseconds and TinePlayer counts in
@@ -532,6 +577,198 @@ fn from_ticks(value: &serde_json::Value) -> Option<u64> {
 
 fn to_ticks(nanoseconds: u64) -> u64 {
     nanoseconds / 100
+}
+
+/// One stream of a video, as the library analysed it.
+///
+/// Kept close to what Jellyfin says rather than converted on the way in, so
+/// that the two indices below cannot be confused with each other.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Stream {
+    /// Jellyfin's own numbering, across every stream in the item. This is what
+    /// asking for an external file quotes, and it is *not* a position among
+    /// the audio tracks - an external subtitle sits at 0, before the video.
+    pub index: u32,
+    /// Whether it is a file beside the video rather than part of it.
+    ///
+    /// The whole design turns on this. An external stream is not in the
+    /// container, so it can never be selected by position within it, and
+    /// counting it would push every embedded track after it out of step -
+    /// silently, which is the worst way to be wrong about which soundtrack
+    /// somebody is listening to.
+    pub external: bool,
+    pub codec: String,
+    pub language: String,
+    pub title: String,
+    pub channels: u32,
+}
+
+/// What Jellyfin knows about how a video is put together.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Streams {
+    pub audio: Vec<Stream>,
+    pub subtitles: Vec<Stream>,
+    pub width: u32,
+    pub height: u32,
+    pub video_codec: String,
+    pub fps: f64,
+}
+
+/// The codec name as a viewer would say it.
+///
+/// Jellyfin answers in short machine names - `eac3`, `h264` - where the probe
+/// used to hand back what `pb_utils` calls them. The page shows these, so a
+/// video that opened one way yesterday should not read differently today just
+/// because the answer came from somewhere else.
+fn codec_name(codec: &str) -> String {
+    match codec.to_ascii_lowercase().as_str() {
+        "aac" => "MPEG-4 AAC",
+        "ac3" => "AC-3 (ATSC A/52)",
+        "eac3" => "E-AC-3 (ATSC A/52B)",
+        "dts" => "DTS",
+        "truehd" => "Dolby TrueHD",
+        "flac" => "FLAC",
+        "opus" => "Opus",
+        "vorbis" => "Vorbis",
+        "mp3" => "MPEG-1 Layer 3 (MP3)",
+        "mp2" => "MPEG-1 Layer 2",
+        "pcm" | "pcm_s16le" | "pcm_s24le" => "Uncompressed PCM",
+        "h264" => "H.264",
+        "hevc" | "h265" => "H.265",
+        "av1" => "AV1",
+        "vp9" => "VP9",
+        "vp8" => "VP8",
+        "mpeg2video" => "MPEG-2",
+        "" => return String::new(),
+        other => return other.to_ascii_uppercase(),
+    }
+    .to_string()
+}
+
+impl Streams {
+    /// What the probe would have found, without asking the file.
+    ///
+    /// Only the embedded streams are counted, and their positions are their
+    /// positions among the embedded ones - which is exactly how the pipeline
+    /// selects them. External files are left out entirely here and offered
+    /// separately, because they are not in the container to be selected.
+    ///
+    /// Verified against a ten-track film on 2026-08-14: Jellyfin's order and
+    /// the probe's order were identical, track for track.
+    pub fn as_media(&self, duration_ns: u64) -> crate::probe::Media {
+        let audio = self
+            .audio
+            .iter()
+            .filter(|stream| !stream.external)
+            .enumerate()
+            .map(|(position, stream)| crate::probe::AudioTrack {
+                index: position as u32,
+                codec: codec_name(&stream.codec),
+                channels: stream.channels,
+                language: stream.language.clone(),
+                title: stream.title.clone(),
+            })
+            .collect();
+
+        let subtitles = self
+            .subtitles
+            .iter()
+            .filter(|stream| !stream.external)
+            .enumerate()
+            .map(|(position, stream)| crate::probe::SubtitleTrack {
+                index: position as u32,
+                language: stream.language.clone(),
+                title: stream.title.clone(),
+                // Jellyfin carries a forced flag, but the rest of TinePlayer
+                // reads forcedness out of the title as well, so nothing is
+                // lost by leaving this to the same reading everything else
+                // gets - see `subtitles::Subtitle::is_forced`.
+                forced: false,
+            })
+            .collect();
+
+        crate::probe::Media {
+            audio,
+            subtitles,
+            duration_ns,
+            video: crate::probe::VideoDetails {
+                width: self.width,
+                height: self.height,
+                codec: codec_name(&self.video_codec),
+                fps: self.fps,
+            },
+            // Left empty on purpose. These are the container's own tags, and
+            // everything they would have offered - title, year, summary - the
+            // library has already answered better.
+            tags: crate::probe::Tags::default(),
+        }
+    }
+
+    /// The streams that are files of their own, which have to be fetched
+    /// rather than selected.
+    pub fn external_audio(&self) -> impl Iterator<Item = &Stream> {
+        self.audio.iter().filter(|stream| stream.external)
+    }
+
+    pub fn external_subtitles(&self) -> impl Iterator<Item = &Stream> {
+        self.subtitles.iter().filter(|stream| stream.external)
+    }
+}
+
+/// Reads the streams out of a media source.
+fn read_streams(source: &serde_json::Value) -> Streams {
+    let mut streams = Streams::default();
+    let Some(list) = source.get("MediaStreams").and_then(|list| list.as_array()) else {
+        return streams;
+    };
+    for entry in list {
+        let text = |name: &str| {
+            entry
+                .get(name)
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let number = |name: &str| {
+            entry
+                .get(name)
+                .and_then(|value| value.as_u64())
+                .unwrap_or_default() as u32
+        };
+        let stream = Stream {
+            index: number("Index"),
+            external: entry
+                .get("IsExternal")
+                .and_then(|external| external.as_bool())
+                .unwrap_or(false),
+            codec: text("Codec"),
+            language: text("Language"),
+            // `Title` is what a viewer named the track; `DisplayTitle` is what
+            // Jellyfin assembles when they did not. The first is better where
+            // it exists, and it is what the described-track detection reads.
+            title: match text("Title").is_empty() {
+                true => text("DisplayTitle"),
+                false => text("Title"),
+            },
+            channels: number("Channels"),
+        };
+        match text("Type").as_str() {
+            "Audio" => streams.audio.push(stream),
+            "Subtitle" => streams.subtitles.push(stream),
+            "Video" if streams.width == 0 => {
+                streams.width = number("Width");
+                streams.height = number("Height");
+                streams.video_codec = stream.codec;
+                streams.fps = entry
+                    .get("RealFrameRate")
+                    .or_else(|| entry.get("AverageFrameRate"))
+                    .and_then(|rate| rate.as_f64())
+                    .unwrap_or(0.0);
+            }
+            _ => {}
+        }
+    }
+    streams
 }
 
 /// A pairing part-way through: the code to show, and the secret that redeems
@@ -944,19 +1181,44 @@ mod tests {
         assert!(!pairing.contains("Token="));
     }
 
+    fn item(container: &str) -> Item {
+        Item {
+            id: "abc123".to_string(),
+            media_source_id: "abc123".to_string(),
+            container: container.to_string(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn the_stream_url_insists_on_the_original_file() {
         let mut pairing = Pairing::new("http://hoth:8096");
         pairing.account = Some(account());
         let client = Client::new(&pairing).unwrap();
-        let url = client.stream_url("abc123");
+        let url = client.stream_url(&item("mkv"));
         // Without this the server transcodes and delivers one audio track,
         // which is the whole feature gone.
         assert!(url.contains("static=true"), "{url}");
         assert!(
-            url.starts_with("http://hoth:8096/Videos/abc123/stream"),
+            url.starts_with("http://hoth:8096/Videos/abc123/stream.mkv"),
             "{url}"
         );
+    }
+
+    #[test]
+    fn the_container_goes_on_the_url() {
+        let mut pairing = Pairing::new("http://hoth:8096");
+        pairing.account = Some(account());
+        let client = Client::new(&pairing).unwrap();
+        // Without the extension the server calls a QuickTime file AVI and
+        // GStreamer picks the wrong demuxer, which hangs rather than fails.
+        assert!(
+            client.stream_url(&item("mov")).contains("/stream.mov?"),
+            "the container must reach the URL"
+        );
+        // A source that never said keeps the bare form rather than inventing
+        // an extension that would be wrong.
+        assert!(client.stream_url(&item("")).contains("/stream?"));
     }
 
     #[test]
@@ -1034,7 +1296,7 @@ mod tests {
                     "    resolved: {} ({:?} runtime)",
                     item.title, item.runtime_ns
                 );
-                println!("    stream:   {}", client.stream_url(&item.id));
+                println!("    stream:   {}", client.stream_url(&item));
                 assert!(!item.title.is_empty(), "an item should have a title");
             }
             other => panic!("expected a Play, got {other:?}"),

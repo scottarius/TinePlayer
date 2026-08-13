@@ -2143,14 +2143,36 @@ impl App {
         let Some(client) = self.jellyfin.borrow().clone() else {
             return;
         };
-        let source = Source::parse(&client.stream_url(&item.id));
+        let source = Source::parse(&client.stream_url(&item));
         // Set before the source is opened, because everything that reads a
         // title or a resume position during opening looks here for it. Kodi's
         // is cleared for the same reason: two launchers claiming the same
         // video would be one of them wrong.
         *self.kodi_item.borrow_mut() = None;
+
+        // What the tracks are, from the library rather than by reading the
+        // file. The server has already analysed it, and asking again over HTTP
+        // is redundant work that sometimes cannot finish: a QuickTime file
+        // with its index at the end has to be read from the front to be
+        // probed, which for a four-gigabyte film is minutes. Playback itself
+        // is unaffected - it seeks straight to the index - so the probe was
+        // the only thing that could not cope.
+        //
+        // Verified on 2026-08-14 that the library's stream order matches the
+        // probe's exactly, which is what makes this safe: tracks are chosen by
+        // position, and a different order would silently play the wrong one.
+        let media = item.streams.as_media(item.runtime_ns.unwrap_or_default());
         *self.jellyfin_item.borrow_mut() = Some(item);
-        self.show_opening(source);
+
+        // Straight in, with no spinner: there is nothing to wait for now that
+        // the tracks are already known.
+        match self.apply_media(&source, media) {
+            Ok(()) => self.show_menu(),
+            Err(e) => {
+                eprintln!("Couldn't open {}: {e}", source.uri());
+                self.show_source_error(&source, &e, false);
+            }
+        }
     }
 
     /// Puts down a pairing the server no longer honours.
