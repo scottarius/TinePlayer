@@ -9,6 +9,7 @@ use gtk::{gdk, glib};
 use crate::config::{Config, clear_position, save_position};
 use crate::pipeline::build_pipeline;
 use crate::source::Source;
+use crate::subtitles::SubtitleSource;
 
 /// Applied to the video widget so the letterbox area around the picture
 /// can be styled black without affecting the rest of the interface.
@@ -42,6 +43,18 @@ const SCRUB_RATES: [(Duration, f64); 4] = [
     (Duration::from_secs(6), 800.0),
 ];
 
+/// Whether a stream id names a subtitle, according to the collection it came
+/// from. Unknown ids are treated as not-subtitles, so a stream that cannot be
+/// identified keeps playing rather than being dropped silently.
+fn is_text(collection: Option<&gst::StreamCollection>, id: &str) -> bool {
+    collection.is_some_and(|collection| {
+        collection.iter().any(|stream| {
+            stream.stream_id().is_some_and(|found| found == id)
+                && stream.stream_type().contains(gst::StreamType::TEXT)
+        })
+    })
+}
+
 /// Why playback stopped on its own.
 ///
 /// The two are worth telling apart because reaching the end is the ordinary
@@ -71,6 +84,17 @@ pub struct Playback {
     /// position near the end is dropped rather than saved.
     watched_percent: f64,
     picture: gtk::Picture,
+    /// Every stream the file turned out to have, kept from the message that
+    /// announced them.
+    ///
+    /// Switching a subtitle means naming every stream to keep playing, and the
+    /// names live here - there is no way to ask an element for its collection
+    /// after the fact, so it is caught as it goes past.
+    collection: RefCell<Option<gst::StreamCollection>>,
+    /// Which of them are playing, by id, from the message that says so. The
+    /// list a switch starts from: keep these, drop the subtitle, add the
+    /// wanted one.
+    selected_streams: RefCell<Vec<String>>,
     playing: Cell<bool>,
     last_toggle: Cell<Instant>,
     /// Set when the pipeline reports end-of-stream, so teardown clears the
@@ -168,6 +192,8 @@ impl Playback {
             reached_eos: Cell::new(false),
             finished: Cell::new(false),
             bus_watch: RefCell::new(None),
+            collection: RefCell::new(None),
+            selected_streams: RefCell::new(Vec::new()),
             final_report: RefCell::new(None),
             seek_target: Cell::new(None),
             seeking: Cell::new(false),
@@ -203,6 +229,19 @@ impl Playback {
                         } else {
                             playback.seek_target.set(None);
                         }
+                    }
+                    // Caught rather than asked for: an element will not hand
+                    // its collection over later, and switching subtitles needs
+                    // it to name the streams that carry on playing.
+                    MessageView::StreamCollection(announced) => {
+                        *playback.collection.borrow_mut() = Some(announced.stream_collection());
+                    }
+                    MessageView::StreamsSelected(chosen) => {
+                        *playback.selected_streams.borrow_mut() = chosen
+                            .streams()
+                            .iter()
+                            .filter_map(|stream| stream.stream_id().map(|id| id.to_string()))
+                            .collect();
                     }
                     MessageView::Warning(warn) => {
                         eprintln!(
@@ -717,6 +756,95 @@ impl Playback {
 
         let _ = self.pipeline.set_state(gst::State::Null);
         self.bus_watch.borrow_mut().take();
+    }
+
+    /// Changes which subtitle is showing, without stopping the film.
+    ///
+    /// Three cases that look alike and are not. An embedded one is a matter of
+    /// telling `decodebin3` to decode a different stream. An external one is a
+    /// small source chain of its own, which has to be built, attached and then
+    /// sent to where the film already is - a branch added part-way through
+    /// starts at zero, and would otherwise play the opening titles' subtitles
+    /// over the middle of the film. Off is neither: nothing is selected and
+    /// nothing is attached.
+    ///
+    /// The overlay's `subtitle_sink` takes one source at a time, so whatever
+    /// was feeding it is always taken away first, whichever kind it was.
+    pub fn set_subtitle(&self, subtitle: Option<&SubtitleSource>) -> Result<(), String> {
+        let Some(overlay) = self.pipeline.by_name("suboverlay") else {
+            // No overlay means the film offered no subtitles when it opened,
+            // and nothing can be switched on that was never there.
+            return Ok(());
+        };
+
+        self.detach_external_subtitle();
+
+        // Everything currently playing except the subtitles, which is what all
+        // three cases start from.
+        let mut keep: Vec<String> = {
+            let collection = self.collection.borrow();
+            self.selected_streams
+                .borrow()
+                .iter()
+                .filter(|id| !is_text(collection.as_ref(), id))
+                .cloned()
+                .collect()
+        };
+
+        if let Some(SubtitleSource::Embedded(index)) = subtitle {
+            let id = self
+                .text_stream_id(*index)
+                .ok_or_else(|| format!("The file has no subtitle track {index}"))?;
+            keep.push(id);
+        }
+
+        // Sent even when nothing was added: that is how a subtitle stops being
+        // decoded when subtitles are turned off.
+        if !keep.is_empty() {
+            let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
+            let _ = self
+                .pipeline
+                .send_event(gst::event::SelectStreams::new(&ids));
+        }
+
+        if let Some(SubtitleSource::Uri(uri)) = subtitle {
+            crate::pipeline::attach_external_subtitle(&self.pipeline, &overlay, uri)?;
+            // In step with the picture rather than starting from the beginning.
+            if let Some(position) = self.position() {
+                self.seek_external_subtitle(position);
+            }
+        }
+
+        overlay.set_property("silent", subtitle.is_none());
+        Ok(())
+    }
+
+    /// Takes down the external subtitle chain, if there is one.
+    ///
+    /// Set to NULL before being removed: an element taken out of a running
+    /// pipeline while still playing leaves its thread mid-push, and the pad it
+    /// was pushing into is about to be linked to something else.
+    fn detach_external_subtitle(&self) {
+        for name in [
+            crate::pipeline::EXTERNAL_SUBTITLE_SOURCE,
+            crate::pipeline::EXTERNAL_SUBTITLE_PARSER,
+        ] {
+            if let Some(element) = self.pipeline.by_name(name) {
+                let _ = element.set_state(gst::State::Null);
+                let _ = self.pipeline.remove(&element);
+            }
+        }
+    }
+
+    /// The stream id of the nth subtitle inside the file.
+    fn text_stream_id(&self, index: u32) -> Option<String> {
+        let collection = self.collection.borrow();
+        let collection = collection.as_ref()?;
+        collection
+            .iter()
+            .filter(|stream| stream.stream_type().contains(gst::StreamType::TEXT))
+            .nth(index as usize)
+            .and_then(|stream| stream.stream_id().map(|id| id.to_string()))
     }
 
     /// Whether there are subtitles to turn on and off right now.

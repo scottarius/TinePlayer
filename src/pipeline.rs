@@ -57,6 +57,11 @@ pub const EXTERNAL_AUDIO_DECODER: &str = "extaudio_dec_";
 /// hand. There is only ever one, so it needs no number after it.
 pub const EXTERNAL_SUBTITLE_SOURCE: &str = "extsub_src";
 
+/// The parser on the same chain. Named for the same reason: switching to a
+/// different subtitle takes the whole branch out, and both halves have to be
+/// found to be removed.
+pub const EXTERNAL_SUBTITLE_PARSER: &str = "extsub_parse";
+
 /// Where one output's audio comes from.
 ///
 /// A track inside the video, or a whole separate file. The second is what
@@ -385,7 +390,7 @@ fn attach_external_audio(
     Ok(())
 }
 
-fn attach_external_subtitle(
+pub fn attach_external_subtitle(
     pipeline: &gst::Pipeline,
     overlay: &gst::Element,
     uri: &str,
@@ -401,6 +406,7 @@ fn attach_external_subtitle(
     // not reliably hear a seek sent through the video's. See `run_seek`.
     src.set_property("name", EXTERNAL_SUBTITLE_SOURCE);
     let parse = make("subparse")?;
+    parse.set_property("name", EXTERNAL_SUBTITLE_PARSER);
 
     pipeline
         .add_many([&src, &parse])
