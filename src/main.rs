@@ -153,6 +153,37 @@ fn disable_broken_dtsdec() {
     }
 }
 
+/// `d3d12av1dec` deadlocks against the flush that begins a seek.
+///
+/// Captured 2026-08-13 with a debugger on a hung TinePlayer, twice. The
+/// decoder's streaming thread sits in `gst_video_decoder_finish_frame` inside
+/// `gstd3d12`, blocked on one of that plugin's own mutexes while holding the
+/// pad's stream lock. The main thread is pushing the flush that starts a seek
+/// and cannot have that lock, so neither moves again and the window stops
+/// drawing. `gst_av1_decoder` is named in the stack.
+///
+/// It only shows on an AV1 video being *resumed*, since that is what sends a
+/// flush, and it is a race: made near-certain by starting playback from a
+/// media key, still reachable about one time in nine after that was fixed.
+/// Rare is not the same as absent, and a viewer whose player freezes when
+/// resuming a film does not care how narrow the window was.
+///
+/// AV1 alone, deliberately. The other D3D12 decoders are left ranked as they
+/// are, so H.264, H.265 and VP9 - which is nearly everything - keep using
+/// them. Every GPU with AV1 decode at all offers it through D3D11 too, so
+/// `d3d11av1dec` takes over and the hardware path is kept; a machine with
+/// neither falls back to libav in software.
+///
+/// The fault is inside the plugin and nothing this side of it can release
+/// that mutex, so this stands until it is fixed upstream.
+#[cfg(target_os = "windows")]
+fn disable_deadlocking_av1_decoder() {
+    if let Some(factory) = gstreamer::ElementFactory::find("d3d12av1dec") {
+        use gstreamer::prelude::PluginFeatureExtManual;
+        factory.set_rank(gstreamer::Rank::NONE);
+    }
+}
+
 /// A GUI-subsystem binary has no console of its own, so output vanishes
 /// even when the user ran it from a terminal. Reattaching to the parent's
 /// console restores it for that case, and fails harmlessly when there
@@ -736,6 +767,8 @@ fn main() -> std::process::ExitCode {
     gstreamer::init().expect("Failed to initialize GStreamer");
     #[cfg(target_os = "windows")]
     disable_broken_dtsdec();
+    #[cfg(target_os = "windows")]
+    disable_deadlocking_av1_decoder();
     silence_upstream_unref_spam();
 
     // gtk4paintablesink is statically linked into this binary rather than
