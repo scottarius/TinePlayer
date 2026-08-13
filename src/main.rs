@@ -169,6 +169,36 @@ fn attach_parent_console() {
 #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
 fn attach_parent_console() {}
 
+/// What Windows should call this application.
+///
+/// Windows identifies a desktop application by an "AppUserModelID" rather than
+/// by its executable, and resolves the name to show from a Start menu shortcut
+/// carrying the same one. Without it the media panel in the task bar says
+/// "Unknown app" over a film that is playing perfectly well.
+///
+/// Set before any window exists, which is what the documentation asks: the
+/// identity is stamped on windows as they are created, and one made first
+/// keeps whatever it was given.
+///
+/// The installer puts the same string on its shortcuts. A copy run from the
+/// ZIP has no shortcut for Windows to look up, so it stays unnamed - which is
+/// a smaller thing than it sounds, being the case where somebody has
+/// deliberately not installed anything.
+#[cfg(target_os = "windows")]
+fn name_this_process() {
+    let id: Vec<u16> = "Scottarius.TinePlayer"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: a null-terminated wide string that outlives the call.
+    unsafe {
+        let _ = windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(id.as_ptr());
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn name_this_process() {}
+
 /// Gives the terminal back, once it is certain that a window is what happens
 /// next rather than a line of output.
 ///
@@ -693,6 +723,8 @@ fn use_bundled_fonts() {
 
 fn main() -> std::process::ExitCode {
     attach_parent_console();
+    // Before any window is made, which is when the identity is stamped on.
+    name_this_process();
     // Before anything reads the environment, and before GStreamer starts.
     use_bundled_resources();
     enable_accessibility();

@@ -138,8 +138,12 @@ Type: files; Name: "{app}\*.dll"
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\TinePlayer.exe"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\TinePlayer.exe"; Tasks: desktopicon
+; AppUserModelID on both, matching what name_this_process sets in main.rs.
+; Windows resolves an application's display name by finding a shortcut with
+; the same one - without it the media panel in the task bar calls TinePlayer
+; "Unknown app" while playing a film.
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\TinePlayer.exe"; AppUserModelID: "Scottarius.TinePlayer"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\TinePlayer.exe"; Tasks: desktopicon; AppUserModelID: "Scottarius.TinePlayer"
 
 [Run]
 Filename: "{app}\TinePlayer.exe"; Description: "Start {#AppName}"; Flags: nowait postinstall skipifsilent
