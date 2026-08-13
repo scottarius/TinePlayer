@@ -692,6 +692,11 @@ pub struct App {
     /// there is no file, and default is a perfectly good page - most files
     /// have no sidecar and the layout is designed up from that case.
     details: RefCell<crate::metadata::Details>,
+    /// Whether a now-playing update is already queued behind the main loop.
+    ///
+    /// Set while one is pending so that a scrub, which commits a seek on every
+    /// release, does not queue a copy of the poster for each of them.
+    now_playing_queued: Cell<bool>,
     /// Artwork already decoded for the file on screen, keyed by nothing more
     /// than being the current file: it is dropped whenever one is loaded.
     ///
@@ -991,6 +996,7 @@ impl App {
             update_badges: RefCell::new(Vec::new()),
             file: RefCell::new(None),
             details: RefCell::new(Default::default()),
+            now_playing_queued: Cell::new(false),
             poster_art: RefCell::new(None),
             backdrop_art: RefCell::new(None),
             art_generation: Cell::new(0),
@@ -1726,7 +1732,7 @@ impl App {
     /// from the screen left the system's now-playing widget still showing a
     /// pause button, and pressing it did nothing, while the media key on the
     /// keyboard - which did come through here - worked.
-    fn toggle_pause(&self) {
+    fn toggle_pause(self: &Rc<Self>) {
         if let Some(playback) = self.playback.borrow().as_ref() {
             playback.toggle_pause();
             self.awake.set(playback.is_playing());
@@ -1745,22 +1751,63 @@ impl App {
     /// Silent everywhere but macOS. See `media_keys::NowPlaying` for why it
     /// is not merely cosmetic there: it is what decides who receives a media
     /// key at all.
-    fn publish_now_playing(&self) {
-        let playback = self.playback.borrow();
-        let Some(playback) = playback.as_ref() else {
+    fn publish_now_playing(self: &Rc<Self>) {
+        // Queued behind the main loop rather than done here.
+        //
+        // Telling the system what is playing means writing the poster to disk
+        // and several calls into another process, and `begin_playback` reaches
+        // this by way of `stop_playback` - so all of that was running in the
+        // middle of building the pipeline. On 2026-08-13 that was enough to
+        // hang TinePlayer outright: the main thread ended up blocked inside
+        // `gst_pad_push_event`, waiting on a lock a streaming thread held,
+        // with the delay this introduced landing squarely in the window where
+        // that race is possible.
+        //
+        // Nothing here needs to be immediate. The panel wants to know within a
+        // moment, and the main loop is idle a moment later by definition.
+        if self.now_playing_queued.replace(true) {
+            return;
+        }
+        let app = self.clone();
+        glib::idle_add_local_once(move || {
+            app.now_playing_queued.set(false);
+            app.send_now_playing();
+        });
+    }
+
+    /// Gathers what is playing and hands it to the platform.
+    fn send_now_playing(&self) {
+        // Nothing chosen at all: the panel goes away rather than sitting
+        // there empty. An empty one is worse than none, because the name it
+        // shows when it has no title is the application's own identifier.
+        if self.file.borrow().is_none() {
             crate::media_keys::set_now_playing(None);
             return;
-        };
+        }
         let seconds = |time: Option<gstreamer::ClockTime>| {
             time.map(|time| time.nseconds() as f64 / 1e9).unwrap_or(0.0)
         };
+        // A video chosen but not started is published too, stopped rather than
+        // absent, so the panel names what is about to be watched and its play
+        // button has something to do. Without it the media page showed a panel
+        // with no title at all.
+        let playback = self.playback.borrow();
+        let (duration_s, elapsed_s, playing) = match playback.as_ref() {
+            Some(playback) => (
+                seconds(playback.duration()),
+                seconds(playback.position()),
+                playback.is_playing(),
+            ),
+            None => (self.details.borrow().duration_s, 0.0, false),
+        };
+        drop(playback);
         crate::media_keys::set_now_playing(Some(crate::media_keys::NowPlaying {
             // The same title as the titlebar and the media page, from the one
             // chain that resolves it.
             title: self.file_label().unwrap_or_default(),
-            duration_s: seconds(playback.duration()),
-            elapsed_s: seconds(playback.position()),
-            playing: playback.is_playing(),
+            duration_s,
+            elapsed_s,
+            playing,
             // The poster the page found, cloned rather than borrowed: this
             // runs a handful of times per film, and the alternative is a
             // lifetime threaded through a platform boundary for nothing.
@@ -2786,7 +2833,7 @@ impl App {
         }
     }
 
-    fn stop_playback(&self) {
+    fn stop_playback(self: &Rc<Self>) {
         self.finish_playback(false);
     }
 
@@ -2816,7 +2863,7 @@ impl App {
     /// reached Kodi. That only matters when the process is about to end, since
     /// the report goes out on a detached thread and exiting would take it
     /// along; everywhere else it would be a stall for nothing.
-    fn finish_playback(&self, wait_for_kodi: bool) {
+    fn finish_playback(self: &Rc<Self>, wait_for_kodi: bool) {
         // Whatever else happens below, stop holding the display awake: this
         // is reached from the window closing as well as from playback ending.
         self.awake.set(false);
@@ -5378,6 +5425,14 @@ impl App {
             config.last_video = Some(path.to_path_buf());
             let _ = config.save();
         }
+
+        // The video is loaded and its page is about to be shown, so the system
+        // is told what it is now rather than at the first play. Otherwise the
+        // panel in the task bar sits there enabled with no title, and Windows
+        // fills the gap with the application's own identifier - which is how
+        // "Scottarius.TinePlayer" ended up where a film's name belongs, until
+        // something had been played once.
+        self.publish_now_playing();
         Ok(())
     }
 

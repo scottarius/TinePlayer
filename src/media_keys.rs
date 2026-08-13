@@ -69,6 +69,17 @@ mod platform {
     use std::rc::Rc;
 
     use gtk::prelude::*;
+    use windows::Foundation::TypedEventHandler;
+    use windows::Media::{
+        MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
+        SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
+        SystemMediaTransportControlsTimelineProperties,
+    };
+    use windows::Storage::StorageFile;
+    use windows::Storage::Streams::RandomAccessStreamReference;
+    use windows::Win32::System::WinRT::ISystemMediaTransportControlsInterop;
+    use windows::core::HSTRING;
+    use windows_future::AsyncStatus;
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
@@ -102,6 +113,13 @@ mod platform {
         /// arranging to free it again. The window lives as long as the
         /// process, and this is only ever touched from the main thread.
         static HANDLER: RefCell<Option<Handler>> = const { RefCell::new(None) };
+
+        /// The transport controls, once they have been obtained. Kept because
+        /// what is playing has to be pushed into them as it changes, and
+        /// because their presence is what tells the window procedure to leave
+        /// the media keys alone.
+        static CONTROLS: RefCell<Option<SystemMediaTransportControls>> =
+            const { RefCell::new(None) };
     }
 
     fn command_for(id: u16) -> Option<Command> {
@@ -134,7 +152,12 @@ mod platform {
         _id: usize,
         _data: usize,
     ) -> LRESULT {
-        if message == WM_APPCOMMAND {
+        // With the transport controls in hand, the keys arrive through their
+        // own button event instead and handling them here as well would act on
+        // one press twice. The subclass stays installed as the fallback for a
+        // machine where the controls could not be obtained at all.
+        let smtc = CONTROLS.with(|controls| controls.borrow().is_some());
+        if message == WM_APPCOMMAND && !smtc {
             let id = ((lparam as u32 >> 16) as u16) & !FAPPCOMMAND_MASK;
             if let Some(command) = command_for(id) {
                 // Cloned out before calling, so the handler is free to do
@@ -210,12 +233,221 @@ mod platform {
         unsafe {
             SetWindowSubclass(found, Some(subclass_proc), SUBCLASS_ID, 0);
         }
+        let controls = take_controls(found);
+        CONTROLS.with(|held| *held.borrow_mut() = controls);
     }
 
-    /// Nothing to tell. Windows routes a media key to the foreground window,
-    /// so being in front is the whole qualification and there is no
-    /// now-playing state to publish for it.
-    pub fn set_now_playing(_state: Option<NowPlaying>) {}
+    /// Takes hold of the transport controls for our window.
+    ///
+    /// These were designed for packaged applications, which get them from the
+    /// runtime by name. A plain Win32 window asks the interop interface for
+    /// the set belonging to one window instead, which is the documented route
+    /// and the only one available here.
+    ///
+    /// Failure is not fatal and not reported: on a machine where this cannot
+    /// be had, the window subclass above keeps the keys working, which is what
+    /// TinePlayer had before the panel was supported at all.
+    fn take_controls(window: HWND) -> Option<SystemMediaTransportControls> {
+        // The two crates disagree about what an HWND is - a raw pointer here,
+        // a newtype there - so it is rebuilt rather than passed across.
+        let handle = windows::Win32::Foundation::HWND(window as *mut _);
+        let interop: ISystemMediaTransportControlsInterop =
+            windows::core::factory::<SystemMediaTransportControls, _>().ok()?;
+        // SAFETY: a live window handle, and the interface's own IID.
+        let controls: SystemMediaTransportControls =
+            unsafe { interop.GetForWindow(handle) }.ok()?;
+
+        // Switched off, and left off until `fill` has a video to name.
+        //
+        // Merely not enabling it is not enough - the panel comes enabled by
+        // default - and an enabled panel with no title is one Windows fills in
+        // for itself, using the AppUserModelID. A fresh start with nothing
+        // open showed a panel titled "Scottarius.TinePlayer" because of it.
+        //
+        // The buttons below are about which controls the panel offers when it
+        // is shown at all, which is a separate thing from whether it is.
+        controls.SetIsEnabled(false).ok()?;
+        controls.SetIsPlayEnabled(true).ok()?;
+        controls.SetIsPauseEnabled(true).ok()?;
+        controls.SetIsStopEnabled(true).ok()?;
+        controls.SetIsNextEnabled(true).ok()?;
+        controls.SetIsPreviousEnabled(true).ok()?;
+
+        controls
+            .ButtonPressed(&TypedEventHandler::<
+                SystemMediaTransportControls,
+                SystemMediaTransportControlsButtonPressedEventArgs,
+            >::new(|_, args| {
+                let Some(args) = args.as_ref() else {
+                    return Ok(());
+                };
+                let command = match args.Button()? {
+                    SystemMediaTransportControlsButton::Play => Command::Play,
+                    SystemMediaTransportControlsButton::Pause => Command::Pause,
+                    SystemMediaTransportControlsButton::Stop => Command::Stop,
+                    SystemMediaTransportControlsButton::Next => Command::Next,
+                    SystemMediaTransportControlsButton::Previous => Command::Previous,
+                    _ => return Ok(()),
+                };
+                // The event arrives on a pool thread, and everything the
+                // handler touches belongs to the main one.
+                glib::idle_add_once(move || {
+                    let handler = HANDLER.with(|handler| handler.borrow().clone());
+                    if let Some(handler) = handler {
+                        handler(command);
+                    }
+                });
+                Ok(())
+            }))
+            .ok()?;
+
+        Some(controls)
+    }
+
+    /// Fills the panel in: what is playing, how far in, and the poster.
+    pub fn set_now_playing(state: Option<NowPlaying>) {
+        CONTROLS.with(|controls| {
+            let controls = controls.borrow();
+            let Some(controls) = controls.as_ref() else {
+                return;
+            };
+            // Every call here returns a Result and none of them is worth
+            // failing over: a panel that is missing its subtitle is better
+            // than a player that stopped because it could not set one.
+            let _ = fill(controls, state);
+        });
+    }
+
+    /// What the cached poster is called. One name, overwritten whenever the
+    /// film changes, so nothing accumulates and nothing has to be cleaned up
+    /// on the way out.
+    const THUMBNAIL: &str = "now-playing";
+
+    /// The format from the bytes themselves rather than from a file name.
+    ///
+    /// Artwork out of a container has no name to take an extension from, and a
+    /// poster on disk is occasionally named for a format it is not.
+    fn format_of(bytes: &[u8]) -> &'static str {
+        match bytes {
+            [0x89, b'P', b'N', b'G', ..] => "png",
+            [b'R', b'I', b'F', b'F', .., b'W', b'E', b'B', b'P'] => "webp",
+            [b'B', b'M', ..] => "bmp",
+            _ => "jpg",
+        }
+    }
+
+    /// Writes the poster into the cache folder, and says where it went.
+    ///
+    /// Everything goes through here, including a poster that is already a file
+    /// on disk. One path rather than two is the point: artwork carried inside
+    /// the container has no file for the panel to open, and giving it one is
+    /// what makes embedded covers work at all. It also means the panel is
+    /// reading a short ASCII path of our own choosing rather than whatever the
+    /// film happened to be called.
+    ///
+    /// Written beside and renamed over, because the panel reads the file when
+    /// it pleases and a half-written one would be a broken picture.
+    fn cache_thumbnail(art: &crate::metadata::Art) -> Option<std::path::PathBuf> {
+        let dir = crate::config::cache_dir()?;
+        let bytes = match art {
+            crate::metadata::Art::Path(path) => std::fs::read(path).ok()?,
+            crate::metadata::Art::Embedded(bytes) => bytes.clone(),
+        };
+
+        let format = format_of(&bytes);
+        // A film whose poster is a PNG following one whose poster was a JPEG
+        // would otherwise leave the first behind for good.
+        for stale in ["jpg", "png", "webp", "bmp"] {
+            if stale != format {
+                let _ = std::fs::remove_file(dir.join(format!("{THUMBNAIL}.{stale}")));
+            }
+        }
+
+        let path = dir.join(format!("{THUMBNAIL}.{format}"));
+        let part = dir.join(format!("{THUMBNAIL}.part"));
+        std::fs::write(&part, &bytes).ok()?;
+        std::fs::rename(&part, &path).ok()?;
+        Some(path)
+    }
+
+    /// The cached poster as something the panel will actually read.
+    ///
+    /// Not `CreateFromUri` with a `file:///` address, which was the first
+    /// attempt and silently showed nothing: that takes the schemes a packaged
+    /// application has, and a path on disk is not one of them. A `StorageFile`
+    /// is the route that works.
+    ///
+    /// Waiting for it by polling rather than awaiting, there being no async
+    /// runtime here to await on. Opening a local file completes on a pool
+    /// thread and takes no measurable time, so the loop below normally sees it
+    /// done on the first look; the bound is there so a file that will not open
+    /// cannot hold the interface still.
+    fn thumbnail(path: &std::path::Path) -> windows::core::Result<RandomAccessStreamReference> {
+        let opening = StorageFile::GetFileFromPathAsync(&HSTRING::from(path.as_os_str()))?;
+        for _ in 0..200 {
+            if opening.Status()? != AsyncStatus::Started {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let file = opening.GetResults()?;
+        RandomAccessStreamReference::CreateFromFile(&file)
+    }
+
+    fn fill(
+        controls: &SystemMediaTransportControls,
+        state: Option<NowPlaying>,
+    ) -> windows::core::Result<()> {
+        let updater = controls.DisplayUpdater()?;
+        let Some(state) = state else {
+            // Disabled, not merely cleared. An enabled panel with no title
+            // falls back to naming the application by its AppUserModelID,
+            // which is how "Scottarius.TinePlayer" ended up where the film's
+            // name belongs.
+            controls.SetPlaybackStatus(MediaPlaybackStatus::Stopped)?;
+            updater.ClearAll()?;
+            updater.Update()?;
+            controls.SetIsEnabled(false)?;
+            return Ok(());
+        };
+
+        controls.SetIsEnabled(true)?;
+
+        // Cleared before it is filled in. The updater keeps whatever it was
+        // last given, so a film with no artwork of its own would otherwise
+        // show the previous film's poster - there is no way to set a
+        // thumbnail back to nothing, only to replace the lot.
+        updater.ClearAll()?;
+        updater.SetType(MediaPlaybackType::Video)?;
+        updater.VideoProperties()?.SetTitle(&state.title.into())?;
+
+        // Both forms of artwork, by way of one cached copy.
+        if let Some(art) = state.artwork.as_ref()
+            && let Some(cached) = cache_thumbnail(art)
+            && let Ok(stream) = thumbnail(&cached)
+        {
+            updater.SetThumbnail(&stream)?;
+        }
+        updater.Update()?;
+
+        let timeline = SystemMediaTransportControlsTimelineProperties::new()?;
+        // WinRT counts in hundreds of nanoseconds.
+        let ticks = |seconds: f64| windows::Foundation::TimeSpan {
+            Duration: (seconds * 1e7) as i64,
+        };
+        timeline.SetStartTime(ticks(0.0))?;
+        timeline.SetMinSeekTime(ticks(0.0))?;
+        timeline.SetEndTime(ticks(state.duration_s))?;
+        timeline.SetMaxSeekTime(ticks(state.duration_s))?;
+        timeline.SetPosition(ticks(state.elapsed_s))?;
+        controls.UpdateTimelineProperties(&timeline)?;
+
+        controls.SetPlaybackStatus(match state.playing {
+            true => MediaPlaybackStatus::Playing,
+            false => MediaPlaybackStatus::Paused,
+        })?;
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]

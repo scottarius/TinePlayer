@@ -117,6 +117,22 @@ winresource = "0.1"
 # terminal it was started from, and the window subclass that receives the
 # media keys - which Windows sends as WM_APPCOMMAND rather than as keys.
 windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_System_Registry", "Win32_System_Power", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+# SystemMediaTransportControls: the panel behind the volume button in the task
+# bar, with transport buttons and artwork. WinRT rather than Win32, so it needs
+# this crate rather than windows-sys - already compiled here as a dependency of
+# gilrs, so this is features rather than another tree.
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Media",
+    "Storage_Streams",
+    # ISystemMediaTransportControlsInterop, which is how a plain Win32 window
+    # gets hold of controls that were designed for a packaged application.
+    "Win32_System_WinRT",
+    "Win32_Foundation",
+] }
+# AsyncStatus, for waiting on the one asynchronous call in the panel code.
+# The `windows` crate re-exports windows-core but not this, so it is named.
+windows-future = "0.3"
 # No GL feature here: the `winegl` feature needs gstreamer-gl-egl, and the
 # official GStreamer Windows build ships gstreamer-gl without any EGL
 # variant, so enabling it fails at link time with unresolved
