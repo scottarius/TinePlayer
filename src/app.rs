@@ -9390,13 +9390,52 @@ impl App {
             .build();
         self.window.set_child(Some(&waiting));
 
-        // A timeout rather than an idle callback: idle can run before the
-        // frame it was queued behind has actually been drawn, which puts the
-        // block back where it started.
-        let app = self.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(16), move || {
-            app.begin_playback(restart);
-        });
+        // Playback begins on a frame that has actually been drawn.
+        //
+        // This used to wait 16 milliseconds and hope - one frame at 60Hz - and
+        // that held from a button press, where GTK is already mid-way through
+        // dispatching an event and will draw shortly after. It did not hold
+        // when the play came from a media key, which arrives on an idle
+        // callback: the pipeline was built against a surface that had never
+        // been presented, and on an AV1 video being resumed the D3D12 decoder
+        // deadlocked in `gst_video_decoder_finish_frame` while holding the pad
+        // lock the seek's flush needed. TinePlayer stopped drawing entirely,
+        // and only from that entry point, and only on the first play of a
+        // session. Found 2026-08-13 with a debugger on the hung process.
+        //
+        // The tick callback is GTK's own answer to "after the next frame", so
+        // there is nothing to tune and nothing to be unlucky with.
+        let started = Rc::new(Cell::new(false));
+        {
+            let app = self.clone();
+            let started = started.clone();
+            waiting.add_tick_callback(move |_, _| {
+                if !started.replace(true) {
+                    // Queued rather than run here. A tick callback fires in
+                    // the frame clock's update phase, which is before the
+                    // frame is painted - building the pipeline in it left the
+                    // surface still unpresented and deadlocked in the same
+                    // place, with the menu visibly still on screen. An idle
+                    // queued from here runs once that whole frame, paint
+                    // included, has finished.
+                    let app = app.clone();
+                    glib::idle_add_local_once(move || app.begin_playback(restart));
+                }
+                glib::ControlFlow::Break
+            });
+        }
+        // And a way out for a window that is never drawn at all - minimized,
+        // or hidden behind something full screen - where no frame arrives and
+        // the tick callback would never run. Waiting forever there would be a
+        // worse bug than the one above.
+        {
+            let app = self.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+                if !started.replace(true) {
+                    app.begin_playback(restart);
+                }
+            });
+        }
     }
 
     /// Swaps the black surface for the video once a frame from the resume
