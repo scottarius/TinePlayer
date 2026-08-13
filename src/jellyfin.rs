@@ -304,11 +304,14 @@ impl Client {
             "/Sessions/Capabilities/Full",
             serde_json::json!({
                 "PlayableMediaTypes": ["Video"],
-                "SupportedCommands": [
-                    "Play", "PlayState", "SetVolume", "Mute", "Unmute", "ToggleMute",
-                    "SetAudioStreamIndex", "SetSubtitleStreamIndex", "DisplayMessage",
-                    "ToggleFullscreen"
-                ],
+                // Only what is actually acted on. A declared command is a
+                // promise: a controller offers a button for each one, and a
+                // button that does nothing is worse than one that is not
+                // there. Volume was the clearest case - TinePlayer has a level
+                // per output and Jellyfin offers one slider, so there is no
+                // honest answer to give it - and the track selectors were
+                // offered without anything behind them at all.
+                "SupportedCommands": ["Play", "PlayState"],
                 "SupportsMediaControl": true,
                 "SupportsPersistentIdentifier": true,
             }),
@@ -351,29 +354,73 @@ impl Client {
         )
     }
 
-    pub fn started(&self, id: &str, position_ns: u64) -> Result<(), Error> {
+    /// Says a video has started, which is what puts the transport controls
+    /// on somebody's phone.
+    ///
+    /// The item id alone is not enough, and the shortfall is silent: Jellyfin
+    /// answers 204 either way, and the session simply keeps `NowPlayingItem:
+    /// null` so a controller has nothing to control. Measured 2026-08-14 by
+    /// posting both and reading the session back. What it wants besides the
+    /// item is the media source, a play session id, and to be told the player
+    /// can seek - without which the controller offers no scrubber even when it
+    /// does appear.
+    ///
+    /// `play_session` ties the three reports together as one viewing, so it
+    /// must be the same string for started, progress and stopped.
+    pub fn started(&self, id: &str, play_session: &str, position_ns: u64) -> Result<(), Error> {
         self.post(
             "/Sessions/Playing",
-            serde_json::json!({ "ItemId": id, "PositionTicks": to_ticks(position_ns) }),
-        )
-    }
-
-    pub fn progress(&self, id: &str, position_ns: u64, paused: bool) -> Result<(), Error> {
-        self.post(
-            "/Sessions/Playing/Progress",
             serde_json::json!({
                 "ItemId": id,
+                // Direct play, so the source is the item itself.
+                "MediaSourceId": id,
+                "PlaySessionId": play_session,
+                "PlayMethod": "DirectPlay",
                 "PositionTicks": to_ticks(position_ns),
-                "IsPaused": paused,
+                "CanSeek": true,
+                "IsPaused": false,
+                "IsMuted": false,
             }),
         )
     }
 
-    pub fn stopped(&self, id: &str, position_ns: u64) -> Result<(), Error> {
+    pub fn progress(
+        &self,
+        id: &str,
+        play_session: &str,
+        position_ns: u64,
+        paused: bool,
+    ) -> Result<(), Error> {
+        self.post(
+            "/Sessions/Playing/Progress",
+            serde_json::json!({
+                "ItemId": id,
+                "MediaSourceId": id,
+                "PlaySessionId": play_session,
+                "PlayMethod": "DirectPlay",
+                "PositionTicks": to_ticks(position_ns),
+                "CanSeek": true,
+                "IsPaused": paused,
+                "IsMuted": false,
+            }),
+        )
+    }
+
+    pub fn stopped(&self, id: &str, play_session: &str, position_ns: u64) -> Result<(), Error> {
         self.post(
             "/Sessions/Playing/Stopped",
-            serde_json::json!({ "ItemId": id, "PositionTicks": to_ticks(position_ns) }),
+            serde_json::json!({
+                "ItemId": id,
+                "MediaSourceId": id,
+                "PlaySessionId": play_session,
+                "PositionTicks": to_ticks(position_ns),
+            }),
         )
+    }
+
+    /// A name for one viewing, tying its three reports together.
+    pub fn new_play_session() -> String {
+        glib::uuid_string_random().to_string()
     }
 }
 
@@ -544,6 +591,9 @@ impl Drop for Session {
     }
 }
 
+/// What acts on a command, once it has reached the thread that can.
+type Handler = std::rc::Rc<dyn Fn(Command)>;
+
 thread_local! {
     /// What to do with a command, on the thread that can act on it.
     ///
@@ -552,7 +602,7 @@ thread_local! {
     /// thread of its own. Commands cross by `idle_add_once`, which runs them
     /// on the main loop, and the closure looks the handler up when it gets
     /// there rather than carrying it.
-    static HANDLER: std::cell::RefCell<Option<std::rc::Rc<dyn Fn(Command)>>> =
+    static HANDLER: std::cell::RefCell<Option<Handler>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -862,6 +912,12 @@ mod tests {
         let client = Client::new(&pairing).expect("a connected pairing makes a client");
         client.announce().expect("capabilities were refused");
         println!("    capabilities accepted");
+
+        // Written where the application reads it, so that running this once
+        // leaves TinePlayer itself paired - which is how the wiring gets
+        // tested before there is a settings screen to do it properly.
+        save(&pairing).expect("the pairing could not be saved");
+        println!("    saved to {}", path().display());
 
         // The socket, which is what actually puts TinePlayer on a phone.
         let main = glib::MainLoop::new(None, false);

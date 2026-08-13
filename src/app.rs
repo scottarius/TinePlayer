@@ -898,6 +898,27 @@ pub struct App {
     /// because it cannot change while we are the player. `None` when Kodi was
     /// not involved or did not answer, which is not an error.
     kodi_item: RefCell<Option<crate::kodi::Item>>,
+    /// The server this installation is paired with, once it has been reached.
+    ///
+    /// Absent when Jellyfin was never set up, when the pairing was revoked,
+    /// and while the server is unreachable - all of which are ordinary, and
+    /// none of which stop anything else working.
+    jellyfin: RefCell<Option<crate::jellyfin::Client>>,
+    /// What Jellyfin knows about the video on screen, when it was cast from
+    /// there. The counterpart to `kodi_item`, and read by the same three
+    /// accessors: a launcher's library knows the title and where the viewer
+    /// stopped better than the file does.
+    jellyfin_item: RefCell<Option<crate::jellyfin::Item>>,
+    /// The open connection. Dropping it closes the socket, which is how
+    /// disconnecting works - and while it is closed TinePlayer is not on
+    /// anybody's phone, so it is held for the life of the application.
+    jellyfin_session: RefCell<Option<crate::jellyfin::Session>>,
+    /// Ticks since Jellyfin was last told where playback had reached.
+    jellyfin_reported: Cell<u32>,
+    /// What Jellyfin calls this viewing. One string for the whole of it, from
+    /// started to stopped, because that is how the server ties the reports
+    /// together into a single session rather than three unrelated events.
+    jellyfin_play_session: RefCell<String>,
     /// Where playback had reached when it was last left, and the video it
     /// belongs to. Offered as a resume point regardless of how far in it was,
     /// unlike a position read back from disk.
@@ -1056,6 +1077,11 @@ impl App {
             locked_fullscreen,
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
+            jellyfin: RefCell::new(None),
+            jellyfin_item: RefCell::new(None),
+            jellyfin_session: RefCell::new(None),
+            jellyfin_reported: Cell::new(0),
+            jellyfin_play_session: RefCell::new(String::new()),
             session_resume: RefCell::new(None),
             subtitles_hidden: Cell::new(false),
             volume_save_pending: Cell::new(false),
@@ -1335,6 +1361,11 @@ impl App {
                 weak.upgrade().is_some_and(|app| app.handle_media(command))
             });
         }
+
+        // Reaches the paired Jellyfin server, if there is one. Everything it
+        // does is allowed to fail quietly: a server that is off is not a
+        // reason for a video player to say anything on the way up.
+        app.start_jellyfin();
     }
 
     /// The commands that belong to the application rather than to a screen,
@@ -1815,6 +1846,218 @@ impl App {
         }));
     }
 
+    // --- Jellyfin ------------------------------------------------------
+
+    /// Reaches the paired server, if there is one, and stays reachable.
+    ///
+    /// Everything here is allowed to fail quietly. A server that is off, a
+    /// network that is out, a pairing that was revoked - none of them are
+    /// reasons for a video player to complain on startup, and all of them are
+    /// answered the same way: no cast target until it comes back.
+    fn start_jellyfin(self: &Rc<Self>) {
+        let Some(pairing) = crate::jellyfin::load() else {
+            return;
+        };
+        let Some(client) = crate::jellyfin::Client::new(&pairing) else {
+            // Paired with a server but signed out of it, which is where a 401
+            // leaves things. The settings screen offers a new code.
+            return;
+        };
+
+        // Off the main thread: this talks to a server that may be asleep, and
+        // the interface has a menu to draw.
+        let announcing = client.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = announcing.announce() {
+                eprintln!("Jellyfin would not take our capabilities: {e}");
+            }
+        });
+        *self.jellyfin.borrow_mut() = Some(client);
+
+        let app = self.clone();
+        let session = crate::jellyfin::connect(&pairing, move |command| {
+            app.handle_jellyfin(command);
+        });
+        *self.jellyfin_session.borrow_mut() = session;
+    }
+
+    /// What a phone asked for.
+    ///
+    /// Playstate commands are the ones TinePlayer already has actions for, so
+    /// they go straight to the same places the remote and the media keys use -
+    /// there is no second way to pause.
+    fn handle_jellyfin(self: &Rc<Self>, command: crate::jellyfin::Command) {
+        use crate::jellyfin::Command;
+        match command {
+            Command::Play {
+                item_id,
+                position_ns,
+            } => self.play_jellyfin(&item_id, position_ns),
+            Command::Pause => {
+                if self.is_playing() {
+                    self.toggle_pause();
+                    self.wake_controls();
+                }
+            }
+            Command::Unpause => {
+                if self.playback.borrow().is_some() && !self.is_playing() {
+                    self.toggle_pause();
+                    self.wake_controls();
+                }
+            }
+            Command::PlayPause => {
+                if self.playback.borrow().is_some() {
+                    self.toggle_pause();
+                    self.wake_controls();
+                }
+            }
+            Command::Stop => {
+                if self.playback.borrow().is_some() {
+                    self.go_back();
+                }
+            }
+            Command::Seek(position_ns) => {
+                if let Some(playback) = self.playback.borrow().as_ref() {
+                    playback.aim_at(gstreamer::ClockTime::from_nseconds(position_ns));
+                    playback.commit_seek();
+                }
+                self.publish_now_playing();
+            }
+            // The pairing was revoked while we held it. Everything about this
+            // server is now wrong, so it is put down rather than retried.
+            Command::SignedOut => self.jellyfin_signed_out(),
+        }
+    }
+
+    fn is_playing(&self) -> bool {
+        self.playback
+            .borrow()
+            .as_ref()
+            .is_some_and(|playback| playback.is_playing())
+    }
+
+    /// Resolves what was cast and opens it.
+    ///
+    /// The command carries an item id and nothing else - no address and,
+    /// usually, no position - so the item is asked about before anything can
+    /// be played. That happens on a worker thread, because it is a request to
+    /// a server that may be across a house.
+    fn play_jellyfin(self: &Rc<Self>, item_id: &str, position_ns: Option<u64>) {
+        let Some(client) = self.jellyfin.borrow().clone() else {
+            return;
+        };
+        let id = item_id.to_string();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(client.item(&id));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            match result {
+                Ok(mut item) => {
+                    // A controller saying "play from here" outranks the
+                    // library's own idea of where this viewer stopped.
+                    if let Some(position) = position_ns {
+                        item.resume_ns = Some(position).filter(|position| *position > 0);
+                    }
+                    app.open_jellyfin(item);
+                }
+                Err(crate::jellyfin::Error::Unauthorized) => app.jellyfin_signed_out(),
+                Err(e) => eprintln!("Jellyfin would not describe that video: {e}"),
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Takes a resolved item and plays it.
+    fn open_jellyfin(self: &Rc<Self>, item: crate::jellyfin::Item) {
+        let Some(client) = self.jellyfin.borrow().clone() else {
+            return;
+        };
+        let source = Source::parse(&client.stream_url(&item.id));
+        // Set before the source is opened, because everything that reads a
+        // title or a resume position during opening looks here for it. Kodi's
+        // is cleared for the same reason: two launchers claiming the same
+        // video would be one of them wrong.
+        *self.kodi_item.borrow_mut() = None;
+        *self.jellyfin_item.borrow_mut() = Some(item);
+        self.show_opening(source);
+    }
+
+    /// Puts down a pairing the server no longer honours.
+    ///
+    /// The token goes and the device identity stays, so connecting again
+    /// replaces the existing device rather than leaving a trail of them. Said
+    /// out loud, because a cast target that has quietly stopped being one is
+    /// the failure nobody can diagnose from the sofa.
+    fn jellyfin_signed_out(self: &Rc<Self>) {
+        *self.jellyfin.borrow_mut() = None;
+        *self.jellyfin_session.borrow_mut() = None;
+        if let Some(mut pairing) = crate::jellyfin::load() {
+            pairing.sign_out();
+            if let Err(e) = crate::jellyfin::save(&pairing) {
+                eprintln!("Couldn't forget the Jellyfin token: {e}");
+            }
+        }
+        eprintln!("Jellyfin no longer accepts this connection. Connect again in Settings.");
+    }
+
+    /// Tells Jellyfin where playback has reached.
+    ///
+    /// Only for a video that came from there: a film opened from disk is
+    /// nothing to do with the library, and reporting it would put a position
+    /// against an item nobody watched.
+    fn report_to_jellyfin(&self, moment: JellyfinMoment) {
+        let (Some(client), Some(item)) = (
+            self.jellyfin.borrow().clone(),
+            self.jellyfin_item.borrow().clone(),
+        ) else {
+            return;
+        };
+        let position = self
+            .playback
+            .borrow()
+            .as_ref()
+            .and_then(|playback| playback.position())
+            .map(|position| position.nseconds())
+            .unwrap_or(0);
+        let paused = !self.is_playing();
+
+        // A new name for the viewing when it starts, and the same one after.
+        if moment == JellyfinMoment::Started {
+            *self.jellyfin_play_session.borrow_mut() = crate::jellyfin::Client::new_play_session();
+        }
+        let play_session = self.jellyfin_play_session.borrow().clone();
+        if play_session.is_empty() {
+            // Nothing was ever started, so there is no viewing to report on.
+            return;
+        }
+
+        // On a thread, because the server may be slow and this happens while a
+        // film is playing. Nothing waits on the answer.
+        std::thread::spawn(move || {
+            let result = match moment {
+                JellyfinMoment::Started => client.started(&item.id, &play_session, position),
+                JellyfinMoment::Progress => {
+                    client.progress(&item.id, &play_session, position, paused)
+                }
+                JellyfinMoment::Stopped => client.stopped(&item.id, &play_session, position),
+            };
+            if let Err(e) = result {
+                eprintln!("Jellyfin would not take the position: {e}");
+            }
+        });
+    }
+
     /// What a media key means, wherever the platform reported it from: a
     /// keysym on Linux, a `WM_APPCOMMAND` on Windows. Says whether it was
     /// used, which Windows needs in order to decide whether to pass the key
@@ -1967,6 +2210,17 @@ impl App {
                     if since_report >= 300 {
                         since_report = 0;
                         playback.report_to_kodi();
+                    }
+
+                    // Jellyfin more often, because a phone watching this
+                    // session shows the position as it moves rather than only
+                    // after the fact. Ten seconds is what its own clients
+                    // send, and it is one small request.
+                    let told = app.jellyfin_reported.get() + 1;
+                    app.jellyfin_reported.set(told);
+                    if told >= 100 {
+                        app.jellyfin_reported.set(0);
+                        app.report_to_jellyfin(JellyfinMoment::Progress);
                     }
                     glib::ControlFlow::Continue
                 }
@@ -2876,6 +3130,9 @@ impl App {
             // behind it without one.
             controls.reveal_pointer();
         }
+        // Before the playback is taken, because the position is read from
+        // it and a stopped report with nowhere to read from would file zero.
+        self.report_to_jellyfin(JellyfinMoment::Stopped);
         if let Some(playback) = self.playback.borrow_mut().take() {
             playback.stop();
             if wait_for_kodi {
@@ -2911,6 +3168,9 @@ impl App {
         if let Some(item) = self.kodi_item.borrow().as_ref() {
             return item.resume_ns;
         }
+        if let Some(item) = self.jellyfin_item.borrow().as_ref() {
+            return item.resume_ns;
+        }
         crate::config::load_resume(&key)
             .and_then(|resume| resume.resume_position(self.config.borrow().resume_min_percent()))
     }
@@ -2923,6 +3183,12 @@ impl App {
     fn storage_key(&self) -> Option<String> {
         if let Some(item) = self.kodi_item.borrow().as_ref() {
             return Some(item.key());
+        }
+        // The item id, never the stream address: that carries an access token
+        // which changes when it is regenerated, and every position filed
+        // against the old one would be orphaned.
+        if let Some(item) = self.jellyfin_item.borrow().as_ref() {
+            return Some(format!("jellyfin:{}", item.id));
         }
         self.file.borrow().as_ref().map(Source::key)
     }
@@ -2947,7 +3213,16 @@ impl App {
     /// chain everything else uses. Kept as one accessor so no caller has to
     /// know that Kodi is currently the only thing that supplies one.
     fn launcher_title(&self) -> String {
-        self.kodi_item
+        if let Some(title) = self
+            .kodi_item
+            .borrow()
+            .as_ref()
+            .map(|item| item.title.clone())
+            .filter(|title| !title.is_empty())
+        {
+            return title;
+        }
+        self.jellyfin_item
             .borrow()
             .as_ref()
             .map(|item| item.title.clone())
@@ -5212,6 +5487,19 @@ impl App {
                 );
                 *self.kodi_item.borrow_mut() = None;
             }
+        }
+
+        // A video that did not come from Jellyfin must not wear the details of
+        // one that did. Cleared here rather than when playback ends, because
+        // `begin_playback` stops the previous playback on its way in - which
+        // wiped the item a moment before anything could be reported about it.
+        let cast = self
+            .jellyfin_item
+            .borrow()
+            .as_ref()
+            .is_some_and(|item| source.uri().contains(&item.id));
+        if !cast {
+            *self.jellyfin_item.borrow_mut() = None;
         }
 
         // What the page shows about the file, from the sidecar beside it and
@@ -9876,6 +10164,8 @@ impl App {
                     .set_title(Some(&self.file_label().unwrap_or_default()));
                 *self.playback.borrow_mut() = Some(playback);
                 self.publish_now_playing();
+                self.jellyfin_reported.set(0);
+                self.report_to_jellyfin(JellyfinMoment::Started);
                 // Playback begins playing, so the display is held from here
                 // until it is paused or torn down.
                 self.awake.set(true);
@@ -12890,4 +13180,12 @@ mod settings_rows {
             }
         }
     }
+}
+
+/// Which of Jellyfin's three reporting endpoints a moment belongs to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum JellyfinMoment {
+    Started,
+    Progress,
+    Stopped,
 }
