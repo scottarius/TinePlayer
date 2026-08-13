@@ -191,7 +191,7 @@ impl Details {
 /// handful of `is_file` calls - but it still touches the disk, and over a
 /// network share that is not free. Called from wherever the probe already
 /// runs, which is a worker thread on the path that matters.
-pub fn resolve(source: &Source, media: &Media, beside: Beside) -> Details {
+pub fn resolve(source: &Source, media: &Media, beside: Beside, launcher_title: &str) -> Details {
     // Only where the viewer wants what is beside the file read at all. With it
     // off, `path` is `None` here and everything downstream that looks on disk -
     // the sidecar, the poster, the backdrop - finds nothing and says so in the
@@ -199,7 +199,7 @@ pub fn resolve(source: &Source, media: &Media, beside: Beside) -> Details {
     let path = source.local().filter(|_| beside.metadata);
     let sidecar = path.and_then(crate::nfo::read).unwrap_or_default();
 
-    // The three sources in order, each one only consulted for what the one
+    // The four sources in order, each one only consulted for what the one
     // before it left empty.
     // The film's name if anything knows it, and otherwise the file's own -
     // without its extension. ".mkv" is not part of what the film is called,
@@ -215,7 +215,17 @@ pub fn resolve(source: &Source, media: &Media, beside: Beside) -> Details {
     // of it, taken off. Both come from the one place so they cannot disagree
     // about whether there was a year there at all.
     let (named, named_year) = split_year(&without_extension(&source.label()));
-    let title = first_of([sidecar.title.as_str(), media.tags.title.as_str(), &named]);
+    // The launcher's own title comes first, ahead of anything on disk. Kodi
+    // names an item from its library - "Avengers: Endgame" where the file is
+    // called `Avengers - Endgame (2019) Bluray-1080p.mkv` - and for an add-on
+    // stream it is the only real name there is, since the URI ends in an
+    // opaque id. Empty when nothing launched us, which is the ordinary case.
+    let title = first_of([
+        launcher_title,
+        sidecar.title.as_str(),
+        media.tags.title.as_str(),
+        &named,
+    ]);
     let plot = flowed(&first_of([
         sidecar.plot.as_str(),
         media.tags.description.as_str(),

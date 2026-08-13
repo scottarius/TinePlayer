@@ -3,6 +3,11 @@
 // so development output stays visible. When a release build *is* launched
 // from a terminal, `attach_parent_console` below reconnects stdout/stderr
 // to it so the command-line flags still report anything useful.
+//
+// And `release_parent_console` gives it back the moment a window is what
+// happens next, because a GUI-subsystem program does not keep the shell
+// waiting: the prompt has already been printed by then, and anything written
+// afterwards lands on top of it.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod align;
@@ -164,6 +169,47 @@ fn attach_parent_console() {
 #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
 fn attach_parent_console() {}
 
+/// Gives the terminal back, once it is certain that a window is what happens
+/// next rather than a line of output.
+///
+/// A GUI-subsystem program does not keep the shell waiting: PowerShell prints
+/// its next prompt the moment we start. But `attach_parent_console` above has
+/// taken that terminal, and everything after this point writes to it - GLib
+/// warnings, GStreamer warnings, our own messages - for as long as the
+/// process lives, which is the whole film. The shell's line editor has
+/// already decided where the cursor belongs, so that output lands below the
+/// prompt while typing goes over the top of it, and the terminal is a mess
+/// nobody can see the state of.
+///
+/// The standard streams are pointed at nothing before letting go, because
+/// `FreeConsole` alone leaves them naming a console that is gone and the next
+/// `eprintln!` fails against a stale handle. A null handle is the same thing
+/// the executable sees when it is double-clicked, and Rust treats writing to
+/// one as a silent success.
+///
+/// Redirection survives: `tineplayer video.mkv 2> log.txt` is a file rather
+/// than a console, `GetConsoleMode` says so, and that stream is left alone.
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn release_parent_console() {
+    use windows_sys::Win32::System::Console::{
+        FreeConsole, GetConsoleMode, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+        SetStdHandle,
+    };
+    unsafe {
+        for id in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let handle = GetStdHandle(id);
+            let mut mode = 0;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                SetStdHandle(id, std::ptr::null_mut());
+            }
+        }
+        FreeConsole();
+    }
+}
+
+#[cfg(not(all(target_os = "windows", not(debug_assertions))))]
+fn release_parent_console() {}
+
 /// `gst-plugin-gtk4`'s non-GL frame path emits
 /// `g_object_unref: assertion 'G_IS_OBJECT (object)' failed` once per video
 /// frame, which floods the console (dozens of lines per second) and buries
@@ -237,20 +283,51 @@ fn list_devices() -> Result<(), String> {
     if names.is_empty() {
         return Err("No audio output devices found.".to_string());
     }
-    for name in names {
-        println!("{name}");
+
+    // The blank line first is not decoration. A GUI-subsystem program does
+    // not keep the shell waiting, so on Windows the prompt for the next
+    // command is already drawn by the time any of this prints, and without a
+    // line of its own the first device sits against that prompt and the whole
+    // block reads as something that went wrong rather than as an answer.
+    println!();
+    println!();
+    println!("Audio output devices ({}):", names.len());
+    println!();
+    for name in &names {
+        println!("  {name}");
     }
+    println!();
     Ok(())
 }
 
 fn list_tracks(source: &source::Source) -> Result<(), String> {
     let media = probe::probe_media(source)?;
 
-    println!("Audio tracks in {}:", source.label());
-    println!("  0  None");
+    // The same list the menu offers, in the same order, so the numbers here
+    // are the ones `--subtitle` takes. Includes subtitle files sitting beside
+    // the video, not just what is inside it.
+    let subtitles = subtitles::options(source.local(), &media.subtitles);
+
+    // Indices right-aligned to the widest of them, so a file with ten or more
+    // tracks keeps its numbers in a column instead of stepping sideways. Both
+    // lists share one width, so the two blocks line up with each other too.
+    let width = media
+        .audio
+        .len()
+        .max(subtitles.len())
+        .to_string()
+        .chars()
+        .count();
+
+    // See list_devices for why this starts with a blank line.
+    println!();
+    println!();
+    println!("Audio tracks ({}):", media.audio.len());
+    println!();
+    println!("  {:>width$}  None", 0);
     for (position, track) in media.audio.iter().enumerate() {
         let mut line = format!(
-            "  {}  {} — {} {}ch",
+            "  {:>width$}  {} — {} {}ch",
             position + 1,
             track.language,
             track.codec,
@@ -262,16 +339,15 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
         println!("{line}");
     }
 
-    // The same list the menu offers, in the same order, so the numbers here
-    // are the ones `--subtitle` takes. Includes subtitle files sitting beside
-    // the video, not just what is inside it.
-    let subtitles = subtitles::options(source.local(), &media.subtitles);
     println!();
-    println!("Subtitles:");
-    println!("  0  None");
+    println!("Subtitles ({}):", subtitles.len());
+    println!();
+    println!("  {:>width$}  None", 0);
     for (position, option) in subtitles.iter().enumerate() {
-        println!("  {}  {}", position + 1, option.label());
+        println!("  {:>width$}  {}", position + 1, option.label());
     }
+
+    println!();
     Ok(())
 }
 
@@ -340,11 +416,12 @@ fn use_bundled_resources() {
 
 /// Somewhere writable to keep GStreamer's plugin registry, so a packaged
 /// build does not fight over the one belonging to an installed GStreamer.
+///
+/// Goes into the portable folder along with everything else when there is
+/// one, so a copy run from a stick leaves nothing behind on the machine.
 #[cfg(target_os = "windows")]
 fn dirs_cache() -> Option<std::path::PathBuf> {
-    let cache = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join(config::DIR_NAME);
-    std::fs::create_dir_all(&cache).ok()?;
-    Some(cache)
+    config::cache_dir()
 }
 
 /// The same for a macOS bundle, where the parts live under Contents.
@@ -687,16 +764,40 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
 
-    // Deliberately not fatal. A missing file used to end the process here,
-    // which is invisible when something else launched the player: the window
-    // never appears and there is no terminal to read the reason from. The
-    // window opens and says so instead. Still printed, for anyone who did run
-    // it from a terminal.
+    // A video named on the command line that is not there ends the run: a
+    // message, a failing exit code, and no window.
+    //
+    // This used to open the window and say so instead, reasoning that a
+    // launcher leaves nobody a terminal to read. That had it the wrong way
+    // round. A launcher is precisely the thing that can act on an exit code,
+    // and a window it did not ask for and has to dismiss is worse than an
+    // answer it can handle - while a person who typed the command has a
+    // terminal by definition. Something driving TinePlayer can now tell
+    // whether the video played.
+    if let Some(source) = source.as_ref()
+        && source.is_broken_file_uri()
+    {
+        eprintln!(
+            "Not a usable file URI: {}",
+            args.file.as_deref().unwrap_or_default()
+        );
+        eprintln!(
+            "A local file takes three slashes - file:///D:/videos/video.mkv - or just the path."
+        );
+        return std::process::ExitCode::FAILURE;
+    }
+
     if let Some(source) = source.as_ref()
         && !source.is_available()
     {
         eprintln!("File not found: {}", source.label());
+        return std::process::ExitCode::FAILURE;
     }
+
+    // Everything that reports and exits has now had its turn, so what follows
+    // is a window. The terminal goes back to the shell that owns it before
+    // anything else is written to it.
+    release_parent_console();
 
     // Never refuses to launch: an unconfigured install just opens the menu
     // with its outputs unset, and one whose settings could not be read opens

@@ -14,6 +14,104 @@ pub const DIR_NAME: &str = "TinePlayer";
 #[cfg(not(windows))]
 pub const DIR_NAME: &str = "tineplayer";
 
+/// What a folder beside the executable has to be called to make that copy
+/// portable. Lowercase on a platform that capitalizes, because this one is a
+/// folder somebody makes and looks inside rather than an application name
+/// buried in `AppData`.
+#[cfg(windows)]
+pub const PORTABLE_DIR_NAME: &str = "user";
+
+/// Where the per-user files go.
+enum Storage {
+    /// A `user` folder beside the executable. Everything lives in the one
+    /// folder rather than being split into config and data the way the
+    /// per-user directories are: the split exists because the operating
+    /// system asks for it, and a folder someone carries on a stick is easier
+    /// to understand whole.
+    ///
+    /// Windows only, and gated rather than merely unused elsewhere: the macOS
+    /// bundle and the Linux package are both installed rather than unpacked,
+    /// so `resolve_storage` there can never build one, and a variant nothing
+    /// constructs is a warning that CI treats as an error.
+    #[cfg(windows)]
+    Portable(PathBuf),
+    /// The operating system's per-user directories, which is every installed
+    /// copy and every platform that has no portable form.
+    PerUser,
+}
+
+/// Worked out once. The answer cannot change while the process runs, and the
+/// writability check below creates a file, which is not something to repeat
+/// on every path lookup.
+fn storage() -> &'static (Storage, Option<String>) {
+    static RESOLVED: std::sync::OnceLock<(Storage, Option<String>)> = std::sync::OnceLock::new();
+    RESOLVED.get_or_init(resolve_storage)
+}
+
+/// A copy is portable when someone put a `user` folder next to it, and not
+/// otherwise.
+///
+/// Deliberately not inferred from whether the executable's folder happens to
+/// be writable. That would make where the settings live depend on where the
+/// application was unpacked, which is invisible until they disappear - and it
+/// would quietly turn an installation into a portable copy on any machine
+/// where Program Files is loose. A folder is something somebody chose.
+///
+/// Windows only: the macOS bundle and the Linux package are both installed
+/// rather than unpacked, so neither has a portable form to support.
+#[cfg(windows)]
+fn resolve_storage() -> (Storage, Option<String>) {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join(PORTABLE_DIR_NAME)))
+        .filter(|dir| dir.is_dir())
+    else {
+        return (Storage::PerUser, None);
+    };
+
+    // Said out loud rather than silently falling back. Somebody who made this
+    // folder meant their settings to be in it, and a copy that quietly wrote
+    // to AppData instead would look like it was working right up until the
+    // stick was moved to another machine.
+    if let Err(e) = writable(&dir) {
+        return (
+            Storage::PerUser,
+            Some(format!(
+                "{} cannot be written to, so settings are being kept in your \
+                 user profile instead of travelling with this copy.\n\n{e}",
+                dir.display()
+            )),
+        );
+    }
+
+    (Storage::Portable(dir), None)
+}
+
+#[cfg(not(windows))]
+fn resolve_storage() -> (Storage, Option<String>) {
+    (Storage::PerUser, None)
+}
+
+/// Whether a file can actually be created in `dir`.
+///
+/// By writing one, because nothing cheaper is true on Windows: the read-only
+/// attribute on a directory means something else entirely, and permissions are
+/// an ACL evaluation that the metadata does not answer.
+#[cfg(windows)]
+fn writable(dir: &Path) -> Result<(), std::io::Error> {
+    let probe = dir.join(".tineplayer-write-test");
+    std::fs::write(&probe, b"")?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// What to tell someone about where their settings ended up, when it is not
+/// where they asked. `None` in the ordinary case, which is both a portable
+/// copy that works and every installed one.
+pub fn storage_problem() -> Option<String> {
+    storage().1.clone()
+}
+
 /// Somewhere writable to keep the fontconfig configuration and cache that
 /// point at the fonts TinePlayer ships. Beside the settings, because the
 /// installation itself may not be writable.
@@ -23,18 +121,45 @@ pub fn app_dir_for_fontconfig() -> Option<PathBuf> {
     Some(dir)
 }
 
-/// Per-user application directory under `base`, created if missing.
+/// The application's own folder under `base`, created if missing - or the
+/// portable folder, when there is one, whatever `base` was going to be.
+///
+/// `base` is the per-user config or data directory. A portable copy collapses
+/// the two, which is why the argument is ignored rather than joined onto.
 fn app_dir(base: PathBuf) -> PathBuf {
-    let dir = base.join(DIR_NAME);
+    let dir = match &storage().0 {
+        #[cfg(windows)]
+        Storage::Portable(dir) => dir.clone(),
+        Storage::PerUser => base.join(DIR_NAME),
+    };
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
 
+/// Somewhere to keep a cache that is not settings and not state - GStreamer's
+/// plugin registry, which is rebuilt if it goes missing.
+///
+/// Beside everything else in a portable copy, so that copy leaves nothing on
+/// the machine it ran on.
+#[cfg(windows)]
+pub fn cache_dir() -> Option<PathBuf> {
+    let dir = match &storage().0 {
+        Storage::Portable(dir) => dir.clone(),
+        Storage::PerUser => PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join(DIR_NAME),
+    };
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 /// Settings live in the per-user config directory rather than beside the
-/// executable or in the working directory. A relative path resolves against
-/// wherever the process happened to be launched from, so running from a
-/// terminal and double-clicking the executable would read and write
-/// different files.
+/// executable or in the working directory - unless a `user` folder beside the
+/// executable says otherwise, which is what makes a copy portable.
+///
+/// Never the working directory: a relative path resolves against wherever the
+/// process happened to be launched from, so running from a terminal and
+/// double-clicking the executable would read and write different files. The
+/// portable folder has no such problem, being derived from the executable's
+/// own location rather than the caller's.
 pub fn config_path() -> PathBuf {
     app_dir(glib::user_config_dir()).join("config.yaml")
 }
@@ -270,6 +395,19 @@ impl Config {
     /// the file loaded and when there was no file at all - a first run is not
     /// a problem to report.
     pub fn load() -> (Config, Option<String>) {
+        let (config, problem) = Self::read();
+        // A copy that could not use its portable folder looks, from the
+        // inside, exactly like one whose settings went missing. Said first
+        // when both happened, because it explains the other.
+        let problem = match (storage_problem(), problem) {
+            (Some(storage), Some(rest)) => Some(format!("{storage}\n\n{rest}")),
+            (Some(storage), None) => Some(storage),
+            (None, rest) => rest,
+        };
+        (config, problem)
+    }
+
+    fn read() -> (Config, Option<String>) {
         let path = config_path();
         if !path.exists() {
             return (Config::default(), None);
