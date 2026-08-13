@@ -745,6 +745,19 @@ fn main() -> std::process::ExitCode {
     // terminal by definition. Something driving TinePlayer can now tell
     // whether the video played.
     if let Some(source) = source.as_ref()
+        && source.is_broken_file_uri()
+    {
+        eprintln!(
+            "Not a usable file URI: {}",
+            args.file.as_deref().unwrap_or_default()
+        );
+        eprintln!(
+            "A local file takes three slashes - file:///D:/videos/video.mkv - or just the path."
+        );
+        return std::process::ExitCode::FAILURE;
+    }
+
+    if let Some(source) = source.as_ref()
         && !source.is_available()
     {
         eprintln!("File not found: {}", source.label());

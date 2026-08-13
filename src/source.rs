@@ -81,6 +81,22 @@ impl Source {
         }
     }
 
+    /// A `file://` URI that could not be read as a path, and so ended up here
+    /// as a remote source it is not.
+    ///
+    /// `file://video.mkv` is the mistake this catches: two slashes rather than
+    /// three names a host called `video.mkv` with no path at all, which is why
+    /// `filename_from_uri` refuses it. Left as remote it would be taken on
+    /// trust by `is_available` above - a network resource that might yet turn
+    /// up - when it is a local reference that is simply malformed, and saying
+    /// so up front is more use than a window reporting that nothing opened.
+    pub fn is_broken_file_uri(&self) -> bool {
+        match self {
+            Self::Remote(uri) => uri.to_ascii_lowercase().starts_with("file://"),
+            Self::File(_) => false,
+        }
+    }
+
     /// What to call it on screen when nothing better is known. Kodi's library
     /// title is preferred over this wherever there is one.
     pub fn label(&self) -> String {
