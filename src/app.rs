@@ -2820,14 +2820,36 @@ impl App {
         }
     }
 
-    /// What to call the current file on screen: Kodi's library title when it
-    /// has one, otherwise the file name.
+    /// The title whatever launched us gave for this video, or empty.
+    ///
+    /// Handed to `metadata::resolve`, which puts it at the head of the same
+    /// chain everything else uses. Kept as one accessor so no caller has to
+    /// know that Kodi is currently the only thing that supplies one.
+    fn launcher_title(&self) -> String {
+        self.kodi_item
+            .borrow()
+            .as_ref()
+            .map(|item| item.title.clone())
+            .unwrap_or_default()
+    }
+
+    /// What to call the current video on screen.
+    ///
+    /// Read from `details` rather than worked out a second time, so the
+    /// titlebar cannot disagree with the media page about what is playing.
+    /// The order behind it lives in `metadata::resolve`: the launcher's title,
+    /// then a sidecar's, then the container's own tag, then the file name with
+    /// its extension and any trailing year taken off.
     fn file_label(&self) -> Option<String> {
-        if let Some(item) = self.kodi_item.borrow().as_ref()
-            && !item.title.is_empty()
-        {
-            return Some(item.title.clone());
+        if self.file.borrow().is_none() {
+            return None;
         }
+        let title = self.details.borrow().title.clone();
+        if !title.is_empty() {
+            return Some(title);
+        }
+        // Only reachable if resolve found nothing at all to call it, which its
+        // own file-name fallback makes unlikely.
         self.file.borrow().as_ref().map(Source::label)
     }
 
@@ -5088,7 +5110,8 @@ impl App {
                 backdrop: config.show_backdrop,
             }
         };
-        *self.details.borrow_mut() = crate::metadata::resolve(source, &media, beside);
+        *self.details.borrow_mut() =
+            crate::metadata::resolve(source, &media, beside, &self.launcher_title());
 
         let duration_ns = media.duration_ns;
         let tracks = media.audio;
@@ -5607,8 +5630,17 @@ impl App {
         page.append(&spinner);
         page.append(&heading_label("Opening"));
 
+        // The launcher's title where there is one, and the file name
+        // otherwise. Nothing beside the file has been read yet at this point -
+        // that is what the spinner is waiting for - so this is as much as can
+        // be known, and for an add-on stream it is the difference between a
+        // name and an opaque id.
+        let opening = match self.launcher_title() {
+            title if !title.is_empty() => title,
+            _ => source.label(),
+        };
         let what = gtk::Label::builder()
-            .label(source.label())
+            .label(&opening)
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::WordChar)
             .justify(gtk::Justification::Center)
@@ -7769,7 +7801,7 @@ impl App {
             video: self.details.borrow().video.clone(),
             tags: Default::default(),
         };
-        let mut details = crate::metadata::resolve(&source, &media, beside);
+        let mut details = crate::metadata::resolve(&source, &media, beside, &self.launcher_title());
         // The parts that came from the container rather than from beside the
         // file are already known and are not re-probed for a toggle.
         let held = self.details.borrow();
