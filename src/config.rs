@@ -592,6 +592,17 @@ pub fn positions_path() -> PathBuf {
     app_dir(glib::user_data_dir()).join("positions.json")
 }
 
+/// Which Jellyfin server this installation is paired with, and the token that
+/// says so.
+///
+/// Its own file rather than a corner of `config.yaml`: see `jellyfin.rs` for
+/// why a bearer credential is kept away from the file people are told to open
+/// when something is wrong. State rather than settings, so it sits with the
+/// positions rather than with the preferences.
+pub fn jellyfin_path() -> PathBuf {
+    app_dir(glib::user_data_dir()).join("jellyfin.json")
+}
+
 /// What the version check remembers between runs. State rather than settings,
 /// for the same reason the resume positions are, so it sits beside them.
 pub fn updates_path() -> PathBuf {

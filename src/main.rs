@@ -22,6 +22,7 @@ mod controls;
 mod devices;
 mod display;
 mod gamepad;
+mod jellyfin;
 mod kodi;
 mod kodi_setup;
 mod languages;
