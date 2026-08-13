@@ -3,6 +3,11 @@
 // so development output stays visible. When a release build *is* launched
 // from a terminal, `attach_parent_console` below reconnects stdout/stderr
 // to it so the command-line flags still report anything useful.
+//
+// And `release_parent_console` gives it back the moment a window is what
+// happens next, because a GUI-subsystem program does not keep the shell
+// waiting: the prompt has already been printed by then, and anything written
+// afterwards lands on top of it.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod align;
@@ -163,6 +168,47 @@ fn attach_parent_console() {
 
 #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
 fn attach_parent_console() {}
+
+/// Gives the terminal back, once it is certain that a window is what happens
+/// next rather than a line of output.
+///
+/// A GUI-subsystem program does not keep the shell waiting: PowerShell prints
+/// its next prompt the moment we start. But `attach_parent_console` above has
+/// taken that terminal, and everything after this point writes to it - GLib
+/// warnings, GStreamer warnings, our own messages - for as long as the
+/// process lives, which is the whole film. The shell's line editor has
+/// already decided where the cursor belongs, so that output lands below the
+/// prompt while typing goes over the top of it, and the terminal is a mess
+/// nobody can see the state of.
+///
+/// The standard streams are pointed at nothing before letting go, because
+/// `FreeConsole` alone leaves them naming a console that is gone and the next
+/// `eprintln!` fails against a stale handle. A null handle is the same thing
+/// the executable sees when it is double-clicked, and Rust treats writing to
+/// one as a silent success.
+///
+/// Redirection survives: `tineplayer video.mkv 2> log.txt` is a file rather
+/// than a console, `GetConsoleMode` says so, and that stream is left alone.
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn release_parent_console() {
+    use windows_sys::Win32::System::Console::{
+        FreeConsole, GetConsoleMode, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+        SetStdHandle,
+    };
+    unsafe {
+        for id in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let handle = GetStdHandle(id);
+            let mut mode = 0;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                SetStdHandle(id, std::ptr::null_mut());
+            }
+        }
+        FreeConsole();
+    }
+}
+
+#[cfg(not(all(target_os = "windows", not(debug_assertions))))]
+fn release_parent_console() {}
 
 /// `gst-plugin-gtk4`'s non-GL frame path emits
 /// `g_object_unref: assertion 'G_IS_OBJECT (object)' failed` once per video
@@ -687,6 +733,11 @@ fn main() -> std::process::ExitCode {
         eprintln!("--external needs a video to play");
         return std::process::ExitCode::FAILURE;
     }
+
+    // Everything that reports and exits has now had its turn, so what follows
+    // is a window. The terminal goes back to the shell that owns it before
+    // anything else is written to it.
+    release_parent_console();
 
     // Deliberately not fatal. A missing file used to end the process here,
     // which is invisible when something else launched the player: the window
