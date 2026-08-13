@@ -340,11 +340,12 @@ fn use_bundled_resources() {
 
 /// Somewhere writable to keep GStreamer's plugin registry, so a packaged
 /// build does not fight over the one belonging to an installed GStreamer.
+///
+/// Goes into the portable folder along with everything else when there is
+/// one, so a copy run from a stick leaves nothing behind on the machine.
 #[cfg(target_os = "windows")]
 fn dirs_cache() -> Option<std::path::PathBuf> {
-    let cache = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join(config::DIR_NAME);
-    std::fs::create_dir_all(&cache).ok()?;
-    Some(cache)
+    config::cache_dir()
 }
 
 /// The same for a macOS bundle, where the parts live under Contents.

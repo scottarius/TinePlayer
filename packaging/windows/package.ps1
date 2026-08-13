@@ -303,9 +303,37 @@ Copy-Item (Join-Path $root 'THIRD-PARTY.md') $stage
 & (Join-Path $PSScriptRoot 'licenses.ps1') -Destination "$stage\licenses" -GStreamer $GStreamer
 
 # --- The portable ZIP ---------------------------------------------------
+#
+# The ZIP carries a `user` folder and the installer does not. That difference
+# is the whole of what makes one copy portable and the other not: TinePlayer
+# keeps its settings there when it finds one beside the executable, and in the
+# Windows user profile when it does not. See resolve_storage in src/config.rs.
+#
+# Created here and removed again below rather than staged with everything
+# else, because the installer packages {#StageDir}\* recursively and would
+# otherwise install a portable copy into Program Files.
+#
+# The note inside it is not filler. An empty directory is a fragile thing to
+# carry in an archive, and someone who opens the ZIP and finds a folder called
+# "user" deserves to know what it is before deciding to delete it.
+$portable = Join-Path $stage 'user'
+New-Item -ItemType Directory -Path $portable -Force | Out-Null
+@'
+TinePlayer keeps its settings, resume positions and caches in this folder.
+
+That is what makes this copy portable: it can live on a USB stick and carry
+everything with it, leaving nothing behind on the machines it runs on.
+
+Delete this folder and TinePlayer will use your Windows user profile instead
+(%APPDATA%\TinePlayer), the same as an installed copy does.
+'@ | Set-Content (Join-Path $portable 'README.txt') -Encoding UTF8
+
 $zip = Join-Path $Output "TinePlayer-$version-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $stage -DestinationPath $zip
+
+# Gone before Inno Setup reads the same folder.
+Remove-Item $portable -Recurse -Force
 
 # --- The installer ------------------------------------------------------
 #
