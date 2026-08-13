@@ -341,13 +341,11 @@ Copy-Item (Join-Path $root 'THIRD-PARTY.md') $stage
 $portable = Join-Path $stage 'user'
 New-Item -ItemType Directory -Path $portable -Force | Out-Null
 @'
-TinePlayer keeps its settings, resume positions and caches in this folder.
+In order to be portable, TinePlayer keeps all of its settings,
+resume positions and caches in this folder.
 
-That is what makes this copy portable: it can live on a USB stick and carry
-everything with it, leaving nothing behind on the machines it runs on.
-
-Delete this folder and TinePlayer will use your Windows user profile instead
-(%APPDATA%\TinePlayer), the same as an installed copy does.
+Delete this folder and TinePlayer will use your Windows user profile
+instead (%LOCALAPPDATA%\TinePlayer), the same as an installed copy.
 '@ | Set-Content (Join-Path $portable 'README.txt') -Encoding UTF8
 
 $zip = Join-Path $Output "TinePlayer-$version-windows-x64.zip"
