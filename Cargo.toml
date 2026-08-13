@@ -100,6 +100,7 @@ gtk = { package = "gtk4", version = "0.9" }
 # falls back to CPU-side frame handling, which can't keep up with 1080p on
 # a Pi (observed: "a lot of buffers are being dropped").
 gst-plugin-gtk4 = "0.13.7"
+tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

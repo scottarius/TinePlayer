@@ -503,6 +503,225 @@ pub fn quick_connect_poll(
     }))
 }
 
+/// What a controller asked for, once it has been turned into something
+/// TinePlayer understands.
+///
+/// Jellyfin sends rather more than this. What is not here is not ignored by
+/// accident: volume and mute belong to the outputs and are better left to the
+/// person in the room, and the queue commands mean nothing to a player that
+/// shows one video at a time.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    /// Play this item. The position is Jellyfin's, which is not always the one
+    /// stored against the item - a controller can say "play from here".
+    Play {
+        item_id: String,
+        position_ns: Option<u64>,
+    },
+    Pause,
+    Unpause,
+    /// Whichever of the two the current state is not.
+    PlayPause,
+    Stop,
+    Seek(u64),
+    /// The server refused the token, so the pairing is gone. Sign out and ask
+    /// to be paired again; retrying cannot help.
+    SignedOut,
+}
+
+/// A live connection to a server, and the thread holding it.
+///
+/// Dropping this closes the socket and lets the thread end, which is how
+/// disconnecting works: there is no stop flag to get out of step with.
+pub struct Session {
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+thread_local! {
+    /// What to do with a command, on the thread that can act on it.
+    ///
+    /// Held here for the same reason `media_keys` does it: the handler touches
+    /// the interface and cannot be sent anywhere, while the socket lives on a
+    /// thread of its own. Commands cross by `idle_add_once`, which runs them
+    /// on the main loop, and the closure looks the handler up when it gets
+    /// there rather than carrying it.
+    static HANDLER: std::cell::RefCell<Option<std::rc::Rc<dyn Fn(Command)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Opens the connection and keeps it open.
+///
+/// This is what makes TinePlayer appear on somebody's phone. Measured
+/// 2026-08-13: declaring capabilities is not enough on its own - the session
+/// reported `SupportsRemoteControl: false` until a socket was open, and said
+/// so again when it closed. So a dropped connection is not a background
+/// nuisance to be retried quietly; while it is down TinePlayer is not there to
+/// be cast to at all.
+///
+/// Retried with a widening gap, because a server being restarted is ordinary.
+/// The one thing not retried is a refused token: that is the pairing being
+/// revoked, and no amount of waiting brings it back.
+pub fn connect(pairing: &Pairing, handler: impl Fn(Command) + 'static) -> Option<Session> {
+    let account = pairing.account.as_ref()?;
+    HANDLER.with(|held| *held.borrow_mut() = Some(std::rc::Rc::new(handler)));
+
+    let url = socket_url(&pairing.server, &account.token, &pairing.device_id);
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive = running.clone();
+
+    std::thread::Builder::new()
+        .name("jellyfin".to_string())
+        .spawn(move || {
+            let mut wait = std::time::Duration::from_secs(1);
+            while alive.load(std::sync::atomic::Ordering::Relaxed) {
+                match hold(&url, &alive) {
+                    // Refused outright. The pairing is gone; stop.
+                    Err(Error::Unauthorized) => {
+                        deliver(Command::SignedOut);
+                        return;
+                    }
+                    Err(Error::Failed(why)) => {
+                        eprintln!("Jellyfin connection lost: {why}");
+                    }
+                    Ok(()) => {}
+                }
+                if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(wait);
+                // Up to half a minute: long enough not to hammer a server that
+                // is down, short enough that somebody who restarts theirs does
+                // not wait long for the television to come back.
+                wait = (wait * 2).min(std::time::Duration::from_secs(30));
+            }
+        })
+        .ok()?;
+
+    Some(Session { running })
+}
+
+/// Where the socket lives, derived from the address the viewer gave.
+///
+/// `http` becomes `ws` and `https` becomes `wss`, so a server reached securely
+/// keeps its socket secure rather than quietly falling back.
+fn socket_url(server: &str, token: &str, device_id: &str) -> String {
+    let base = match server.strip_prefix("https://") {
+        Some(rest) => format!("wss://{rest}"),
+        None => match server.strip_prefix("http://") {
+            Some(rest) => format!("ws://{rest}"),
+            None => format!("ws://{server}"),
+        },
+    };
+    format!("{base}/socket?api_key={token}&deviceId={device_id}")
+}
+
+/// One connection, held until it closes or is told to stop.
+fn hold(url: &str, alive: &std::sync::atomic::AtomicBool) -> Result<(), Error> {
+    let (mut socket, response) = match tungstenite::connect(url) {
+        Ok(pair) => pair,
+        Err(tungstenite::Error::Http(response)) if response.status() == 401 => {
+            return Err(Error::Unauthorized);
+        }
+        Err(e) => return Err(Error::Failed(e.to_string())),
+    };
+    if response.status() == 401 {
+        return Err(Error::Unauthorized);
+    }
+
+    // Non-blocking so the loop can notice it has been asked to stop, rather
+    // than sitting in a read until the server happens to say something.
+    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_ref() {
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+    }
+
+    while alive.load(std::sync::atomic::Ordering::Relaxed) {
+        match socket.read() {
+            Ok(tungstenite::Message::Text(text)) => {
+                if let Some(command) = interpret(&text) {
+                    deliver(command);
+                }
+            }
+            Ok(tungstenite::Message::Ping(payload)) => {
+                let _ = socket.send(tungstenite::Message::Pong(payload));
+            }
+            Ok(tungstenite::Message::Close(_)) => return Ok(()),
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                // Nothing said in the last second, which is the usual case.
+                continue;
+            }
+            Err(e) => return Err(Error::Failed(e.to_string())),
+        }
+    }
+    let _ = socket.close(None);
+    Ok(())
+}
+
+/// Hands a command to the thread that can act on it.
+fn deliver(command: Command) {
+    glib::idle_add_once(move || {
+        let handler = HANDLER.with(|held| held.borrow().clone());
+        if let Some(handler) = handler {
+            handler(command);
+        }
+    });
+}
+
+/// Turns one message from the server into a command, or nothing.
+///
+/// Written against what the server actually sent on 2026-08-13 rather than
+/// against the documentation: a Play carries `ItemIds`, a `PlayCommand` and
+/// the id of whoever is controlling, and nothing else - no stream address and
+/// no position. Everything else about the video is asked for afterwards.
+fn interpret(text: &str) -> Option<Command> {
+    let message: serde_json::Value = serde_json::from_str(text).ok()?;
+    let data = message.get("Data");
+    match message.get("MessageType")?.as_str()? {
+        "Play" => {
+            let data = data?;
+            // Queue commands are answered as "play this now": TinePlayer shows
+            // one video at a time, and refusing outright would look broken to
+            // somebody who pressed a button and watched nothing happen.
+            let item_id = data
+                .get("ItemIds")?
+                .as_array()?
+                .first()?
+                .as_str()?
+                .to_string();
+            Some(Command::Play {
+                item_id,
+                position_ns: data.get("StartPositionTicks").and_then(from_ticks),
+            })
+        }
+        "Playstate" => {
+            let data = data?;
+            match data.get("Command")?.as_str()? {
+                "Pause" => Some(Command::Pause),
+                "Unpause" => Some(Command::Unpause),
+                "PlayPause" => Some(Command::PlayPause),
+                "Stop" => Some(Command::Stop),
+                "Seek" => Some(Command::Seek(
+                    data.get("SeekPositionTicks").and_then(from_ticks)?,
+                )),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,6 +862,39 @@ mod tests {
         let client = Client::new(&pairing).expect("a connected pairing makes a client");
         client.announce().expect("capabilities were refused");
         println!("    capabilities accepted");
-        println!("    stream URL: {}", client.stream_url("<item>"));
+
+        // The socket, which is what actually puts TinePlayer on a phone.
+        let main = glib::MainLoop::new(None, false);
+        let quit = main.clone();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let heard = seen.clone();
+        let _session = connect(&pairing, move |command| {
+            println!("    <- {command:?}");
+            heard.borrow_mut().push(command);
+            quit.quit();
+        })
+        .expect("the socket would not open");
+
+        println!("\n    Now cast something to this device from Jellyfin.\n");
+        // Ends on the first command, or after long enough to have found a
+        // phone and given up.
+        let give_up = main.clone();
+        glib::timeout_add_seconds_local_once(240, move || give_up.quit());
+        main.run();
+
+        let seen = seen.borrow();
+        let command = seen.first().expect("nothing was cast within four minutes");
+        match command {
+            Command::Play { item_id, .. } => {
+                let item = client.item(item_id).expect("the item could not be read");
+                println!(
+                    "    resolved: {} ({:?} runtime)",
+                    item.title, item.runtime_ns
+                );
+                println!("    stream:   {}", client.stream_url(&item.id));
+                assert!(!item.title.is_empty(), "an item should have a title");
+            }
+            other => panic!("expected a Play, got {other:?}"),
+        }
     }
 }
