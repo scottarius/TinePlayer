@@ -76,6 +76,30 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
+; Off unless asked for, because it changes something outside the installation
+; folder. A shortcut is undone by deleting it; an environment variable is not
+; obvious to find, so it should be opted into rather than out of.
+Name: "addtopath"; Description: "Add TinePlayer to &PATH, so it can be run from a terminal"; GroupDescription: "Command line:"; Flags: unchecked
+
+[Registry]
+; PATH, when the box above is ticked.
+;
+; Which PATH follows the install: a per-user install writes the user's, an
+; elevated all-users install writes the machine's. Somebody installing for
+; every account means every account. {app} is whichever folder was chosen -
+; Program Files, the per-user Programs folder, or a custom one - so the value
+; needs no special handling for the two cases, only the location does.
+;
+; expandsz rather than string, and this is the entry worth being careful
+; about: the machine PATH normally contains %SystemRoot%\system32, and writing
+; it back as a plain string would bake today's expansion in permanently.
+;
+; Inno notifies running applications that the environment changed once Setup
+; finishes, so a terminal opened afterwards sees it without logging out.
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; \
+    Tasks: addtopath; Check: not IsAdminInstallMode and NeedsAddPath
+Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; \
+    Tasks: addtopath; Check: IsAdminInstallMode and NeedsAddPath
 
 [InstallDelete]
 ; Cleared before the new files land, because installing over an old copy
@@ -124,6 +148,87 @@ Filename: "{app}\TinePlayer.exe"; Description: "Start {#AppName}"; Flags: nowait
 Type: files; Name: "{localappdata}\TinePlayer\registry.bin"
 
 [Code]
+// --- PATH ------------------------------------------------------------------
+//
+// Which of the two PATH variables this install is entitled to edit. The root
+// and the subkey both differ, which is why this is a procedure rather than
+// Inno's HKA shorthand.
+procedure PathLocation(var Root: Integer; var Key: string);
+begin
+  if IsAdminInstallMode then
+  begin
+    Root := HKEY_LOCAL_MACHINE;
+    Key := 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
+  end
+  else
+  begin
+    Root := HKEY_CURRENT_USER;
+    Key := 'Environment';
+  end;
+end;
+
+// Whether {app} is missing from PATH and so wants adding.
+//
+// Without this, installing over an existing copy appends the same folder
+// again, and again on the one after that. Compared as a whole entry between
+// separators rather than as a substring, so a folder is not mistaken for one
+// whose name it happens to begin.
+//
+// RegQueryStringValue reads REG_EXPAND_SZ without expanding it, which is what
+// this needs: the comparison is against the stored text, and the value is
+// never written back from here.
+function NeedsAddPath: Boolean;
+var
+  Root: Integer;
+  Key, Existing, Dir: string;
+begin
+  PathLocation(Root, Key);
+  Dir := ExpandConstant('{app}');
+  if not RegQueryStringValue(Root, Key, 'Path', Existing) then
+  begin
+    // No PATH of their own yet, which is ordinary for a user account.
+    Result := True;
+    exit;
+  end;
+  Result := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Existing) + ';') = 0;
+end;
+
+// Takes {app} back out again, leaving the rest of PATH as it was.
+//
+// String surgery rather than an uninsdeletevalue flag on the entry above,
+// which would delete the whole Path variable instead of the part this
+// installer added. Case-insensitively, because what is stored may not be
+// spelled the way {app} is.
+procedure RemoveFromPath;
+var
+  Root, P: Integer;
+  Key, Existing, Padded, Needle, Updated, Dir: string;
+begin
+  PathLocation(Root, Key);
+  Dir := ExpandConstant('{app}');
+  if not RegQueryStringValue(Root, Key, 'Path', Existing) then
+    exit;
+
+  // Padded at both ends so the first and last entries have separators either
+  // side of them like every other entry, and one comparison covers all three
+  // positions.
+  Padded := ';' + Existing + ';';
+  Needle := ';' + Uppercase(Dir) + ';';
+  P := Pos(Needle, Uppercase(Padded));
+  if P = 0 then
+    exit;
+
+  // Keeps one of the two separators that surrounded the entry, so what was
+  // either side of it stays joined.
+  Updated := Copy(Padded, 1, P) + Copy(Padded, P + Length(Needle), MaxInt);
+  if (Length(Updated) > 0) and (Updated[1] = ';') then
+    Delete(Updated, 1, 1);
+  if (Length(Updated) > 0) and (Updated[Length(Updated)] = ';') then
+    Delete(Updated, Length(Updated), 1);
+
+  RegWriteExpandStringValue(Root, Key, 'Path', Updated);
+end;
+
 // Uninstalling offers to take the settings with it, rather than deciding.
 //
 // The folder holds config.yaml and positions.json as well as the registry:
@@ -141,6 +246,11 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    // Unconditionally, rather than only when the task was ticked: the folder
+    // is being deleted either way, and an entry pointing at nothing is worth
+    // clearing however it got there. Does nothing when it is not present.
+    RemoveFromPath;
+
     DataDir := ExpandConstant('{localappdata}\TinePlayer');
     if DirExists(DataDir) and (not UninstallSilent) then
     begin
