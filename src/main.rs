@@ -734,21 +734,27 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
 
-    // Everything that reports and exits has now had its turn, so what follows
-    // is a window. The terminal goes back to the shell that owns it before
-    // anything else is written to it.
-    release_parent_console();
-
-    // Deliberately not fatal. A missing file used to end the process here,
-    // which is invisible when something else launched the player: the window
-    // never appears and there is no terminal to read the reason from. The
-    // window opens and says so instead. Still printed, for anyone who did run
-    // it from a terminal.
+    // A video named on the command line that is not there ends the run: a
+    // message, a failing exit code, and no window.
+    //
+    // This used to open the window and say so instead, reasoning that a
+    // launcher leaves nobody a terminal to read. That had it the wrong way
+    // round. A launcher is precisely the thing that can act on an exit code,
+    // and a window it did not ask for and has to dismiss is worse than an
+    // answer it can handle - while a person who typed the command has a
+    // terminal by definition. Something driving TinePlayer can now tell
+    // whether the video played.
     if let Some(source) = source.as_ref()
         && !source.is_available()
     {
         eprintln!("File not found: {}", source.label());
+        return std::process::ExitCode::FAILURE;
     }
+
+    // Everything that reports and exits has now had its turn, so what follows
+    // is a window. The terminal goes back to the shell that owns it before
+    // anything else is written to it.
+    release_parent_console();
 
     // Never refuses to launch: an unconfigured install just opens the menu
     // with its outputs unset, and one whose settings could not be read opens
