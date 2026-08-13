@@ -287,6 +287,28 @@ foreach ($extra in @("$stage\libexec\gst-plugin-scanner.exe", "$stage\lib\gio\mo
 Write-Host 'Licenses...' -ForegroundColor Cyan
 Copy-Item (Join-Path $root 'LICENSE') "$stage\licenses\TinePlayer-MIT.txt"
 
+# The same license again, with each paragraph on one line, for the page the
+# installer shows.
+#
+# LICENSE is hard-wrapped near 76 columns, which is right for a file someone
+# opens in an editor. Inno displays it in a control that wraps text itself, so
+# those breaks survive into a second wrapping and the result is ragged - every
+# original line ending early wherever the control happened to break first.
+# Handing it paragraphs and letting it do all the wrapping is what fixes that.
+#
+# Written outside the staging folder deliberately: the installer packages that
+# folder wholesale, and shipping a second copy of the license alongside the
+# readable one would only raise the question of which is authoritative. The
+# staged TinePlayer-MIT.txt keeps its original shape.
+$cache = Join-Path $root 'target\packaging-cache'
+New-Item -ItemType Directory -Force -Path $cache | Out-Null
+$licenseForInstaller = Join-Path $cache 'license-unwrapped.txt'
+$paragraphs = ((Get-Content (Join-Path $root 'LICENSE') -Raw) -replace "`r`n", "`n").Trim() -split "`n`n"
+$unwrapped = ($paragraphs | ForEach-Object {
+    ($_ -split "`n" | Where-Object { $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }) -join ' '
+}) -join "`r`n`r`n"
+Set-Content -Path $licenseForInstaller -Value $unwrapped -Encoding UTF8
+
 # The fonts, beside the executable where use_bundled_fonts looks for them.
 # Without these the language menu falls back to whatever the machine has,
 # which on Windows draws nothing at all for six of the scripts - the bug they
@@ -371,7 +393,7 @@ if ($iscc) {
     # like 1.1.0-dev has to be trimmed for that field while the displayed
     # AppVersion keeps the suffix.
     $versionNumeric = ($version -split '[-+]')[0]
-    & $iscc /Q "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DStageDir=$stage" "/DOutputDir=$Output" "/DRootDir=$root" $iss
+    & $iscc /Q "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DStageDir=$stage" "/DOutputDir=$Output" "/DRootDir=$root" "/DLicenseFile=$licenseForInstaller" $iss
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed.' }
     $setup = Join-Path $Output "TinePlayer-$version-windows-x64-setup.exe"
 } else {

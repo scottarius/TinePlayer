@@ -27,6 +27,12 @@
 #ifndef OutputDir
   #define OutputDir "..\..\dist\windows"
 #endif
+; The license as the installer should show it: paragraphs on single lines, so
+; the control that wraps text is not wrapping text that was wrapped already.
+; Falls back to the staged copy, which is readable but wraps badly here.
+#ifndef LicenseFile
+  #define LicenseFile StageDir + "\licenses\TinePlayer-MIT.txt"
+#endif
 ; The top of the source tree, passed in rather than worked out by counting
 ; ".." from the staging folder - which broke the moment that folder moved.
 #ifndef RootDir
@@ -56,7 +62,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 
-LicenseFile={#StageDir}\licenses\TinePlayer-MIT.txt
+LicenseFile={#LicenseFile}
 OutputDir={#OutputDir}
 OutputBaseFilename={#AppName}-{#AppVersion}-windows-x64-setup
 SetupIconFile={#RootDir}\data\branding\tineplayer.ico
