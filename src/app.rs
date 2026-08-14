@@ -2454,6 +2454,8 @@ impl App {
             // The panel opens upward out of its button, so up climbs the list
             // of outputs and stops at the top of it.
             Row::Volume => controls.move_output(-1),
+            // The chooser opens the same way, so up climbs it likewise.
+            Row::Subtitles => controls.move_subtitle(-1),
         }
     }
 
@@ -2473,6 +2475,15 @@ impl App {
                     controls.set_row(Row::Buttons);
                 } else {
                     controls.move_output(1);
+                }
+            }
+            // Down the list of subtitles, and off the bottom of it back to
+            // the icon the chooser came out of.
+            Row::Subtitles => {
+                if controls.at_last_subtitle() {
+                    controls.set_row(Row::Buttons);
+                } else {
+                    controls.move_subtitle(1);
                 }
             }
             // Nothing is held, so there is nothing to put down - but the strip
@@ -2523,11 +2534,10 @@ impl App {
         // the panel this way put the highlight back on the button, so the
         // release read as a fresh press on it and opened the panel again.
         let holds = controls.holds_press();
-        self.hold_started.set(holds);
-        if holds {
-            controls.press_volume();
-        } else {
-            controls.activate_focused();
+        self.hold_started.set(holds.is_some());
+        match holds {
+            Some(hold) => controls.press_hold(hold),
+            None => controls.activate_focused(),
         }
     }
 
@@ -2558,7 +2568,7 @@ impl App {
         let Some(controls) = controls else { return };
         // Only a press that started a hold has anything left to do here.
         // Everything else acted on the way down.
-        if self.hold_started.replace(false) && controls.release_volume() {
+        if self.hold_started.replace(false) && controls.release_hold() {
             controls.activate_focused();
         }
     }
@@ -2589,6 +2599,12 @@ impl App {
             .as_ref()
             .map(|controls| controls.row())
             .unwrap_or(Row::None);
+        // Swallowed rather than passed on: there is nowhere sideways to go in
+        // a list, and seeking the film out from under an open chooser would be
+        // worse than doing nothing.
+        if row == Row::Subtitles {
+            return;
+        }
         if row == Row::Buttons || row == Row::Volume {
             if let Some(controls) = self.controls.borrow().as_ref() {
                 if row == Row::Volume {
@@ -3006,9 +3022,134 @@ impl App {
         };
         let showing = playback.toggle_subtitles();
         self.subtitles_hidden.set(!showing);
-        if let Some(controls) = self.controls.borrow().as_ref() {
-            controls.set_subtitles(playback.has_subtitles(), showing);
+        self.push_subtitle_state();
+        self.wake_controls();
+    }
+
+    /// The chooser's rows and which of them is in force: Off, then everything
+    /// the video offers, in the order the media page lists them.
+    ///
+    /// Browsing for a file is deliberately not among them, though the media
+    /// page's version of this list ends with it. That opens a screen of its
+    /// own, and going looking on disk belongs to the page you choose from
+    /// before pressing play rather than to a list laid over a running film.
+    ///
+    /// "Off" rather than the page's "None", because on the strip it is the
+    /// same state the icon and the toggle already call off.
+    fn subtitle_entries(&self) -> (Vec<String>, Option<usize>) {
+        let mut entries = vec!["Off".to_string()];
+        let chosen = self.subtitle.borrow().clone();
+        // Off unless something matches, which is also the answer when a
+        // remembered choice names a subtitle this video does not have.
+        let mut current = Some(0);
+        for (position, option) in self.subtitle_options.borrow().iter().enumerate() {
+            if chosen.as_ref() == Some(&option.choice()) {
+                current = Some(position + 1);
+            }
+            entries.push(subtitle_label(option));
         }
+        (entries, current)
+    }
+
+    /// Tells the strip what subtitles are doing and what there is to choose
+    /// from, which is one answer in three places: whether the icon can be
+    /// worked at all, whether it is lit, and what the chooser lists.
+    ///
+    /// Takes both rather than reading them off `self`, because playback
+    /// starting has not put either into its cell yet.
+    fn show_subtitle_state(&self, playback: &Playback, controls: &Rc<Controls>) {
+        // What the video offers, not what is attached. The icon opens a list
+        // that includes turning subtitles on, so a film started with them off
+        // has to be able to reach it - which asking whether anything is
+        // attached would refuse.
+        let offers = !self.subtitle_options.borrow().is_empty() || playback.has_subtitles();
+        // What has been chosen, not what the pipeline has got to yet.
+        //
+        // A switch takes a moment to arrive, and the overlay is deliberately
+        // blank until it does - see `Playback::set_subtitle`. An icon that
+        // read the pipeline therefore dimmed at the start of every switch and
+        // stayed dim, because nothing comes back to ask again once the
+        // subtitle lands. The choice is the honest answer to what the icon is
+        // saying: subtitles are on, and one is on its way.
+        let showing = self.subtitle.borrow().is_some() && !self.subtitles_hidden.get();
+        controls.set_subtitles(offers, showing);
+        let (entries, current) = self.subtitle_entries();
+        controls.set_subtitle_entries(&entries, current);
+    }
+
+    /// The same, for everywhere that can simply ask what is playing.
+    fn push_subtitle_state(&self) {
+        let playback = self.playback.borrow().clone();
+        let controls = self.controls.borrow().clone();
+        if let (Some(playback), Some(controls)) = (playback, controls) {
+            self.show_subtitle_state(&playback, &controls);
+        }
+    }
+
+    /// Takes a row from the chooser and puts it into the film already running.
+    ///
+    /// Row zero is Off; the rest follow `subtitle_options` in order, which is
+    /// the order [`Self::subtitle_entries`] built them in. The choice is
+    /// remembered as well as applied, the same as choosing one from the media
+    /// page: it is the same decision, made later.
+    fn choose_subtitle(self: &Rc<Self>, entry: usize) {
+        let playback = self.playback.borrow().clone();
+        let file = self.file.borrow().clone();
+        let (Some(playback), Some(file)) = (playback, file) else {
+            return;
+        };
+        let picked = match entry.checked_sub(1) {
+            None => None,
+            Some(index) => match self.subtitle_options.borrow().get(index) {
+                Some(option) => Some(option.choice()),
+                // A list that changed under the press. Nothing to apply, and
+                // the mark stays where it was.
+                None => return,
+            },
+        };
+
+        // Already what is playing, and already showing it. Nothing to do, and
+        // doing it anyway would rebuild the subtitle chain to arrive back
+        // where it started - a blank second in the middle of a film for no
+        // reason. This is also what makes pressing straight through the
+        // chooser a way of closing it, since it opens on this very row.
+        //
+        // The second half is not redundant: picking the subtitle that is
+        // already chosen but switched off is how it is asked for again.
+        //
+        // Asked of what has been chosen rather than of the pipeline, for the
+        // reason `show_subtitle_state` gives - mid-switch the pipeline is
+        // deliberately showing nothing, and taking that at face value would
+        // make every second press of the same row a needless switch.
+        if picked == *self.subtitle.borrow() && self.subtitles_hidden.get() == (entry == 0) {
+            return;
+        }
+
+        // Located here for the reason it is at the start of playback: finding
+        // one can need the server address and access token, which are ours to
+        // know and the pipeline's to be kept out of.
+        let located = match self.locate_subtitle(&file, picked.as_ref()) {
+            Ok(located) => located,
+            // The same answer playback gives when a subtitle cannot be found
+            // as a film opens: it gives up the subtitle and not the film.
+            // Nothing is recorded either, so the mark stays on whatever is
+            // still playing - which is what says the choice did not take.
+            Err(e) => {
+                eprintln!("{e}");
+                return;
+            }
+        };
+        if let Err(e) = playback.set_subtitle(located.as_ref()) {
+            eprintln!("{e}");
+            return;
+        }
+
+        *self.subtitle.borrow_mut() = picked;
+        // Choosing one is asking to see it, whatever the toggle was doing for
+        // the last. Off is the exception, being the toggle said deliberately.
+        self.subtitles_hidden.set(entry == 0);
+        self.remember_tracks();
+        self.push_subtitle_state();
         self.wake_controls();
     }
 
@@ -10275,8 +10416,14 @@ impl App {
                     controls.connect_fullscreen(move || app.toggle_fullscreen());
                 }
                 {
+                    // Holding the icon, which shows or hides what is already
+                    // chosen. Tapping it opens the chooser instead.
                     let app = self.clone();
                     controls.connect_subtitles(move || app.toggle_subtitles());
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_subtitle_chosen(move |entry| app.choose_subtitle(entry));
                 }
                 {
                     // Under a launcher there is no menu worth returning to:
@@ -10427,7 +10574,7 @@ impl App {
                 if self.subtitles_hidden.get() && playback.subtitles_showing() {
                     playback.toggle_subtitles();
                 }
-                controls.set_subtitles(playback.has_subtitles(), playback.subtitles_showing());
+                self.show_subtitle_state(&playback, &controls);
                 controls.update(&playback);
                 // Where playback has reached, and nothing else. A film
                 // opening with a full row of buttons over it announces the
@@ -12789,6 +12936,39 @@ fn style_css(scale: f64) -> String {
         .tp-volume-panel button image {{
             -gtk-icon-size: {icon}px;
             color: #ffffff;
+        }}
+        /* The subtitle chooser, laid over the bar exactly as the volume panel
+           is and out of the same corner: they are the two things the strip
+           opens rather than does, and a list that arrived looking like
+           something else would read as a different kind of thing. */
+        .tp-subtitle-panel {{
+            background-color: rgba(0, 0, 0, 0.75);
+            border-radius: {radius}px;
+            padding: {crumb_pad}px;
+            margin-bottom: {crumb_pad}px;
+            margin-right: {pad_h}px;
+        }}
+        /* Padded so the selection mark has room around a row rather than
+           sitting tight against the words, the same as the panel beside it.
+
+           At the interface's own row size rather than the size a stock label
+           comes out at, which is drawn for a desk. This is a list of languages
+           read from a sofa while a film runs, so it is sized like every other
+           list in the application and not like the panel's device names, which
+           are a caption above a control rather than the thing being chosen. */
+        .tp-subtitle-row {{
+            font-size: {row}px;
+            padding: {crumb_pad}px;
+            border-radius: {radius}px;
+            color: #ffffff;
+        }}
+        /* The subtitle in force, marked apart from where the cursor is - the
+           two part company as soon as anybody moves, which is the point of
+           marking them separately. The same bar down the leading edge the
+           menus draw, so 'you are here' and 'this is what is on' read the
+           same way over a film as they do on a page. */
+        .tp-subtitle-row.tp-current {{
+            box-shadow: inset {mark}px 0 0 0 {highlight};
         }}
         /* The handle, not the whole bar: filling the trough drew over the
            very thing that says where playback is. */

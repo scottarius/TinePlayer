@@ -1,5 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gst::prelude::*;
@@ -95,6 +97,12 @@ pub struct Playback {
     /// list a switch starts from: keep these, drop the subtitle, add the
     /// wanted one.
     selected_streams: RefCell<Vec<String>>,
+    /// Bumped every time the subtitle changes, so that a probe still waiting
+    /// for a stream nobody wants any more does not draw it when it arrives.
+    ///
+    /// Atomic and shared rather than a `Cell` like everything else here: the
+    /// probe that reads it runs on a streaming thread.
+    subtitle_switch: Arc<AtomicU64>,
     playing: Cell<bool>,
     last_toggle: Cell<Instant>,
     /// Set when the pipeline reports end-of-stream, so teardown clears the
@@ -194,6 +202,7 @@ impl Playback {
             bus_watch: RefCell::new(None),
             collection: RefCell::new(None),
             selected_streams: RefCell::new(Vec::new()),
+            subtitle_switch: Arc::new(AtomicU64::new(0)),
             final_report: RefCell::new(None),
             seek_target: Cell::new(None),
             seeking: Cell::new(false),
@@ -770,12 +779,24 @@ impl Playback {
     ///
     /// The overlay's `subtitle_sink` takes one source at a time, so whatever
     /// was feeding it is always taken away first, whichever kind it was.
+    ///
+    /// Drawing stops here and starts again only once the new subtitle has
+    /// something to draw. None of the three cases is instant - a stream has to
+    /// be selected and decoded, or a source built and seeked to where the film
+    /// already is - and the line already on screen would otherwise sit there
+    /// for the rest of its duration in the language somebody just changed
+    /// away from, which reads as a switch that did nothing.
     pub fn set_subtitle(&self, subtitle: Option<&SubtitleSource>) -> Result<(), String> {
         let Some(overlay) = self.pipeline.by_name("suboverlay") else {
             // No overlay means the film offered no subtitles when it opened,
             // and nothing can be switched on that was never there.
             return Ok(());
         };
+
+        overlay.set_property("silent", true);
+        // Claimed before anything is torn down, so that a switch made while an
+        // earlier one is still coming disowns it rather than racing it.
+        let mark = self.subtitle_switch.fetch_add(1, Ordering::Relaxed) + 1;
 
         self.detach_external_subtitle();
 
@@ -815,8 +836,46 @@ impl Playback {
             }
         }
 
-        overlay.set_property("silent", subtitle.is_none());
+        // Off stays off: it is already silent, and there is nothing coming to
+        // turn it back on for.
+        if subtitle.is_some() {
+            self.draw_when_subtitle_arrives(&overlay, mark);
+        }
         Ok(())
+    }
+
+    /// Draws subtitles again as soon as the newly chosen one reaches the
+    /// overlay.
+    ///
+    /// A one-shot pad probe rather than a timer, because how long a subtitle
+    /// takes to start depends on where it comes from and where the film is: a
+    /// stream inside the file, a file on disk and one fetched from a media
+    /// server are not alike, and a delay long enough for the slowest of them
+    /// would be a blank gap in all the others.
+    ///
+    /// The property is set from the main loop rather than from the probe.
+    /// `subtitleoverlay` reconfigures its internal chain when `silent`
+    /// changes, and asking it to do that from inside a probe on its own sink
+    /// pad is asking for a deadlock.
+    fn draw_when_subtitle_arrives(&self, overlay: &gst::Element, mark: u64) {
+        let Some(pad) = overlay.static_pad("subtitle_sink") else {
+            return;
+        };
+        let switch = self.subtitle_switch.clone();
+        let overlay = overlay.clone();
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            let switch = switch.clone();
+            let overlay = overlay.clone();
+            glib::idle_add_once(move || {
+                // Switched again, or turned off by hand, while this was
+                // waiting. The buffer belongs to a subtitle nobody is asking
+                // for now, and drawing it would undo what they did ask for.
+                if switch.load(Ordering::Relaxed) == mark {
+                    overlay.set_property("silent", false);
+                }
+            });
+            gst::PadProbeReturn::Remove
+        });
     }
 
     /// Takes down the external subtitle chain, if there is one.
@@ -872,6 +931,10 @@ impl Playback {
         let Some(overlay) = self.pipeline.by_name("suboverlay") else {
             return false;
         };
+        // Disowns any switch still waiting for its first line. Turning them
+        // off by hand while one was on its way would otherwise be undone the
+        // moment it landed.
+        self.subtitle_switch.fetch_add(1, Ordering::Relaxed);
         // Named for what the property means rather than what it is called.
         // Flipping it makes the new state the opposite of this, which is the
         // same value again: what was hidden is now showing.

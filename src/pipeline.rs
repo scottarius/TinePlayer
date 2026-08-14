@@ -632,10 +632,28 @@ fn connect_pad_added(
             return;
         };
         let target = selected.lock().unwrap().get(id.as_str()).copied();
-        let Some(target) = target else {
-            // A stream decodebin3 exposed without being asked to. Leaving it
-            // unlinked is correct; it just plays no part.
-            return;
+        let target = match target {
+            Some(target) => target,
+            // A subtitle switched on part way through a film that began with
+            // none.
+            //
+            // This map is filled by `select-stream` while the file is being
+            // opened, and an explicit `select-streams` event does not go back
+            // through that signal - decodebin3 takes the application's word
+            // for it - so a stream chosen later was never recorded here.
+            //
+            // It only shows up in this one case. Switching *between* embedded
+            // subtitles reuses decodebin3's existing text slot and its pad,
+            // and so never reaches `pad-added` at all; with nothing selected
+            // at the start there is no slot to reuse, and the one it makes
+            // arrives here naming a stream nothing knows about.
+            //
+            // Safe to take at face value: only ever one subtitle is asked for
+            // at a time, and the overlay accepts one at a time.
+            None if carries_text(pad) => Target::Subtitle,
+            // Anything else decodebin3 exposed without being asked to.
+            // Leaving it unlinked is correct; it just plays no part.
+            None => return,
         };
 
         let (head, pad_name) = match target {
@@ -651,6 +669,33 @@ fn connect_pad_added(
             eprintln!("Failed to connect decoded stream {id}: {e}");
         }
     });
+}
+
+/// Whether a decoded pad carries subtitles.
+///
+/// Asked of the stream the pad was opened with first, and of its caps only if
+/// there is no stream to ask. Both, because neither is certain on its own: the
+/// stream is there only if decodebin3 attached one to the stream-start event,
+/// and a pad often has no negotiated caps when it appears - which is the same
+/// trap `attach_external_audio` documents at greater length.
+///
+/// Three caps families, because a subtitle is text in some containers and a
+/// picture in others: `text/` covers SRT and ASS once parsed,
+/// `application/x-subtitle` the unparsed forms, and `subpicture/` the bitmap
+/// subtitles DVDs and Blu-rays carry.
+fn carries_text(pad: &gst::Pad) -> bool {
+    if let Some(stream) = pad.stream() {
+        return stream.stream_type().contains(gst::StreamType::TEXT);
+    }
+    let media = pad
+        .current_caps()
+        .unwrap_or_else(|| pad.query_caps(None))
+        .structure(0)
+        .map(|structure| structure.name().to_string())
+        .unwrap_or_default();
+    media.starts_with("text/")
+        || media.starts_with("subpicture/")
+        || media.starts_with("application/x-subtitle")
 }
 
 /// Position of `id` among the collection's streams of the given type, which

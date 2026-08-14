@@ -44,6 +44,27 @@ pub enum Row {
     /// The volume panel is open. Up and down choose which output, left and
     /// right move that output's level.
     Volume,
+    /// The subtitle chooser is open. Up and down move through the list, and
+    /// left and right do nothing: there is nowhere sideways to go, and
+    /// seeking the film out from under an open list would be worse than
+    /// doing nothing.
+    Subtitles,
+}
+
+/// Which button a press is being held on.
+///
+/// Two of them mean something different held than tapped, and only one can be
+/// held at a time - so this says which, rather than each having a hold of its
+/// own to keep in step.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Hold {
+    /// Held to silence every output at once, tapped to open the levels.
+    Volume,
+    /// Held to show or hide the subtitle already chosen, tapped to open the
+    /// list and choose a different one. The deliberate act is the one that
+    /// offers a choice; the shortcut is the one that does not look away from
+    /// the film.
+    Subtitles,
 }
 
 /// Told which output changed, where its level now stands as a fraction of
@@ -57,6 +78,12 @@ type VolumeHandler = Box<dyn Fn(&str, f64, bool, bool)>;
 /// [`VolumeHandler`] because a delay is always worth keeping: unlike silencing
 /// everything at once, it describes the equipment rather than the moment.
 type SyncHandler = Box<dyn Fn(&str, f64, bool)>;
+
+/// Told which row of the subtitle chooser was picked, counted as the rows were
+/// handed over in [`Controls::set_subtitle_entries`]. A position rather than
+/// the choice itself, because what a row stands for is the application's to
+/// know: the strip is given a list of words and gives back which one.
+type SubtitleHandler = Box<dyn Fn(usize)>;
 
 /// Which of an output's two controls is being driven.
 ///
@@ -129,6 +156,10 @@ const PLAY: usize = 3;
 /// is open, so it is clear where closing the panel goes back to.
 const VOLUME: usize = 6;
 
+/// Subtitles' place in the same order, and for the same reason: the chooser
+/// keeps it highlighted while it is open.
+const SUBTITLES: usize = 5;
+
 /// How long the volume button has to be held for it to mean "silence
 /// everything" rather than "show me the levels". Long enough not to fire
 /// under an ordinary press, short enough to be a deliberate gesture rather
@@ -144,6 +175,18 @@ const VOLUME_STEP: f64 = 0.05;
 /// width, but with the device names now cut to fit rather than stretching it,
 /// it is what the panel actually comes out at.
 const PANEL_WIDTH: f64 = 420.0;
+
+/// The least the subtitle chooser is ever drawn at, before scaling. A minimum
+/// only: it grows to whatever the longest language name needs, unlike the
+/// volume panel, which is a fixed width because the device names in it run
+/// long enough to be cut. Without a floor a list of "Off" and "en" would come
+/// out a box barely wider than a word.
+const SUBTITLE_WIDTH: f64 = 260.0;
+
+/// How wide a row is allowed to grow, in characters, before it is cut instead.
+/// A language name is short; a subtitle file somebody picked by hand is not,
+/// and one of those would otherwise take the panel across the picture.
+const SUBTITLE_CHARS: i32 = 32;
 
 /// Between a row's button, its bar and its reading. The same for both rows,
 /// because different spacing gives the two bars different lengths and they
@@ -164,6 +207,22 @@ fn reading_label(text: &str) -> gtk::Label {
     label.add_css_class("tp-hint");
     label.set_xalign(1.0);
     label.set_width_chars(crate::app::READING_CHARS);
+    label
+}
+
+/// One line of the subtitle chooser.
+///
+/// A label rather than the box the volume panel's rows are, because that is
+/// all a row here holds: there is no button and no bar beside it, only the
+/// name of a subtitle. Focusable all the same, so the mark the strip draws has
+/// something for a screen reader to be pointed at.
+fn subtitle_row(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("tp-subtitle-row");
+    label.set_xalign(0.0);
+    label.set_max_width_chars(SUBTITLE_CHARS);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_focusable(true);
     label
 }
 
@@ -234,6 +293,24 @@ pub struct Controls {
     on_volume: RefCell<Option<VolumeHandler>>,
     /// The same for a change to how far an output is shifted in time.
     on_sync: RefCell<Option<SyncHandler>>,
+    /// Told which row of the chooser was picked.
+    on_subtitle: RefCell<Option<SubtitleHandler>>,
+    /// Told to show or hide whatever is already chosen, which is what holding
+    /// the subtitle button means. Kept as a handler rather than wired to the
+    /// button's click, because the click now opens the list instead.
+    on_toggle_subtitles: RefCell<Option<Box<dyn Fn()>>>,
+    /// The subtitle chooser, the list of rows inside it, and where in that
+    /// list the strip is.
+    subtitle_panel: gtk::Revealer,
+    subtitle_list: gtk::Box,
+    /// Rebuilt for every video, since what is on offer is a property of the
+    /// file rather than of the strip.
+    subtitle_rows: RefCell<Vec<gtk::Label>>,
+    subtitle_at: Cell<usize>,
+    /// Which row is the subtitle in force, marked apart from where the cursor
+    /// is: the two part company the moment anybody moves, which is the whole
+    /// reason for marking them separately. `None` while the list is empty.
+    subtitle_current: Cell<Option<usize>>,
     /// The volume panel, and which output within it is selected.
     panel: gtk::Revealer,
     outputs: Vec<Output>,
@@ -498,6 +575,26 @@ impl Controls {
             .halign(gtk::Align::End)
             .build();
 
+        // Built empty and filled per video, out of the same corner and with
+        // the same background as the volume panel: they are the two things
+        // the strip opens rather than does, and a list of subtitles that
+        // arrived somewhere else would read as a different kind of thing.
+        //
+        // Sized to its contents above a floor, where the volume panel is a
+        // fixed width - see `SUBTITLE_WIDTH`.
+        let subtitle_list = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        subtitle_list.add_css_class("tp-subtitle-panel");
+        subtitle_list.set_size_request((SUBTITLE_WIDTH * scale) as i32, -1);
+        subtitle_list.set_halign(gtk::Align::End);
+        let subtitle_reveal = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::SlideUp)
+            .transition_duration(150)
+            .child(&subtitle_list)
+            .halign(gtk::Align::End)
+            .build();
+
         // Away from the transport controls, beside the other things that are
         // not about what playback is doing: it leaves playback rather than
         // changing it.
@@ -589,6 +686,9 @@ impl Controls {
             .orientation(gtk::Orientation::Vertical)
             .accessible_role(gtk::AccessibleRole::Group)
             .build();
+        // Both panels sit above the bar, and only ever one of them is open, so
+        // the order between them decides nothing.
+        row.append(&subtitle_reveal);
         row.append(&panel_reveal);
         row.append(&bar);
         // Takes the focus for everything inside it. Nothing else in the strip
@@ -671,6 +771,13 @@ impl Controls {
             row: Cell::new(Row::None),
             on_volume: RefCell::new(None),
             on_sync: RefCell::new(None),
+            on_subtitle: RefCell::new(None),
+            on_toggle_subtitles: RefCell::new(None),
+            subtitle_panel: subtitle_reveal,
+            subtitle_list,
+            subtitle_rows: RefCell::new(Vec::new()),
+            subtitle_at: Cell::new(0),
+            subtitle_current: Cell::new(None),
             panel: panel_reveal,
             outputs: rows,
             output: Cell::new(0),
@@ -712,8 +819,8 @@ impl Controls {
             let handle = controls.clone();
             controller.connect_event(move |_, event| {
                 match event.event_type() {
-                    gdk::EventType::ButtonPress => handle.press_volume(),
-                    gdk::EventType::ButtonRelease if !handle.release_volume() => {
+                    gdk::EventType::ButtonPress => handle.press_hold(Hold::Volume),
+                    gdk::EventType::ButtonRelease if !handle.release_hold() => {
                         handle.swallow_click.set(true);
                     }
                     _ => {}
@@ -721,6 +828,47 @@ impl Controls {
                 glib::Propagation::Proceed
             });
             volume.add_controller(controller);
+        }
+
+        // The same arrangement, for the same reasons: the list is opened by
+        // the button rather than by hovering, and the press is watched on its
+        // way past so that holding it can mean the other thing.
+        //
+        // Which is the whole of the new behavior. Tapping the icon opens the
+        // chooser and holding it shows or hides what is already chosen; the
+        // keyboard's C and the gamepad's left face button are unchanged, and
+        // still toggle without offering a choice.
+        {
+            // Off the built strip rather than the local, which has already
+            // been moved into it - unlike the volume button, which is only
+            // ever borrowed for the button order.
+            let subtitles_button = controls.subtitles.clone();
+            let handle = controls.clone();
+            subtitles_button.connect_clicked(move |_| {
+                if handle.swallow_click.replace(false) {
+                    return;
+                }
+                if handle.row.get() == Row::Subtitles {
+                    handle.set_row(Row::Buttons);
+                } else {
+                    handle.open_subtitles();
+                }
+            });
+
+            let controller = gtk::EventControllerLegacy::new();
+            controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let handle = controls.clone();
+            controller.connect_event(move |_, event| {
+                match event.event_type() {
+                    gdk::EventType::ButtonPress => handle.press_hold(Hold::Subtitles),
+                    gdk::EventType::ButtonRelease if !handle.release_hold() => {
+                        handle.swallow_click.set(true);
+                    }
+                    _ => {}
+                }
+                glib::Propagation::Proceed
+            });
+            subtitles_button.add_controller(controller);
         }
 
         for (index, output) in controls.outputs.iter().enumerate() {
@@ -798,6 +946,11 @@ impl Controls {
             self.selected.set(false);
             self.select_output_row(None);
         }
+        if was == Row::Subtitles && row != Row::Subtitles {
+            self.subtitle_panel.set_reveal_child(false);
+            self.selected.set(false);
+            self.select_subtitle_row(None);
+        }
         match row {
             // Straight away, rather than flashing it up and waiting out the
             // timer: down is a request to be rid of it.
@@ -840,6 +993,26 @@ impl Controls {
                 self.panel.set_reveal_child(true);
                 self.flash(false);
             }
+            Row::Subtitles => {
+                self.timeline_active(false);
+                self.focused.set(SUBTITLES);
+                self.highlight(Some(SUBTITLES));
+                // Opened on whatever is already in force, and marked at once.
+                //
+                // Unlike the volume panel, which opens with nothing marked
+                // because it has no "current" to open on - marking a row there
+                // would mean the press that opened the panel was followed by
+                // one working a control nobody had moved to yet. A list of
+                // choices has both a place to start and a reason to say where,
+                // and leaving it unmarked meant pressing up before the list
+                // could be read at all.
+                self.subtitle_at
+                    .set(self.subtitle_current.get().unwrap_or(0));
+                self.selected.set(true);
+                self.select_subtitle_row(Some(self.subtitle_at.get()));
+                self.subtitle_panel.set_reveal_child(true);
+                self.flash(false);
+            }
         }
         // After the arm, not inside it: every one of them has just settled
         // where the strip is, and Row::None has already let go through hide().
@@ -856,6 +1029,13 @@ impl Controls {
         }
     }
 
+    /// Opens the subtitle chooser on whatever is already in force, with that
+    /// row marked and holding the focus, so it can be read and moved from
+    /// without a press spent finding out where it starts.
+    pub fn open_subtitles(self: &Rc<Self>) {
+        self.set_row(Row::Subtitles);
+    }
+
     /// Swaps the right-hand readout between the length and what is left of
     /// it, the same as clicking it does. Peeks the strip on the way, since
     /// otherwise a press that only changes a hidden readout looks like a
@@ -865,18 +1045,29 @@ impl Controls {
         self.peek();
     }
 
-    /// Whether a press on the volume button should be held rather than acted
-    /// on at once. Only from the button row: inside the panel the same press
-    /// silences the one output it is pointing at, and holding it there would
-    /// be two meanings on one button.
-    pub fn holds_press(&self) -> bool {
-        self.row.get() == Row::Buttons && self.focused.get() == VOLUME
+    /// Which button, if either, should have a press on it held rather than
+    /// acted on at once. Only from the button row: inside a panel the same
+    /// press works whatever the panel is pointing at, and holding it there
+    /// would be two meanings on one button.
+    pub fn holds_press(&self) -> Option<Hold> {
+        if self.row.get() != Row::Buttons {
+            return None;
+        }
+        match self.focused.get() {
+            VOLUME => Some(Hold::Volume),
+            SUBTITLES => Some(Hold::Subtitles),
+            _ => None,
+        }
     }
 
     /// Starts a hold. Repeats are ignored: a keyboard sends a press over and
     /// over while a key is down, and restarting the timer on each one would
     /// mean it never finished.
-    pub fn press_volume(self: &Rc<Self>) {
+    ///
+    /// What the hold does is settled here, where the button is still known,
+    /// rather than asked again when the timer fires: by then the strip may
+    /// have moved, and the answer would be about wherever it moved to.
+    pub fn press_hold(self: &Rc<Self>, which: Hold) {
         if self.holding.replace(true) {
             return;
         }
@@ -889,16 +1080,31 @@ impl Controls {
                 return;
             }
             handle.held.set(true);
-            handle.toggle_hush();
+            match which {
+                Hold::Volume => handle.toggle_hush(),
+                Hold::Subtitles => handle.toggle_subtitles(),
+            }
         });
     }
 
     /// Ends a hold, and says whether the release should still do the ordinary
     /// thing - which it should not, if the hold already did something else.
-    pub fn release_volume(self: &Rc<Self>) -> bool {
+    ///
+    /// Needs no [`Hold`]: the timer already captured which button it was, and
+    /// only one can be held at a time.
+    pub fn release_hold(self: &Rc<Self>) -> bool {
         self.holding.set(false);
         self.hold.set(self.hold.get() + 1);
         !self.held.replace(false)
+    }
+
+    /// Shows or hides the subtitle already chosen, without opening the list to
+    /// choose a different one. Flashing the strip is the caller's, since the
+    /// only confirmation is the icon dimming or lighting.
+    fn toggle_subtitles(&self) {
+        if let Some(handler) = self.on_toggle_subtitles.borrow().as_ref() {
+            handler();
+        }
     }
 
     /// Silences every output at once, or puts back what each was doing
@@ -1077,6 +1283,117 @@ impl Controls {
                     row.remove_css_class("tp-selected");
                 }
             }
+        }
+    }
+
+    /// Fills the chooser with what this video offers, and says which of them
+    /// is in force.
+    ///
+    /// Rebuilt whole rather than patched, because it is called whenever any of
+    /// it could have changed - a different film, a different choice - and the
+    /// list is a handful of labels. `current` counts into `entries`; `None`
+    /// means nothing in the list is in force, which the caller signals by
+    /// having no rows worth marking rather than by leaving one out.
+    pub fn set_subtitle_entries(self: &Rc<Self>, entries: &[String], current: Option<usize>) {
+        while let Some(child) = self.subtitle_list.first_child() {
+            self.subtitle_list.remove(&child);
+        }
+        let mut rows = Vec::new();
+        for (index, text) in entries.iter().enumerate() {
+            let row = subtitle_row(text);
+            name_it(&row, text);
+            if Some(index) == current {
+                row.add_css_class("tp-current");
+            }
+            // A pointer picks a row by clicking it, the same press a
+            // controller makes on the row it has moved to.
+            {
+                let handle = self.clone();
+                let gesture = gtk::GestureClick::new();
+                gesture.connect_released(move |_, _, _, _| handle.choose_subtitle(index));
+                row.add_controller(gesture);
+            }
+            self.subtitle_list.append(&row);
+            rows.push(row);
+        }
+        *self.subtitle_rows.borrow_mut() = rows;
+        self.subtitle_current.set(current);
+
+        if self.row.get() != Row::Subtitles {
+            self.subtitle_at.set(current.unwrap_or(0));
+            return;
+        }
+        // The list changed under an open chooser, which the subtitle toggle
+        // can do from a keyboard or a gamepad at any moment. The cursor stays
+        // where it was rather than being pulled back to what is in force -
+        // somebody is moving through the list, and moving it under them is
+        // the one thing that would be worse than not redrawing at all.
+        let at = self.subtitle_at.get().min(self.last_subtitle());
+        self.subtitle_at.set(at);
+        if self.selected.get() {
+            self.select_subtitle_row(Some(at));
+        }
+    }
+
+    /// The bottom row of the chooser, which is where a downward press leaves
+    /// it from. Zero for an empty list, which no press can reach anyway.
+    fn last_subtitle(&self) -> usize {
+        self.subtitle_rows.borrow().len().saturating_sub(1)
+    }
+
+    /// Whether the cursor is on the bottom row, which is what makes a downward
+    /// press leave the chooser rather than move within it.
+    pub fn at_last_subtitle(&self) -> bool {
+        self.subtitle_at.get() >= self.last_subtitle()
+    }
+
+    /// Moves through the chooser, stopping at either end rather than wrapping,
+    /// the same way the button row and the volume panel do.
+    pub fn move_subtitle(self: &Rc<Self>, delta: isize) {
+        if self.row.get() != Row::Subtitles {
+            return;
+        }
+        // Straight to moving. The volume panel spends the first press marking
+        // where it already is; this one opened already marked, so a press that
+        // only lit a row somebody could already see would be a press wasted.
+        let next = self.subtitle_at.get() as isize + delta;
+        if next < 0 || next > self.last_subtitle() as isize {
+            return;
+        }
+        self.subtitle_at.set(next as usize);
+        self.select_subtitle();
+        self.flash(false);
+    }
+
+    fn select_subtitle(&self) {
+        self.select_subtitle_row(Some(self.subtitle_at.get()));
+        // Everything that moves within the chooser comes through here, both
+        // the first press that takes hold of it and every one after.
+        self.announce_current();
+    }
+
+    /// Marks one row of the chooser and clears every other. `None` clears them
+    /// all. The row that is in force keeps its own mark throughout - see
+    /// `subtitle_current`.
+    fn select_subtitle_row(&self, at: Option<usize>) {
+        for (index, row) in self.subtitle_rows.borrow().iter().enumerate() {
+            if Some(index) == at {
+                row.add_css_class("tp-selected");
+            } else {
+                row.remove_css_class("tp-selected");
+            }
+        }
+    }
+
+    /// Takes a row and closes the chooser: picking one is a finished act, and
+    /// what somebody wants next is the film rather than the list.
+    ///
+    /// Back to the buttons rather than off the strip entirely, so the icon it
+    /// came out of is highlighted and can be seen to have changed.
+    fn choose_subtitle(self: &Rc<Self>, entry: usize) {
+        self.set_row(Row::Buttons);
+        if let Some(handler) = self.on_subtitle.borrow().as_ref() {
+            handler(entry);
         }
     }
 
@@ -1299,6 +1616,11 @@ impl Controls {
             self.selected.set(false);
             self.select_output_row(None);
         }
+        if self.row.get() == Row::Subtitles {
+            self.subtitle_panel.set_reveal_child(false);
+            self.selected.set(false);
+            self.select_subtitle_row(None);
+        }
         self.row.set(Row::None);
         self.highlight(None);
         self.timeline_active(false);
@@ -1329,6 +1651,10 @@ impl Controls {
             // press that opened the panel was followed by one that worked a
             // control nobody had moved to yet.
             Row::Buttons if self.focused.get() == VOLUME => self.open_volume(false),
+            // The same, and for the same reason: the click handler cannot
+            // tell a press from a pointer, and this is a button where the
+            // difference shows - a press may yet turn out to be a hold.
+            Row::Buttons if self.focused.get() == SUBTITLES => self.open_subtitles(),
             Row::Buttons => {
                 if let Some(button) = self.order.get(self.focused.get()) {
                     button.emit_clicked();
@@ -1346,13 +1672,20 @@ impl Controls {
                 Control::Volume => self.toggle_muted(self.output.get()),
                 Control::Sync => self.toggle_sync(self.output.get()),
             },
+            // The chooser opens on a marked row, so there is no unmarked state
+            // to press through: a press takes the row it is on. Pressing
+            // straight through therefore takes what is already playing, which
+            // costs nothing and closes the list - the same as pressing the
+            // icon a second time. See `App::choose_subtitle`, which is where
+            // choosing what is already chosen is made free.
+            Row::Subtitles => self.choose_subtitle(self.subtitle_at.get()),
             _ => {}
         }
     }
 
     /// Whether a press belongs to the strip rather than to playback.
     pub fn takes_activation(&self) -> bool {
-        matches!(self.row.get(), Row::Buttons | Row::Volume)
+        matches!(self.row.get(), Row::Buttons | Row::Volume | Row::Subtitles)
     }
 
     /// Points assistive technology at whatever the strip is on now.
@@ -1389,6 +1722,13 @@ impl Controls {
                 .outputs
                 .get(self.output.get())
                 .map(|output| output.row_for(self.control.get()).clone().upcast()),
+            // Straight to the row, since the chooser opens with one marked:
+            // what a press is about to take is the choice, not the icon.
+            Row::Subtitles => self
+                .subtitle_rows
+                .borrow()
+                .get(self.subtitle_at.get())
+                .map(|row| row.clone().upcast()),
         };
 
         name_it(
@@ -1479,13 +1819,26 @@ impl Controls {
         self.fullscreen.connect_clicked(move |_| handler());
     }
 
+    /// Told to show or hide whatever is already chosen. What holding the icon
+    /// means; tapping it opens the chooser instead, which is why this is a
+    /// stored handler rather than the button's click.
     pub fn connect_subtitles(&self, handler: impl Fn() + 'static) {
-        self.subtitles.connect_clicked(move |_| handler());
+        *self.on_toggle_subtitles.borrow_mut() = Some(Box::new(handler));
     }
 
-    /// Reflects what subtitles are doing: unavailable when the file has none
-    /// selected, and dimmed while they are switched off, so the button says
+    /// Told which row of the chooser was picked. See [`SubtitleHandler`].
+    pub fn connect_subtitle_chosen(&self, handler: impl Fn(usize) + 'static) {
+        *self.on_subtitle.borrow_mut() = Some(Box::new(handler));
+    }
+
+    /// Reflects what subtitles are doing: unavailable when the video offers
+    /// none at all, and dimmed while they are switched off, so the button says
     /// which state you are in rather than only offering a change.
+    ///
+    /// `available` is what the video *offers*, not what is playing. The button
+    /// now opens a list that includes turning them on, so a film started with
+    /// subtitles off must still be able to reach it - which asking whether
+    /// anything is attached would refuse.
     pub fn set_subtitles(&self, available: bool, showing: bool) {
         self.subtitles.set_sensitive(available);
         if available && showing {
@@ -1717,13 +2070,14 @@ impl Controls {
 
         let expected = self.generation.get().wrapping_add(1);
         self.generation.set(expected);
-        // Paused, or with the audio panel open. Lining an output up against
-        // the picture means listening for a while and changing nothing, which
-        // is exactly what the hide timer reads as having wandered off - and
+        // Paused, or with either panel open. Lining an output up against the
+        // picture means listening for a while and changing nothing, which is
+        // exactly what the hide timer reads as having wandered off - and
         // having the strip vanish mid-adjustment loses the row you were on.
-        // Closing the panel comes back through here and starts the countdown
+        // Reading down a list of languages is the same kind of pause.
+        // Closing either comes back through here and starts the countdown
         // again.
-        if paused || self.row.get() == Row::Volume {
+        if paused || matches!(self.row.get(), Row::Volume | Row::Subtitles) {
             return;
         }
 
