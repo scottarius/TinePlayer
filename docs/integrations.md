@@ -219,8 +219,29 @@ That split is deliberate. The person who needs the described soundtrack drives
 playback from their own device, rather than asking for the remote.
 
 Videos are always played as the original file, never transcoded, so every
-soundtrack and subtitle in it survives. What TinePlayer plays back is what your
-library holds.
+soundtrack and subtitle **inside** the video survives. Subtitle files your
+library keeps *beside* a video are offered too, fetched from the server.
+
+> [!IMPORTANT]
+> **Audio files beside a video cannot be played from Jellyfin.** A described
+> soundtrack that sits next to the film as its own file, rather than being one
+> of the tracks inside it, is not offered when casting. Subtitle files beside a
+> video are, which makes the gap look arbitrary; it is not ours.
+>
+> Jellyfin has no way to send a client one of those audio files on its own. It
+> lists the file and says it supports streaming it externally, but the only
+> address it will serve it from combines it with the video into a fresh
+> transcode of the whole film. TinePlayer will not ask a server to re-encode a
+> film to fetch one soundtrack, so the track is left out rather than offered
+> and quietly played wrong.
+>
+> Two ways round it today: play the video [from a path or
+> share](usage.md#video-sources) instead of casting it, where a described file
+> beside the video is found normally; or download that audio file and pick it
+> with [Browse...](usage.md#separate-audio-files).
+>
+> This needs a Jellyfin server change, which we intend to propose. Audio tracks
+> *inside* a video are unaffected, described ones included.
 
 #### Connecting
 

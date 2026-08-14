@@ -1017,11 +1017,30 @@ impl Streams {
         index_at(&self.subtitles, position)
     }
 
-    /// The streams that are files of their own, which have to be fetched
-    /// rather than selected.
-    pub fn external_audio(&self) -> impl Iterator<Item = &Stream> {
-        self.audio.iter().filter(|stream| stream.external)
-    }
+    // There is deliberately no `external_audio` counterpart to the subtitles
+    // below, and it is worth saying why rather than leaving the asymmetry to
+    // look like an oversight.
+    //
+    // **Jellyfin will not serve an external audio track to a client.** Proved
+    // against 10.11.11 on 2026-08-15, from both ends. Every `/Audio/` endpoint
+    // - `main.m3u8`, `stream.mp3`, `universal` - accepts `audioStreamIndex`,
+    // answers 200, plays perfectly, and returns the item's *default embedded*
+    // audio whatever is asked for: indices 2, 4, 0 (a subtitle) and 99 (which
+    // does not exist) all gave byte-identical output. The server's own source
+    // says why - `GetInputArgument` adds the external file as a second ffmpeg
+    // input on every path, and the audio-only command builders emit no `-map`
+    // at all (`mapArgs` is `state.IsOutputVideo ? ... : string.Empty`), so
+    // ffmpeg's default stream selection takes the embedded track instead.
+    //
+    // The one route that does work is `/Videos/{id}/main.m3u8`, which maps the
+    // external input explicitly - at the price of transcoding the entire film
+    // to extract one soundtrack, while the video is already direct-playing.
+    // **Ruled out by Scott on 2026-08-15**, and not a direction to revisit.
+    //
+    // So an external soundtrack in a library is unreachable, and offering one
+    // in the chooser would be offering a described track that silently plays a
+    // different one. When the upstream `-map` lands this becomes three lines
+    // and a URL; until then there is nothing honest to build.
 
     pub fn external_subtitles(&self) -> impl Iterator<Item = &Stream> {
         self.subtitles.iter().filter(|stream| stream.external)
