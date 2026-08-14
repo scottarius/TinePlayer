@@ -32,6 +32,151 @@ const CLIENT: &str = "TinePlayer";
 /// which has gone away does not hold a worker thread for ever.
 const TIMEOUT: u64 = 15;
 
+/// Where a Jellyfin server listens for the question below, and the question.
+///
+/// Both are Jellyfin's, not ours: this is the same broadcast its own
+/// applications make to fill their "select server" screen, and the string is
+/// matched literally at the far end.
+const DISCOVERY_PORT: u16 = 7359;
+const DISCOVERY_ASK: &[u8] = b"Who is JellyfinServer?";
+
+/// A server that answered the broadcast.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    /// What the server calls itself: "hoth". What a viewer picks from a list.
+    pub name: String,
+    /// A complete address, as the server states it - `http://192.168.3.2:8096`.
+    /// Taken as given rather than assembled here, since the server knows which
+    /// port and scheme it is actually reachable on.
+    pub address: String,
+    /// Jellyfin's own id for the server, used only to tell two replies from
+    /// one server apart from two servers.
+    pub id: String,
+}
+
+/// Every Jellyfin server that answers on the networks this machine is on.
+///
+/// **Sent to each interface's own broadcast address, not to 255.255.255.255.**
+/// Measured 2026-08-14 on a machine with VirtualBox, WSL and Hyper-V adapters
+/// beside the real one: the all-ones broadcast is routed out whichever
+/// interface wins on metric, which was a virtual adapter with nothing on it,
+/// and the server answered the moment the subnet's own broadcast address was
+/// used. The all-ones is sent as well, because it costs one datagram and
+/// covers a machine whose interfaces cannot be listed at all.
+///
+/// Failure is an empty list rather than an error. Every way this can go wrong -
+/// no interfaces, a socket the firewall will not open, a reply that is not
+/// JSON - has the same answer for the viewer, which is to type the address
+/// instead, and that is offered on the same panel whatever this returns.
+pub fn discover(wait: std::time::Duration) -> Vec<Found> {
+    let socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+        Ok(socket) => socket,
+        Err(e) => {
+            eprintln!("Couldn't open a socket to look for Jellyfin servers: {e}");
+            return Vec::new();
+        }
+    };
+    if let Err(e) = socket.set_broadcast(true) {
+        eprintln!("Couldn't broadcast to look for Jellyfin servers: {e}");
+        return Vec::new();
+    }
+    // Short, so the loop below notices the deadline rather than sitting in a
+    // read until something happens to arrive.
+    let _ = socket.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+
+    for address in broadcast_addresses() {
+        // One that fails is ordinary: a virtual adapter with nothing behind it
+        // refuses, and the interface that matters is usually another one.
+        let _ = socket.send_to(DISCOVERY_ASK, (address, DISCOVERY_PORT));
+    }
+
+    let deadline = std::time::Instant::now() + wait;
+    let mut found: Vec<Found> = Vec::new();
+    let mut buffer = [0u8; 1024];
+    while std::time::Instant::now() < deadline {
+        let Ok((size, _)) = socket.recv_from(&mut buffer) else {
+            continue;
+        };
+        let Some(server) = read_discovery(&buffer[..size]) else {
+            continue;
+        };
+        // One server answering on two interfaces is one server. Its id is what
+        // says so; the address in each reply may legitimately differ.
+        if !found.iter().any(|seen| seen.id == server.id) {
+            found.push(server);
+        }
+    }
+    // By name, so a list of them is in the same order every time rather than
+    // in whatever order the replies happened to arrive.
+    found.sort_by_key(|server| server.name.to_lowercase());
+    found
+}
+
+/// The broadcast address of every network this machine is on, and the
+/// all-ones as a fallback.
+fn broadcast_addresses() -> Vec<std::net::Ipv4Addr> {
+    let mut addresses = vec![std::net::Ipv4Addr::BROADCAST];
+    let interfaces = match if_addrs::get_if_addrs() {
+        Ok(interfaces) => interfaces,
+        Err(e) => {
+            eprintln!("Couldn't list this machine's networks: {e}");
+            return addresses;
+        }
+    };
+    for interface in interfaces {
+        // Nothing is listening on this machine's own loopback, and a link
+        // local address means an interface that never got a network.
+        if interface.is_loopback() || interface.is_link_local() {
+            continue;
+        }
+        let if_addrs::IfAddr::V4(v4) = interface.addr else {
+            // Jellyfin's discovery is IPv4 broadcast, which IPv6 has no
+            // equivalent of - it uses multicast instead, and Jellyfin does not
+            // listen for one.
+            continue;
+        };
+        // Worked out from the netmask when the system did not state one, which
+        // is the whole point of asking for the interfaces at all.
+        let broadcast = v4.broadcast.unwrap_or_else(|| {
+            let ip = v4.ip.octets();
+            let mask = v4.netmask.octets();
+            std::net::Ipv4Addr::new(
+                ip[0] | !mask[0],
+                ip[1] | !mask[1],
+                ip[2] | !mask[2],
+                ip[3] | !mask[3],
+            )
+        });
+        if !addresses.contains(&broadcast) {
+            addresses.push(broadcast);
+        }
+    }
+    addresses
+}
+
+/// One reply, or nothing.
+///
+/// A server with no name or no address is no use to a list somebody picks
+/// from, so it is dropped rather than shown as a blank row.
+fn read_discovery(reply: &[u8]) -> Option<Found> {
+    let body: serde_json::Value = serde_json::from_slice(reply).ok()?;
+    let text = |name: &str| {
+        body.get(name)
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let server = Found {
+        name: text("Name"),
+        address: normalize(&text("Address")),
+        id: text("Id"),
+    };
+    match server.name.is_empty() || server.address.is_empty() {
+        true => None,
+        false => Some(server),
+    }
+}
+
 /// A server this installation knows about, and the account it is signed in as
 /// if it currently is.
 ///
@@ -1455,6 +1600,41 @@ mod tests {
         assert_eq!(pairing.server, "http://hoth:8096");
     }
 
+    /// The reply this was written against, recorded from a live server on
+    /// 2026-08-14 so the shape is not something anybody has to guess at again.
+    #[test]
+    fn reads_a_servers_answer() {
+        let reply = br#"{"Address":"http://192.168.3.2:8096",
+            "Id":"191fdc0b078747329587e739ce34cbcc","Name":"hoth",
+            "EndpointAddress":null}"#;
+        assert_eq!(
+            read_discovery(reply),
+            Some(Found {
+                name: "hoth".to_string(),
+                address: "http://192.168.3.2:8096".to_string(),
+                id: "191fdc0b078747329587e739ce34cbcc".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_answer_that_says_nothing_useful_is_not_a_server() {
+        // Anything at all can arrive on a broadcast port.
+        assert_eq!(read_discovery(b"hello?"), None);
+        assert_eq!(read_discovery(br#"{"Name":"hoth"}"#), None);
+        assert_eq!(read_discovery(br#"{"Address":"http://hoth:8096"}"#), None);
+    }
+
+    /// The trailing slash goes here as well as on a typed address: this one
+    /// ends up in exactly the same field, and a server that states itself with
+    /// one would otherwise pair to a different string than the same server
+    /// typed by hand.
+    #[test]
+    fn a_discovered_address_is_normalized_too() {
+        let reply = br#"{"Address":"http://hoth:8096/","Id":"x","Name":"hoth"}"#;
+        assert_eq!(read_discovery(reply).unwrap().address, "http://hoth:8096");
+    }
+
     #[test]
     fn naming_a_different_server_drops_the_account() {
         let mut pairing = Pairing::new("http://hoth:8096");
@@ -1560,6 +1740,33 @@ mod tests {
     #[test]
     fn a_pairing_without_an_account_has_no_client() {
         assert!(Client::new(&Pairing::new("http://hoth:8096")).is_none());
+    }
+
+    /// Discovery against whatever is really on this network.
+    ///
+    /// Ignored by default because it needs a Jellyfin server on the same
+    /// subnet as the machine running it, which CI has not got. Worth running
+    /// by hand on each platform, because this is the one part of the client
+    /// whose behaviour is decided by the operating system's routing rather
+    /// than by anything here:
+    ///
+    /// ```text
+    /// cargo test jellyfin_discovery_live -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a Jellyfin server on this network"]
+    fn jellyfin_discovery_live() {
+        for address in broadcast_addresses() {
+            println!("    asking {address}");
+        }
+        let found = discover(std::time::Duration::from_secs(2));
+        for server in &found {
+            println!(
+                "    found {} at {} ({})",
+                server.name, server.address, server.id
+            );
+        }
+        assert!(!found.is_empty(), "no server answered on this network");
     }
 
     /// The whole pairing, against a real server, driven by this code rather

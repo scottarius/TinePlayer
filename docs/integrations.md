@@ -225,9 +225,13 @@ library holds.
 #### Connecting
 
 1. Open **Settings**, then **Jellyfin**.
-2. Press **Server Address** and enter the address of your server, as you would
-   type it into a browser: `http://jellyfin.local:8096`. If you leave out the
-   `http://`, it is assumed.
+2. Press **Server Address**. TinePlayer looks for servers on your network and
+   lists whatever answers, by name. Choose yours.
+
+   If nothing answers, press **Enter Address** and type it as you would into a
+   browser: `http://jellyfin.local:8096`. If you leave out the `http://`, it is
+   assumed. Typing it is also the way to reach a server on another network or
+   behind a VPN, which cannot be found by looking.
 3. Press **Connect**. A six character code appears.
 4. In a Jellyfin app you are already signed in to, open **Quick Connect** from
    the user menu and enter that code.
@@ -235,6 +239,13 @@ library holds.
 The code is approved on a device you have already signed in to, so no password
 is ever typed into TinePlayer. If your server's administrator has turned Quick
 Connect off, TinePlayer says so rather than offering another way in.
+
+Looking for servers sends one small UDP broadcast per network this machine is
+on, to port 7359, and listens for two seconds. That is Jellyfin's own
+discovery mechanism, the same one its apps use, and TinePlayer sends it only
+while that panel is open. Some networks block broadcasts between clients, and
+some firewalls will ask the first time: allowing it is only needed to find a
+server by looking, never to play from one.
 
 Once connected, TinePlayer appears as a player in the Jellyfin app whenever it
 is running. Playback positions are reported back to Jellyfin as the film plays,

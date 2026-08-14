@@ -8961,7 +8961,7 @@ impl App {
             // about where Kodi keeps its settings.
             Item::KodiAdd => self.show_kodi_folder(&crate::browser::home()),
             Item::KodiPermission(index) => self.show_kodi_permission(index),
-            Item::JellyfinServer => self.show_jellyfin_server(),
+            Item::JellyfinServer => self.show_jellyfin_servers(),
             Item::JellyfinConnect => self.show_jellyfin_connect(),
             Item::JellyfinDisconnect => self.confirm_jellyfin_disconnect(),
             Item::Notices => self.show_notices(),
@@ -10559,12 +10559,144 @@ impl App {
         self.show_settings();
     }
 
+    /// Which server, asked by looking rather than by asking.
+    ///
+    /// A Jellyfin server answers a broadcast on the local network, so on the
+    /// machine this is built for - a box wired to a television, driven by a
+    /// remote - the address need never be typed at all. Typing it is still
+    /// here, on the same panel, because a server reached across a VPN or on
+    /// another subnet will never answer a broadcast and its owner knows the
+    /// address perfectly well.
+    ///
+    /// The looking takes a couple of seconds, so the way past it is a button
+    /// rather than a row in the list: a list that grows rows while somebody is
+    /// moving through it moves the thing under their hand, which is the fault
+    /// the alignment panel and the settings pane were both corrected for.
+    fn show_jellyfin_servers(self: &Rc<Self>) {
+        /// Long enough for every server on a home network to answer twice
+        /// over, short enough to sit through. Jellyfin replies in
+        /// milliseconds; the wait is for a server that is busy or asleep,
+        /// not for the network.
+        const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+
+        let page = wizard_page("Jellyfin Server");
+        let hint = wizard_text("Looking for servers on this network...", false);
+        page.append(&hint);
+
+        let (scroller, list) = scrolling_list();
+        name_it(&list, "Jellyfin servers");
+        // As tall as the servers need and no taller, the way the alignment
+        // panel's track list is: a panel the height of the window for one row
+        // is the opposite of what a short question wants.
+        scroller.set_vexpand(false);
+        scroller.set_propagate_natural_height(true);
+        scroller.set_max_content_height((240.0 * self.scale.get()).round() as i32);
+        page.append(&scroller);
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        let typed = gtk::Button::with_label("Enter Address");
+        typed.add_css_class("tp-button");
+        buttons.append(&cancel);
+        buttons.append(&typed);
+        page.append(&buttons);
+
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_jellyfin_settings();
+            });
+        }
+        {
+            let app = self.clone();
+            typed.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.show_jellyfin_server();
+            });
+        }
+
+        self.wire_navigation(&list, &[], &[cancel.clone(), typed.clone()]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinPanel;
+        self.window.set_child(Some(&self.modal(&page)));
+        // Nothing in the list to land on yet, and the escape from waiting is
+        // the button beside Cancel.
+        typed.grab_focus();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::jellyfin::discover(LOOK_FOR));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            let found = match receiver.try_recv() {
+                Ok(found) => found,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            // Gone: cancelled, or already off typing an address. A panel that
+            // has been taken out of the window has no root, which is a
+            // cheaper question than remembering which screen replaced it.
+            if page.root().is_none() {
+                return glib::ControlFlow::Break;
+            }
+
+            if found.is_empty() {
+                hint.set_text(
+                    "No servers answered on this network. Enter the address instead, which is also what a server on another network or behind a VPN needs.",
+                );
+                return glib::ControlFlow::Break;
+            }
+
+            hint.set_text("Choose the server to connect to.");
+            for server in &found {
+                // The name is what somebody recognises and the address is what
+                // tells two of them apart, so the row carries both.
+                let text = format!("{}  ({})", server.name, server.address);
+                let row = chooser_row(&text);
+                row.set_max_width_chars(ALIGN_PANEL_CHARS);
+                append_named(&list, &row, &text);
+            }
+            {
+                let app = app.clone();
+                let found = found.clone();
+                list.connect_row_activated(move |_, row| {
+                    let Some(server) = found.get(row.index().max(0) as usize) else {
+                        return;
+                    };
+                    app.sounds.borrow().click();
+                    app.save_jellyfin_server(&server.address);
+                });
+            }
+            // Only now is there anything to land on. The panel opened on the
+            // button beside Cancel, which is where somebody who already knows
+            // their address will have gone - so this takes the focus only if
+            // nothing has been touched since.
+            if let Some(row) = list.row_at_index(0) {
+                list.select_row(Some(&row));
+                if typed.has_focus() {
+                    settle_on(&row);
+                }
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
     /// Where the server is, typed.
     ///
-    /// The one thing about Jellyfin that cannot be discovered: a server
-    /// announces itself on the local network, but TinePlayer is as likely to
-    /// be pointed at one through a hostname or across a VPN. Modelled on the
-    /// address panel the video browser opens, because it is the same act.
+    /// The way to a server that will never answer a broadcast - one on another
+    /// subnet, or reached by hostname across a VPN - and the way past a
+    /// network where discovery is blocked. Modelled on the address panel the
+    /// video browser opens, because it is the same act.
     fn show_jellyfin_server(self: &Rc<Self>) {
         let page = wizard_page("Jellyfin Server");
         page.append(&wizard_text(
