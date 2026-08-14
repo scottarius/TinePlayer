@@ -2205,6 +2205,15 @@ impl Controls {
         output
             .mute
             .set_icon_name(volume_icon_name(output.level.value(), output.muted.get()));
+        // And on the strip, where this output's own icon is the only thing that
+        // can say it. Its own mute rather than the blanket silence, which
+        // belongs to the speaker beside them: what these report is what each
+        // output is set to, which is exactly what a hush leaves alone.
+        if output.muted.get() {
+            output.button.add_css_class("tp-soundtrack-muted");
+        } else {
+            output.button.remove_css_class("tp-soundtrack-muted");
+        }
         self.draw_master();
     }
 

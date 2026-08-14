@@ -13475,6 +13475,13 @@ fn style_css(scale: f64) -> String {
         /* Taller than a stock entry: this is the one thing on its panel, and
            it is read from the same distance as everything else. */
         .tp-path {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
+        /* A soundtrack icon whose output is silenced, faded the same way and
+           for the same reason as the subtitle mark: the button reports the
+           state as well as offering to change it. It is the only thing on
+           screen that can, now that the levels have a menu of their own -
+           holding one of these mutes that output, and without this the gesture
+           worked and looked as though it had not. */
+        .tp-soundtrack-muted {{ opacity: 0.45; }}
         .tp-subtitles-button {{ opacity: 0.45; }}
         .tp-subtitles-on {{ opacity: 1; }}
         .tp-subtitles-button:disabled {{ opacity: 0.2; }}
