@@ -228,6 +228,11 @@ pub struct Config {
     pub primary_volume: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_volume: Option<f64>,
+    /// One level over both outputs, which each output's own level is a
+    /// fraction of. Kept because it is a setting somebody chose, unlike
+    /// silencing everything for a knock at the door, which lasts the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_volume: Option<f64>,
     #[serde(default)]
     pub primary_muted: bool,
     #[serde(default)]
@@ -359,6 +364,7 @@ impl Default for Config {
             secondary_language: None,
             primary_volume: None,
             secondary_volume: None,
+            master_volume: None,
             primary_muted: false,
             secondary_muted: false,
             primary_offset_ms: None,
@@ -468,6 +474,16 @@ impl Config {
             _ => self.secondary_volume,
         };
         stored.unwrap_or(1.0).clamp(0.0, 1.0)
+    }
+
+    /// The level over both outputs. Full unless somebody has moved it, so a
+    /// configuration that predates it plays at exactly the level it always did.
+    pub fn master_volume(&self) -> f64 {
+        self.master_volume.unwrap_or(1.0).clamp(0.0, 1.0)
+    }
+
+    pub fn set_master_volume(&mut self, level: f64) {
+        self.master_volume = Some((level.clamp(0.0, 1.0) * 100.0).round() / 100.0);
     }
 
     pub fn muted(&self, role: &str) -> bool {

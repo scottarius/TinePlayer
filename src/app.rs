@@ -956,6 +956,12 @@ pub struct App {
     /// produces a change per pixel, and each one would otherwise be a write to
     /// disk.
     volume_save_pending: Cell<bool>,
+    /// Whether everything is silenced at once. Held here rather than in the
+    /// configuration, and separately from each output's own mute, because it is
+    /// a layer over them: the outputs go on being set to whatever they were set
+    /// to underneath it, and a film that started silent because of a door
+    /// knocked on last week would be a bug rather than a memory.
+    hushed: Cell<bool>,
     /// The state of a hold on the gamepad's left face button, which silences
     /// everything rather than changing the subtitles. The same button for
     /// both because they are the same question - whether you are being given
@@ -1106,6 +1112,7 @@ impl App {
             session_resume: RefCell::new(None),
             subtitles_hidden: Cell::new(false),
             volume_save_pending: Cell::new(false),
+            hushed: Cell::new(false),
             subtitles_hold: Cell::new(0),
             subtitles_holding: Cell::new(false),
             subtitles_held: Cell::new(false),
@@ -2469,10 +2476,11 @@ impl App {
             Row::None => controls.set_row(Row::Buttons),
             Row::Buttons => controls.set_row(Row::Timeline),
             Row::Timeline => {}
-            // The panel opens upward out of its button, so up climbs the list
-            // of outputs and stops at the top of it.
+            // The menu opens upward out of its button, so up climbs its rows
+            // and stops at the top of them.
             Row::Volume => controls.move_output(-1),
-            // The chooser opens the same way, so up climbs it likewise.
+            // A chooser opens the same way, so up climbs it likewise.
+            Row::Audio => controls.move_audio(-1),
             Row::Subtitles => controls.move_subtitle(-1),
         }
     }
@@ -2491,7 +2499,9 @@ impl App {
         // panic gets written.
         let controls = self.controls.borrow().clone();
         match controls {
-            Some(controls) if matches!(controls.row(), Row::Volume | Row::Subtitles) => {
+            Some(controls)
+                if matches!(controls.row(), Row::Volume | Row::Audio | Row::Subtitles) =>
+            {
                 controls.set_row(Row::Buttons);
             }
             _ => self.go_back(),
@@ -2507,13 +2517,22 @@ impl App {
         match controls.row() {
             Row::Timeline => controls.set_row(Row::Buttons),
             Row::Buttons => controls.set_row(Row::None),
-            // Down the list of outputs, and off the bottom of it back to the
-            // button the panel came out of.
+            // Down the rows of the menu, and off the bottom of it back to the
+            // speaker the menu came out of.
             Row::Volume => {
                 if controls.at_last_output() {
                     controls.set_row(Row::Buttons);
                 } else {
                     controls.move_output(1);
+                }
+            }
+            // Down the soundtracks, and off the bottom back to the icon the
+            // chooser came out of.
+            Row::Audio => {
+                if controls.at_last_audio() {
+                    controls.set_row(Row::Buttons);
+                } else {
+                    controls.move_audio(1);
                 }
             }
             // Down the list of subtitles, and off the bottom of it back to
@@ -2641,7 +2660,7 @@ impl App {
         // Swallowed rather than passed on: there is nowhere sideways to go in
         // a list, and seeking the film out from under an open chooser would be
         // worse than doing nothing.
-        if row == Row::Subtitles {
+        if matches!(row, Row::Subtitles | Row::Audio) {
             return;
         }
         if row == Row::Buttons || row == Row::Volume {
@@ -7250,6 +7269,48 @@ impl App {
         playback.set_offset_ms(role, self.offset_for(role));
     }
 
+    /// Sends an output's level to the pipeline: what that output is set to,
+    /// times the master over both of them.
+    ///
+    /// The one road to a sink's level, for the reason `push_offset` is the one
+    /// road to its delay. Two outputs and a master mean two numbers behind
+    /// every level, and every place that rebuilt the sum by hand would be a
+    /// place free to leave the master out - which sounds exactly like a level
+    /// that ignores the control somebody just moved.
+    fn push_volume(&self, role: &str) {
+        let level = self.config.borrow().volume(role);
+        self.push_volume_at(role, level);
+    }
+
+    /// The same, for a level that is not in the configuration - which is any
+    /// level that is not being kept, such as everything silenced for a knock at
+    /// the door.
+    fn push_volume_at(&self, role: &str, level: f64) {
+        let level = self.effective(level);
+        if let Some(playback) = self.playback.borrow().as_ref() {
+            playback.set_volume(role, level);
+        }
+    }
+
+    /// What a level actually plays at once the master over both outputs is
+    /// taken into account. The only place the two are multiplied together.
+    fn effective(&self, level: f64) -> f64 {
+        level * self.config.borrow().master_volume()
+    }
+
+    /// Sends whether an output is actually silent: whether it is muted in its
+    /// own right, or everything is.
+    ///
+    /// The two are kept apart all the way down to here, which is what lets the
+    /// menu go on showing each output's own state while everything is quiet.
+    /// `muted` is passed in rather than read back, because a silence nobody is
+    /// keeping never reaches the configuration to be read from.
+    fn push_mute(&self, role: &str, muted: bool) {
+        if let Some(playback) = self.playback.borrow().as_ref() {
+            playback.set_muted(role, muted || self.hushed.get());
+        }
+    }
+
     /// The same, for whatever is playing now, if anything is. Cloned out of
     /// the cell rather than borrowed across the call, since what it reaches
     /// takes the same borrows.
@@ -10489,6 +10550,14 @@ impl App {
                     &outputs,
                 );
                 controls.set_levels(&levels);
+                // The pipeline built each output's level from that output's own
+                // setting, which is all the configuration told it. The master is
+                // applied here, once, before a frame has played - the same shape
+                // as the alignment baseline below it.
+                controls.set_master_level(self.config.borrow().master_volume());
+                for (role, _) in &outputs {
+                    playback.set_volume(role, self.effective(self.config.borrow().volume(role)));
+                }
                 // What the configuration holds for each output, so the panel
                 // opens showing the shift already in force rather than zero.
                 let syncs: Vec<(&str, f64, bool)> = {
@@ -10506,10 +10575,18 @@ impl App {
                     // chore rather than a control.
                     let app = self.clone();
                     controls.connect_volume(move |role, level, muted, persist| {
-                        if let Some(playback) = app.playback.borrow().as_ref() {
-                            playback.set_volume(role, level);
-                            playback.set_muted(role, muted);
-                        }
+                        // Through the one function that knows about the master,
+                        // rather than sent straight to the sink from here. What
+                        // an output plays at is its own level times the master,
+                        // and a second place doing that arithmetic is how the
+                        // two come to disagree - the same lesson `push_offset`
+                        // is already the answer to.
+                        //
+                        // Given the level rather than reading it back out of the
+                        // configuration, because a level that is not being kept
+                        // never reaches the configuration at all.
+                        app.push_volume_at(role, level);
+                        app.push_mute(role, muted);
                         if !persist {
                             return;
                         }
@@ -10517,6 +10594,33 @@ impl App {
                             let mut config = app.config.borrow_mut();
                             config.set_volume(role, level);
                             config.set_muted(role, muted);
+                        }
+                        app.save_volume_soon();
+                    });
+
+                    // The master moves both outputs, so both are pushed again
+                    // rather than one being singled out. Kept like a level and
+                    // unlike a hush: somebody chose it, and a film that started
+                    // at half volume because of last week is a setting, where a
+                    // film that started silent would be a bug.
+                    // Silencing everything is a layer over the outputs rather
+                    // than a change to them, so what comes back is only whether
+                    // the layer is on. Each output is then pushed at its own
+                    // state underneath it, which is what it goes on showing.
+                    let app = self.clone();
+                    controls.connect_hush(move |hushed| {
+                        app.hushed.set(hushed);
+                        for role in ["primary", "secondary"] {
+                            let muted = app.config.borrow().muted(role);
+                            app.push_mute(role, muted);
+                        }
+                    });
+
+                    let app = self.clone();
+                    controls.connect_master(move |level| {
+                        app.config.borrow_mut().set_master_volume(level);
+                        for role in ["primary", "secondary"] {
+                            app.push_volume(role);
                         }
                         app.save_volume_soon();
                     });
@@ -11153,6 +11257,21 @@ fn heading_label(text: &str) -> gtk::Label {
 /// there is nothing for a second version to adapt to.
 pub fn subtitles_image(scale: f64) -> gtk::Image {
     const ICON: &[u8] = include_bytes!("../data/ui/subtitles.png");
+    marked_image(ICON, 26.0 * scale)
+}
+
+/// The mark on the button that opens one output's soundtracks.
+///
+/// A note rather than a speaker, which is the whole reason the soundtracks and
+/// the levels are on separate buttons: two speakers side by side say nothing
+/// about which is which, and this one is a choice about the film rather than
+/// about how loud it is.
+///
+/// Bundled rather than taken from the icon theme, like every other mark on this
+/// strip: GStreamer's Windows bundle ships no icon theme at all, and a missing
+/// icon draws as a broken-image box.
+pub fn soundtrack_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/soundtrack.png");
     marked_image(ICON, 26.0 * scale)
 }
 
@@ -13065,6 +13184,26 @@ fn style_css(scale: f64) -> String {
             padding: {crumb_pad}px;
             border-radius: {radius}px;
         }}
+        /* Less underneath a block than above it. The panel already spaces the
+           groups apart and pads its own bottom edge, so a group's own padding
+           was a third helping and left each set of bars floating well clear of
+           the divider under it. */
+        /* Written against the rule above rather than beside it. A bare
+           `.tp-menu-group` is one class where that is a class and a type, so it
+           loses on specificity and the padding never changes - which looks
+           exactly like a rule that was never added. */
+        .tp-volume-panel > box.tp-menu-group {{ padding-bottom: 0px; }}
+        /* The last group is the panel's bottom edge rather than a join between
+           two blocks, so it keeps what the others give up: the space under the
+           final bar answers the space above the first heading, where the space
+           between groups only has to separate them.
+
+           An explicit class rather than `:last-child`, because a selector GTK
+           will not parse is discarded whole and says so only in the log - and
+           the failure looks identical to a rule nobody added. Later in the
+           sheet than the rule above, which is what settles the tie between two
+           selectors of the same weight. */
+        .tp-volume-panel > box.tp-menu-foot {{ padding-bottom: {crumb_pad}px; }}
         .tp-volume-panel label {{ color: #ffffff; }}
         /* The same size as the transport icons, which are drawn to be read
            from a sofa rather than a desk. A button built from an icon name
