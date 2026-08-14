@@ -24,7 +24,14 @@
           "hidden" : false,
           "image-name" : "app.tineplayer.TinePlayer.svg",
           "name" : "app.tineplayer.TinePlayer",
-          "opacity" : 1
+          "opacity" : 1,
+          "position" : {
+            "scale" : 8,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         }
       ],
       "shadow" : {

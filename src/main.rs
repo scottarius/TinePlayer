@@ -26,6 +26,7 @@ mod jellyfin;
 mod kodi;
 mod kodi_setup;
 mod languages;
+mod lockup;
 mod media_keys;
 mod metadata;
 mod nfo;
