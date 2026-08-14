@@ -2243,6 +2243,26 @@ impl Controls {
         self.flash(false);
     }
 
+    /// Puts the master where something other than a hand asked for it - a
+    /// remote, today - by moving the bar and then taking the same road a hand
+    /// would. The person in the room and the person with the phone drive one
+    /// control rather than two paths to the same setting.
+    pub fn master_to(self: &Rc<Self>, level: f64) {
+        let level = level.clamp(0.0, 1.0);
+        self.master.set_value(level);
+        self.set_master(level);
+    }
+
+    /// Silences everything, or lets it go, when told which rather than to
+    /// swap. Jellyfin offers Mute and Unmute as well as a toggle, and a remote
+    /// that says "mute" while everything is already silent should leave it
+    /// silent rather than turning the film back on.
+    pub fn set_hushed(self: &Rc<Self>, hushed: bool) {
+        if self.hushed.get() != hushed {
+            self.toggle_hush();
+        }
+    }
+
     /// Where the master stands, which playback sets from the configuration
     /// before a frame has played.
     pub fn set_master_level(&self, level: f64) {

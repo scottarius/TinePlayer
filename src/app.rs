@@ -962,6 +962,10 @@ pub struct App {
     /// to underneath it, and a film that started silent because of a door
     /// knocked on last week would be a bug rather than a memory.
     hushed: Cell<bool>,
+    /// Whether a report of what the sound is doing is already on its way to
+    /// Jellyfin. Dragging a bar produces a change per pixel, and each one would
+    /// otherwise be a request across the house.
+    sound_report_pending: Cell<bool>,
     /// The state of a hold on the gamepad's left face button, which silences
     /// everything rather than changing the subtitles. The same button for
     /// both because they are the same question - whether you are being given
@@ -1113,6 +1117,7 @@ impl App {
             subtitles_hidden: Cell::new(false),
             volume_save_pending: Cell::new(false),
             hushed: Cell::new(false),
+            sound_report_pending: Cell::new(false),
             subtitles_hold: Cell::new(0),
             subtitles_holding: Cell::new(false),
             subtitles_held: Cell::new(false),
@@ -2108,10 +2113,129 @@ impl App {
                 }
                 self.publish_now_playing();
             }
+            // Everything below drives the controls rather than the pipeline,
+            // which is what keeps one answer to each of these questions: the
+            // remote moves the same master and picks from the same lists the
+            // person in the room does, and the strip is woken so what it did is
+            // visible rather than mysterious.
+            Command::SetVolume(level) => {
+                if let Some(controls) = self.controls.borrow().clone() {
+                    controls.master_to(level);
+                }
+                self.wake_controls();
+            }
+            Command::Mute | Command::Unmute | Command::ToggleMute => {
+                if let Some(controls) = self.controls.borrow().clone() {
+                    match command {
+                        Command::Mute => controls.set_hushed(true),
+                        Command::Unmute => controls.set_hushed(false),
+                        _ => controls.toggle_hush(),
+                    }
+                }
+                self.wake_controls();
+            }
+            Command::SetAudioStream(index) => {
+                if let Some(row) = self.library_audio_row(index) {
+                    self.choose_audio(Role::Primary.key(), row);
+                    self.wake_controls();
+                }
+            }
+            Command::SetSubtitleStream(index) => {
+                if let Some(row) = self.library_subtitle_row(index) {
+                    self.choose_subtitle(row);
+                    self.wake_controls();
+                }
+            }
             // The pairing was revoked while we held it. Everything about this
             // server is now wrong, so it is put down rather than retried.
             Command::SignedOut => self.jellyfin_signed_out(),
         }
+    }
+
+    /// What a controller should show: the master, the blanket silence, and what
+    /// the first output and the subtitles are playing, in Jellyfin's numbering.
+    ///
+    /// Worked out here rather than remembered as it changes, because every
+    /// answer already lives somewhere - and a second copy kept in step by hand
+    /// is how a remote comes to show something the player is not doing.
+    fn reported_sound(&self) -> crate::jellyfin::Sound {
+        use crate::subtitles::SubtitleChoice;
+        let item = self.jellyfin_item.borrow();
+        let streams = item.as_ref().map(|item| &item.streams);
+
+        let audio = match (
+            streams,
+            self.playback
+                .borrow()
+                .as_ref()
+                .and_then(|playback| playback.playing_on(Role::Primary.key())),
+        ) {
+            (Some(streams), Some(crate::pipeline::Playing::Track(position))) => {
+                streams.audio_index(position)
+            }
+            // A separate audio file, which the library has no number for.
+            _ => None,
+        };
+
+        let subtitle = match self.subtitle.borrow().as_ref() {
+            // Off is an answer, and the one a controller most needs told: it is
+            // what its selector falls back to showing when it is told nothing.
+            None => Some(-1),
+            // A file on the server, which already carries Jellyfin's own number.
+            Some(SubtitleChoice::Library(index)) => Some(*index as i32),
+            Some(SubtitleChoice::Embedded(position)) => streams
+                .and_then(|streams| streams.subtitle_index(*position))
+                .map(|index| index as i32),
+            // A file on this machine, which a cast video does not have.
+            Some(_) => None,
+        };
+
+        crate::jellyfin::Sound {
+            level: self.config.borrow().master_volume(),
+            muted: self.hushed.get(),
+            audio,
+            subtitle,
+        }
+    }
+
+    /// Which row of the first output's soundtrack list one of Jellyfin's stream
+    /// numbers is.
+    ///
+    /// That list is the film's own tracks in order and nothing else - the first
+    /// output has no "None" row - so a position among the embedded tracks is
+    /// the row. `None` for a stream that is external or is not audio, which is
+    /// a remote asking for something this list cannot offer rather than an
+    /// error worth reporting.
+    fn library_audio_row(&self, index: u32) -> Option<usize> {
+        let item = self.jellyfin_item.borrow();
+        let position = item.as_ref()?.streams.audio_position(index)?;
+        Some(position as usize)
+    }
+
+    /// The same for the subtitle chooser, whose first row is Off and whose rest
+    /// follow `subtitle_options` in order.
+    ///
+    /// Matched against the options themselves rather than counted, because that
+    /// list holds two kinds of thing at once: streams inside the container,
+    /// which Jellyfin numbers among everything else, and files beside it on the
+    /// server, which carry Jellyfin's own number already. Counting would put
+    /// one kind out of step with the other.
+    fn library_subtitle_row(&self, index: Option<u32>) -> Option<usize> {
+        use crate::subtitles::Subtitle;
+        // Off is a row like any other, and the one a remote can always reach.
+        let Some(index) = index else { return Some(0) };
+        let embedded = self
+            .jellyfin_item
+            .borrow()
+            .as_ref()
+            .and_then(|item| item.streams.subtitle_position(index));
+        let options = self.subtitle_options.borrow();
+        let at = options.iter().position(|option| match option {
+            Subtitle::Library { index: at, .. } => *at == index,
+            Subtitle::Embedded { index: at, .. } => Some(*at) == embedded,
+            _ => false,
+        })?;
+        Some(at + 1)
     }
 
     fn is_playing(&self) -> bool {
@@ -2241,6 +2365,7 @@ impl App {
             .map(|position| position.nseconds())
             .unwrap_or(0);
         let paused = !self.is_playing();
+        let sound = self.reported_sound();
 
         // A new name for the viewing when it starts, and the same one after.
         if moment == JellyfinMoment::Started {
@@ -2256,8 +2381,10 @@ impl App {
         // film is playing. Nothing waits on the answer.
         std::thread::spawn(move || {
             let result = match moment {
-                JellyfinMoment::Started => client.started(&id, &play_session, position),
-                JellyfinMoment::Progress => client.progress(&id, &play_session, position, paused),
+                JellyfinMoment::Started => client.started(&id, &play_session, position, sound),
+                JellyfinMoment::Progress => {
+                    client.progress(&id, &play_session, position, paused, sound)
+                }
                 JellyfinMoment::Stopped => client.stopped(&id, &play_session, position),
             };
             if let Err(e) = result {
@@ -2634,6 +2761,32 @@ impl App {
     /// Writes the configuration out a second after the last volume change,
     /// rather than on each one. The level itself takes effect immediately;
     /// this is only about remembering it.
+    /// Tells a controller what the sound is doing now, rather than leaving it
+    /// to the next scheduled report.
+    ///
+    /// Those go every ten seconds, which is right for a position that a phone
+    /// can interpolate between and wrong for a level: moving the master in the
+    /// room left the slider on somebody's phone showing the old value for most
+    /// of a minute, which reads as a remote that has lost the player rather
+    /// than one that is a moment behind. Reported by Scott, 2026-08-14.
+    ///
+    /// The same debounce the configuration write uses, and for the same reason,
+    /// with a shorter wait because this one is about what somebody is watching
+    /// happen on a second screen.
+    fn report_sound_soon(self: &Rc<Self>) {
+        if self.sound_report_pending.replace(true) {
+            return;
+        }
+        let app = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            app.sound_report_pending.set(false);
+            // The scheduled report starts its ten seconds again from here, so a
+            // drag does not leave one following a moment behind it.
+            app.jellyfin_reported.set(0);
+            app.report_to_jellyfin(JellyfinMoment::Progress);
+        });
+    }
+
     fn save_volume_soon(self: &Rc<Self>) {
         if self.volume_save_pending.replace(true) {
             return;
@@ -10614,6 +10767,7 @@ impl App {
                             let muted = app.config.borrow().muted(role);
                             app.push_mute(role, muted);
                         }
+                        app.report_sound_soon();
                     });
 
                     let app = self.clone();
@@ -10623,6 +10777,7 @@ impl App {
                             app.push_volume(role);
                         }
                         app.save_volume_soon();
+                        app.report_sound_soon();
                     });
 
                     // Always kept, unlike a level silenced for a knock at the

@@ -311,7 +311,22 @@ impl Client {
                 // per output and Jellyfin offers one slider, so there is no
                 // honest answer to give it - and the track selectors were
                 // offered without anything behind them at all.
-                "SupportedCommands": ["Play", "PlayState"],
+                //
+                // Volume and the two selectors went in once there was something
+                // behind each of them: one master over both outputs for the
+                // slider, and the choosers on the control strip for the tracks.
+                // Each drives the same thing the person in the room drives
+                // rather than a second path to the same setting.
+                "SupportedCommands": [
+                    "Play",
+                    "PlayState",
+                    "SetVolume",
+                    "Mute",
+                    "Unmute",
+                    "ToggleMute",
+                    "SetAudioStreamIndex",
+                    "SetSubtitleStreamIndex",
+                ],
                 "SupportsMediaControl": true,
                 "SupportsPersistentIdentifier": true,
             }),
@@ -480,10 +495,14 @@ impl Client {
     ///
     /// `play_session` ties the three reports together as one viewing, so it
     /// must be the same string for started, progress and stopped.
-    pub fn started(&self, id: &str, play_session: &str, position_ns: u64) -> Result<(), Error> {
-        self.post(
-            "/Sessions/Playing",
-            serde_json::json!({
+    pub fn started(
+        &self,
+        id: &str,
+        play_session: &str,
+        position_ns: u64,
+        sound: Sound,
+    ) -> Result<(), Error> {
+        let mut body = serde_json::json!({
                 "ItemId": id,
                 // Direct play, so the source is the item itself.
                 "MediaSourceId": id,
@@ -492,9 +511,11 @@ impl Client {
                 "PositionTicks": to_ticks(position_ns),
                 "CanSeek": true,
                 "IsPaused": false,
-                "IsMuted": false,
-            }),
-        )
+                "IsMuted": sound.muted,
+                "VolumeLevel": sound.percent(),
+        });
+        sound.add_streams(&mut body);
+        self.post("/Sessions/Playing", body)
     }
 
     pub fn progress(
@@ -503,10 +524,9 @@ impl Client {
         play_session: &str,
         position_ns: u64,
         paused: bool,
+        sound: Sound,
     ) -> Result<(), Error> {
-        self.post(
-            "/Sessions/Playing/Progress",
-            serde_json::json!({
+        let mut body = serde_json::json!({
                 "ItemId": id,
                 "MediaSourceId": id,
                 "PlaySessionId": play_session,
@@ -514,9 +534,11 @@ impl Client {
                 "PositionTicks": to_ticks(position_ns),
                 "CanSeek": true,
                 "IsPaused": paused,
-                "IsMuted": false,
-            }),
-        )
+                "IsMuted": sound.muted,
+                "VolumeLevel": sound.percent(),
+        });
+        sound.add_streams(&mut body);
+        self.post("/Sessions/Playing/Progress", body)
     }
 
     pub fn stopped(&self, id: &str, play_session: &str, position_ns: u64) -> Result<(), Error> {
@@ -593,6 +615,55 @@ fn from_ticks(value: &serde_json::Value) -> Option<u64> {
 
 fn to_ticks(nanoseconds: u64) -> u64 {
     nanoseconds / 100
+}
+
+/// What a controller shows about the player: how loud it is and what it is
+/// playing.
+///
+/// Reported as well as obeyed. A remote that can set something but is never
+/// told where it ended up shows whatever it last sent - which is why the
+/// subtitle selector on a phone read "None" however many times a subtitle had
+/// been chosen, from the phone or from the sofa. Reported by Scott, 2026-08-14.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Sound {
+    /// The master, as a fraction of full.
+    pub level: f64,
+    /// Whether everything is silenced at once. Each output's own mute is
+    /// deliberately not folded in: it belongs to one of two people listening,
+    /// where this is the state of the room.
+    pub muted: bool,
+    /// Jellyfin's own number for the soundtrack the first output is playing,
+    /// and `None` when it is playing something the library has no number for -
+    /// a separate audio file, say.
+    ///
+    /// The first output, because that is the one the remote drives. Reporting
+    /// the second would tell a controller that its own last command had been
+    /// ignored.
+    pub audio: Option<u32>,
+    /// The same for subtitles, where `-1` is Jellyfin's way of saying none and
+    /// is a real answer rather than a missing one.
+    pub subtitle: Option<i32>,
+}
+
+impl Sound {
+    /// Jellyfin counts volume in whole percent.
+    fn percent(&self) -> u32 {
+        (self.level.clamp(0.0, 1.0) * 100.0).round() as u32
+    }
+
+    /// Adds what is playing to a report, leaving out anything the library has
+    /// no number for rather than guessing at one.
+    fn add_streams(&self, body: &mut serde_json::Value) {
+        let Some(body) = body.as_object_mut() else {
+            return;
+        };
+        if let Some(index) = self.audio {
+            body.insert("AudioStreamIndex".into(), index.into());
+        }
+        if let Some(index) = self.subtitle {
+            body.insert("SubtitleStreamIndex".into(), index.into());
+        }
+    }
 }
 
 /// One stream of a video, as the library analysed it.
@@ -720,6 +791,33 @@ impl Streams {
         }
     }
 
+    /// Where Jellyfin's own stream number sits among the embedded audio
+    /// tracks, which is the number the pipeline selects by.
+    ///
+    /// `None` for a stream that is external, or is not audio at all. Both are
+    /// answers rather than failures: an external track is not in the container
+    /// to be selected, and a controller is free to send anything.
+    pub fn audio_position(&self, index: u32) -> Option<u32> {
+        position_of(&self.audio, index)
+    }
+
+    /// The same for subtitles.
+    pub fn subtitle_position(&self, index: u32) -> Option<u32> {
+        position_of(&self.subtitles, index)
+    }
+
+    /// Jellyfin's own number for the embedded audio stream at `position`,
+    /// which is the reverse of [`Self::audio_position`] and is what a report
+    /// has to quote.
+    pub fn audio_index(&self, position: u32) -> Option<u32> {
+        index_at(&self.audio, position)
+    }
+
+    /// The same for subtitles.
+    pub fn subtitle_index(&self, position: u32) -> Option<u32> {
+        index_at(&self.subtitles, position)
+    }
+
     /// The streams that are files of their own, which have to be fetched
     /// rather than selected.
     pub fn external_audio(&self) -> impl Iterator<Item = &Stream> {
@@ -751,6 +849,34 @@ impl Streams {
             })
             .collect()
     }
+}
+
+/// Where one of Jellyfin's stream numbers falls among the embedded streams of
+/// its own kind.
+///
+/// External streams are skipped rather than counted, which is the whole trap
+/// this exists to avoid: Jellyfin lists an external subtitle at index 0, before
+/// the video, so counting them would put every embedded track after it out of
+/// step - silently, and in the direction that hands somebody the wrong
+/// language.
+fn position_of(streams: &[Stream], index: u32) -> Option<u32> {
+    streams
+        .iter()
+        .filter(|stream| !stream.external)
+        .position(|stream| stream.index == index)
+        .map(|position| position as u32)
+}
+
+/// Jellyfin's number for the embedded stream at `position` among its own kind.
+///
+/// The same skipping of external streams as [`position_of`], in the other
+/// direction, and for the same reason.
+fn index_at(streams: &[Stream], position: u32) -> Option<u32> {
+    streams
+        .iter()
+        .filter(|stream| !stream.external)
+        .nth(position as usize)
+        .map(|stream| stream.index)
 }
 
 /// Reads the streams out of a media source.
@@ -916,9 +1042,9 @@ pub fn quick_connect_poll(
 /// TinePlayer understands.
 ///
 /// Jellyfin sends rather more than this. What is not here is not ignored by
-/// accident: volume and mute belong to the outputs and are better left to the
-/// person in the room, and the queue commands mean nothing to a player that
-/// shows one video at a time.
+/// accident: the queue commands mean nothing to a player that shows one video
+/// at a time, and `DisplayMessage` has nowhere to put a message that would not
+/// sit over the film.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Play this item. The position is Jellyfin's, which is not always the one
@@ -933,6 +1059,26 @@ pub enum Command {
     PlayPause,
     Stop,
     Seek(u64),
+    /// Where the master should stand, as a fraction of full. Jellyfin counts
+    /// in whole percent and TinePlayer in fractions, so the conversion happens
+    /// on the way in and nowhere else.
+    SetVolume(f64),
+    Mute,
+    Unmute,
+    ToggleMute,
+    /// **Jellyfin's own stream number**, across every stream in the item, and
+    /// not a position among the audio tracks. Turned into one by
+    /// [`Streams::audio_position`], which is the only place that knows the
+    /// difference.
+    ///
+    /// It drives the first output. Jellyfin offers one selector and TinePlayer
+    /// has two outputs, and the second is the one somebody chose deliberately
+    /// for the other person in the room - a remote quietly changing it is worse
+    /// than a remote that leaves it alone. Decided 2026-08-14.
+    SetAudioStream(u32),
+    /// The same numbering, and `None` for turning subtitles off - which is what
+    /// Jellyfin means by an index below zero.
+    SetSubtitleStream(Option<u32>),
     /// The server refused the token, so the pairing is gone. Sign out and ask
     /// to be paired again; retrying cannot help.
     SignedOut,
@@ -1117,6 +1263,37 @@ fn interpret(text: &str) -> Option<Command> {
                 position_ns: data.get("StartPositionTicks").and_then(from_ticks),
             })
         }
+        // Arguments arrive as strings, whatever they hold. `"Volume": "42"`
+        // rather than `42`, so every one of these is parsed rather than read as
+        // a number - and a controller sending a real number is read too, since
+        // nothing is lost by trying both.
+        "GeneralCommand" => {
+            let data = data?;
+            let argument = |name: &str| -> Option<i64> {
+                let value = data.get("Arguments")?.get(name)?;
+                match value.as_i64() {
+                    Some(number) => Some(number),
+                    None => value.as_str()?.trim().parse().ok(),
+                }
+            };
+            match data.get("Name")?.as_str()? {
+                "SetVolume" => Some(Command::SetVolume(
+                    (argument("Volume")? as f64 / 100.0).clamp(0.0, 1.0),
+                )),
+                "Mute" => Some(Command::Mute),
+                "Unmute" => Some(Command::Unmute),
+                "ToggleMute" => Some(Command::ToggleMute),
+                "SetAudioStreamIndex" => {
+                    Some(Command::SetAudioStream(argument("Index")?.try_into().ok()?))
+                }
+                // Below zero is Jellyfin's way of saying none, which is a real
+                // choice rather than a missing answer.
+                "SetSubtitleStreamIndex" => Some(Command::SetSubtitleStream(
+                    argument("Index").map(|index| u32::try_from(index).ok())?,
+                )),
+                _ => None,
+            }
+        }
         "Playstate" => {
             let data = data?;
             match data.get("Command")?.as_str()? {
@@ -1144,6 +1321,52 @@ mod tests {
             user_id: "2c9fab11dbcd437cac37de2e54453b28".to_string(),
             user_name: "scottarius".to_string(),
         }
+    }
+
+    fn stream(index: u32, external: bool) -> Stream {
+        Stream {
+            index,
+            external,
+            ..Stream::default()
+        }
+    }
+
+    #[test]
+    fn counts_embedded_streams_past_an_external_one() {
+        // The shape 46 of 120 items in the library have: a subtitle file beside
+        // the video, which Jellyfin lists at index 0, before the video stream.
+        let streams = Streams {
+            subtitles: vec![stream(0, true), stream(3, false), stream(4, false)],
+            ..Streams::default()
+        };
+        assert_eq!(streams.subtitle_position(3), Some(0));
+        assert_eq!(streams.subtitle_position(4), Some(1));
+        // Not in the container, so there is no position in it to have.
+        assert_eq!(streams.subtitle_position(0), None);
+        assert_eq!(streams.subtitle_position(9), None);
+    }
+
+    #[test]
+    fn reads_a_volume_command() {
+        let text = r#"{"MessageType":"GeneralCommand","Data":{"Name":"SetVolume",
+            "Arguments":{"Volume":"42"}}}"#;
+        assert_eq!(interpret(text), Some(Command::SetVolume(0.42)));
+    }
+
+    #[test]
+    fn reads_a_track_selection() {
+        let text = r#"{"MessageType":"GeneralCommand","Data":
+            {"Name":"SetAudioStreamIndex","Arguments":{"Index":"2"}}}"#;
+        assert_eq!(interpret(text), Some(Command::SetAudioStream(2)));
+    }
+
+    #[test]
+    fn reads_subtitles_being_turned_off() {
+        // Below zero is how Jellyfin says none, and it has to survive as a
+        // choice rather than being dropped as an unreadable argument.
+        let text = r#"{"MessageType":"GeneralCommand","Data":
+            {"Name":"SetSubtitleStreamIndex","Arguments":{"Index":"-1"}}}"#;
+        assert_eq!(interpret(text), Some(Command::SetSubtitleStream(None)));
     }
 
     #[test]
