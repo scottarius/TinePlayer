@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gst::prelude::*;
@@ -9,7 +9,7 @@ use gstreamer as gst;
 use gtk::{gdk, glib};
 
 use crate::config::{Config, clear_position, save_position};
-use crate::pipeline::build_pipeline;
+use crate::pipeline::{Playing, build_pipeline};
 use crate::source::Source;
 use crate::subtitles::SubtitleSource;
 
@@ -69,16 +69,6 @@ fn is_audio(collection: Option<&gst::StreamCollection>, id: &str) -> bool {
     })
 }
 
-/// The track an output starts on, where that is a track inside the file at
-/// all. An external audio file has no track number in the video's collection,
-/// which is exactly why it cannot be stepped through with the others.
-fn track_of(source: Option<&crate::pipeline::AudioSource>) -> Option<u32> {
-    match source {
-        Some(crate::pipeline::AudioSource::Track(track)) => Some(*track),
-        _ => None,
-    }
-}
-
 /// Why playback stopped on its own.
 ///
 /// The two are worth telling apart because reaching the end is the ordinary
@@ -119,15 +109,12 @@ pub struct Playback {
     /// list a switch starts from: keep these, drop the subtitle, add the
     /// wanted one.
     selected_streams: RefCell<Vec<String>>,
-    /// Which track inside the file each output is playing, so that stepping
-    /// one of them knows where it is stepping from.
+    /// Which decoded stream feeds which output, and the plumbing between them.
     ///
-    /// Kept here rather than derived from `selected_streams`, which cannot
-    /// answer it: that says which streams are playing, not which output each
-    /// one feeds, and two outputs sharing a track appear in it only once.
-    /// `None` means the output is playing an external file, or nothing.
-    primary_track: Cell<Option<u32>>,
-    secondary_track: Cell<Option<u32>>,
+    /// The record of what each output is playing lives here rather than beside
+    /// it, because the pipeline needs the same answer to route by and two
+    /// copies would be free to disagree.
+    routing: Arc<Mutex<crate::pipeline::AudioRouting>>,
     /// Bumped every time the subtitle changes, so that a probe still waiting
     /// for a stream nobody wants any more does not draw it when it arrives.
     ///
@@ -200,7 +187,7 @@ impl Playback {
         kodi_file: String,
         on_ended: impl Fn(Ended) + 'static,
     ) -> Result<Rc<Self>, String> {
-        let pipeline = build_pipeline(
+        let (pipeline, routing) = build_pipeline(
             source,
             primary_audio,
             secondary_audio,
@@ -233,8 +220,7 @@ impl Playback {
             bus_watch: RefCell::new(None),
             collection: RefCell::new(None),
             selected_streams: RefCell::new(Vec::new()),
-            primary_track: Cell::new(track_of(primary_audio)),
-            secondary_track: Cell::new(track_of(secondary_audio)),
+            routing: routing.clone(),
             subtitle_switch: Arc::new(AtomicU64::new(0)),
             final_report: RefCell::new(None),
             seek_target: Cell::new(None),
@@ -276,7 +262,15 @@ impl Playback {
                     // its collection over later, and switching subtitles needs
                     // it to name the streams that carry on playing.
                     MessageView::StreamCollection(announced) => {
-                        *playback.collection.borrow_mut() = Some(announced.stream_collection());
+                        let announced = announced.stream_collection();
+                        // The routing needs it too, to say which track a
+                        // stream arriving on a pad actually is.
+                        playback
+                            .routing
+                            .lock()
+                            .unwrap()
+                            .set_collection(announced.clone());
+                        *playback.collection.borrow_mut() = Some(announced);
                     }
                     MessageView::StreamsSelected(chosen) => {
                         *playback.selected_streams.borrow_mut() = chosen
@@ -961,74 +955,39 @@ impl Playback {
         })
     }
 
-    /// Which track an output is playing, or `None` when it is playing an
-    /// external file or nothing at all.
-    fn track_on(&self, role: &str) -> &Cell<Option<u32>> {
-        match role {
-            "primary" => &self.primary_track,
-            _ => &self.secondary_track,
-        }
+    /// What an output is playing: a track inside the file, an external file,
+    /// or nothing.
+    pub fn playing_on(&self, role: &str) -> Option<Playing> {
+        self.routing.lock().unwrap().wanted_by(role).cloned()
     }
 
-    /// Steps one output to the next audio track in the file without stopping,
-    /// and reports which one it moved to.
+    /// Puts one output onto a track inside the film, or onto nothing, without
+    /// stopping playback.
     ///
-    /// The mechanism is the one `set_subtitle` uses: name every stream that
-    /// carries on playing, swap the one being changed, and send the lot as a
-    /// single `SelectStreams`. decodebin3 reuses the slot it already has for
-    /// that output, so the pad stays linked to the branch that was built for
-    /// it and simply carries the new stream - which is why this needs no
-    /// rebuilding and produces no gap.
+    /// Every case goes through here: a plain switch, both outputs arriving on
+    /// one track, an output leaving a shared track for one of its own, and an
+    /// output being turned off entirely. They are one operation rather than
+    /// four because the routing is told what each output should be playing and
+    /// then made to agree with itself - see [`crate::pipeline::AudioRouting`].
+    /// The selection sent here only decides what gets *decoded*; which output
+    /// hears what is settled afterwards, by the routing.
     ///
-    /// **Only what has been measured.** Three cases are refused rather than
-    /// half-done, because each of them needs the branch itself to change and
-    /// none has been proven:
-    ///
-    /// - An output playing an external audio file, which has its own source
-    ///   and its own seek.
-    /// - An output set to "None", which has no branch to switch anything on.
-    /// - Both outputs landing on the same track, which means merging two
-    ///   branches into one decoded stream through a `tee`. Stepped over rather
-    ///   than refused, so cycling stays in territory that works.
-    ///
-    /// Those three are the real work this was written to size up.
-    pub fn cycle_audio(&self, role: &str) -> Result<u32, String> {
-        let count = self.audio_track_count();
-        if count < 2 {
-            return Err(format!(
-                "The file offers {count} audio track(s), so there is nothing to step to"
-            ));
-        }
+    /// The order matters and is the one thing here that is easy to get wrong.
+    /// The intent is recorded first, so that a stream arriving because of this
+    /// very selection finds an output already waiting for it. Recording it
+    /// afterwards would leave the pad to arrive at a routing that had never
+    /// heard of it, which is the shape of the subtitle bug in `de2e116`.
+    pub fn set_audio(&self, role: &str, playing: Option<Playing>) -> Result<(), String> {
+        let tracks = {
+            let mut routing = self.routing.lock().unwrap();
+            routing.want(role, playing);
+            routing.wanted_tracks()
+        };
 
-        let current = self.track_on(role).get().ok_or_else(|| {
-            format!("The {role} output is not playing a track from the file, so there is nothing to step from")
-        })?;
-
-        // The other output's track is stepped over: landing both on one track
-        // means merging their branches, which is unbuilt. With only two
-        // outputs and at least two tracks there is always somewhere to go.
-        let other = self
-            .track_on(if role == "primary" {
-                "secondary"
-            } else {
-                "primary"
-            })
-            .get();
-        let mut next = (current + 1) % count;
-        if Some(next) == other {
-            next = (next + 1) % count;
-        }
-        if next == current {
-            return Err(format!(
-                "The other output is on the only track the {role} output could step to"
-            ));
-        }
-
-        // Every stream that carries on playing, which is everything except
-        // this output's audio - the same shape as the subtitle switch. Built
-        // from the two outputs rather than from `selected_streams`, because
-        // that says which streams are playing and not which output each one is
-        // for, and two outputs on one track appear there only once.
+        // Everything that carries on playing, plus every audio track some
+        // output now wants. Built from the outputs rather than from
+        // `selected_streams`, which says which streams are playing and not
+        // which output each one is for - and lists a shared track only once.
         let mut keep: Vec<String> = {
             let collection = self.collection.borrow();
             self.selected_streams
@@ -1038,12 +997,19 @@ impl Playback {
                 .cloned()
                 .collect()
         };
-        for track in [Some(next), other].into_iter().flatten() {
-            if let Some(id) = self.audio_stream_id(track) {
-                keep.push(id);
+        for track in tracks {
+            match self.audio_stream_id(track) {
+                Some(id) => keep.push(id),
+                None => return Err(format!("The file has no audio track {track}")),
             }
         }
 
+        // An empty selection is not sent. Asking for nothing at all is not the
+        // way to stop decoding one track of several, and with both outputs off
+        // there is nothing to ask for anyway.
+        if keep.is_empty() {
+            return Ok(());
+        }
         let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
         if !self
             .pipeline
@@ -1051,7 +1017,27 @@ impl Playback {
         {
             return Err("The pipeline refused the stream selection".into());
         }
-        self.track_on(role).set(Some(next));
+        Ok(())
+    }
+
+    /// Steps one output to the next audio track in the file, wrapping round.
+    ///
+    /// The shortcut behind `A` and `S`, kept while the choosers are built. It
+    /// no longer steps over the other output's track: landing both on one is a
+    /// case the routing handles like any other.
+    pub fn cycle_audio(&self, role: &str) -> Result<u32, String> {
+        let count = self.audio_track_count();
+        if count == 0 {
+            return Err("The file offers no audio tracks".into());
+        }
+        let next = match self.playing_on(role) {
+            Some(Playing::Track(current)) => (current + 1) % count,
+            // An output on a file or turned off starts from the beginning
+            // rather than refusing, which is what makes the key a way back to
+            // the film's own audio.
+            _ => 0,
+        };
+        self.set_audio(role, Some(Playing::Track(next)))?;
         Ok(next)
     }
 
