@@ -58,8 +58,11 @@ pub enum Row {
 /// own to keep in step.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Hold {
-    /// Held to silence every output at once, tapped to open the levels.
-    Volume,
+    /// Held to silence this one output, tapped to open its menu. One per
+    /// output since the split, where there used to be a single button that
+    /// silenced everything: the keyboard's `M` is what does that now, and a
+    /// button that governs one output should not reach past it.
+    Output(usize),
     /// Held to show or hide the subtitle already chosen, tapped to open the
     /// list and choose a different one. The deliberate act is the one that
     /// offers a choice; the shortcut is the one that does not look away from
@@ -85,6 +88,80 @@ type SyncHandler = Box<dyn Fn(&str, f64, bool)>;
 /// know: the strip is given a list of words and gives back which one.
 type SubtitleHandler = Box<dyn Fn(usize)>;
 
+/// Told which output was put onto which row of its soundtrack list, counted as
+/// the rows were handed over in [`Controls::set_audio_entries`]. A position
+/// rather than the choice itself, for the same reason as [`SubtitleHandler`]:
+/// what a row stands for is the application's to know.
+type AudioHandler = Box<dyn Fn(&str, usize)>;
+
+/// Wraps a list so it scrolls rather than running off the top of the window.
+///
+/// `propagate_natural_height` is what makes it size to its contents when they
+/// fit, so a list of three does not sit in a tall empty box; the cap that
+/// stops it growing past the window is set when the list is opened, since only
+/// then is the window's height known. See [`Controls::cap_list_height`].
+///
+/// No horizontal scrolling: rows are already cut to fit rather than allowed to
+/// stretch the panel, so there is never anything off to the side to reach.
+fn scroller(list: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
+    gtk::ScrolledWindow::builder()
+        .child(list)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .build()
+}
+
+/// Brings a row into view, so that moving onto one that is off the end of a
+/// scrolled list actually shows it.
+///
+/// Without this the cursor moves invisibly: the mark lands on a row nobody can
+/// see, and the list looks like it has stopped responding at whatever row
+/// happened to be last on screen.
+fn reveal_row(scroll: &gtk::ScrolledWindow, row: &impl IsA<gtk::Widget>) {
+    let Some(list) = scroll.child() else { return };
+    let Some(bounds) = row.as_ref().compute_bounds(&list) else {
+        return;
+    };
+    let adjustment = scroll.vadjustment();
+    let (top, bottom) = (bounds.y() as f64, (bounds.y() + bounds.height()) as f64);
+    let seen = adjustment.value();
+    let page = adjustment.page_size();
+    if top < seen {
+        adjustment.set_value(top);
+    } else if bottom > seen + page {
+        adjustment.set_value(bottom - page);
+    }
+}
+
+/// The icon for a level: staged arcs on the way up, and the barred speaker
+/// when there is nothing to hear.
+///
+/// How loud rather than merely whether, so an output can be read at a glance
+/// from across a room - which is the whole reason the strip's icons are drawn
+/// this way and not as a single fixed speaker.
+fn volume_icon_name(level: f64, muted: bool) -> &'static str {
+    if muted || level <= 0.0 {
+        "audio-volume-muted-symbolic"
+    } else if level < 0.34 {
+        "audio-volume-low-symbolic"
+    } else if level < 0.67 {
+        "audio-volume-medium-symbolic"
+    } else {
+        "audio-volume-high-symbolic"
+    }
+}
+
+/// Marks or unmarks a row, which is how both lists and the two controls under
+/// them say where the cursor is.
+fn mark(widget: &impl IsA<gtk::Widget>, on: bool) {
+    if on {
+        widget.add_css_class("tp-selected");
+    } else {
+        widget.remove_css_class("tp-selected");
+    }
+}
+
 /// Which of an output's two controls is being driven.
 ///
 /// The panel is navigated by this pair rather than by output alone: up and
@@ -96,12 +173,36 @@ enum Control {
     Sync,
 }
 
-/// One output's controls inside the volume panel.
+/// One output's menu: its soundtracks, its name, and its two controls.
 struct Output {
     role: &'static str,
-    /// The heading and both rows, hidden together when this output is not in
-    /// use.
+    /// This output's own button on the strip, and the icon inside it that
+    /// reports whether the output is silenced.
+    button: gtk::Button,
+    icon: gtk::Image,
+    /// The whole menu - list, heading and both rows - shown only while this
+    /// output's button has opened it.
     group: gtk::Box,
+    /// The soundtracks on offer, above the controls. Filled per video, since
+    /// what is on offer belongs to the file rather than to the strip.
+    tracks: gtk::Box,
+    /// What the list scrolls inside when a film carries more soundtracks than
+    /// there is room for above the bar.
+    track_scroll: gtk::ScrolledWindow,
+    /// The device's name, under the list. Kept so the list can be told how
+    /// much room the block below it takes.
+    label: gtk::Label,
+    track_rows: RefCell<Vec<gtk::Label>>,
+    /// Which row the cursor is on, and which row is the soundtrack actually
+    /// playing. They part company the moment anybody moves, which is why they
+    /// are marked separately - the same as the subtitle chooser.
+    track_at: Cell<usize>,
+    track_current: Cell<Option<usize>>,
+    /// Whether this output is in use at all. Distinct from whether its menu
+    /// is open: an output set to None has a button that does nothing, and
+    /// hiding the group for the one reason must not be confused with hiding
+    /// it for the other.
+    in_use: Cell<bool>,
     row: gtk::Box,
     mute: gtk::Button,
     level: gtk::Scale,
@@ -152,18 +253,19 @@ const MOVEMENT: f64 = 4.0;
 /// time it takes hold of the row.
 const PLAY: usize = 3;
 
-/// Volume's place in the same order. The panel keeps it highlighted while it
-/// is open, so it is clear where closing the panel goes back to.
-const VOLUME: usize = 6;
+/// Where the first output's button sits in the same order. One button follows
+/// per output, and fullscreen comes after them all. Each output's menu keeps
+/// its own button highlighted while it is open, so it is clear where closing
+/// the menu goes back to.
+const FIRST_OUTPUT: usize = 6;
 
 /// Subtitles' place in the same order, and for the same reason: the chooser
 /// keeps it highlighted while it is open.
 const SUBTITLES: usize = 5;
 
-/// How long the volume button has to be held for it to mean "silence
-/// everything" rather than "show me the levels". Long enough not to fire
-/// under an ordinary press, short enough to be a deliberate gesture rather
-/// than a wait.
+/// How long an output's button has to be held for it to mean "silence this
+/// output" rather than "show me its menu". Long enough not to fire under an
+/// ordinary press, short enough to be a deliberate gesture rather than a wait.
 pub const HOLD: Duration = Duration::from_millis(600);
 
 /// How far one press moves a level. Twenty steps across the range: coarse
@@ -187,6 +289,12 @@ const SUBTITLE_WIDTH: f64 = 260.0;
 /// A language name is short; a subtitle file somebody picked by hand is not,
 /// and one of those would otherwise take the panel across the picture.
 const SUBTITLE_CHARS: i32 = 32;
+
+/// The least a scrolled list is ever drawn at, before scaling. A window too
+/// short to hold a list properly should still show a row or two and scroll,
+/// rather than collapsing to nothing and reading as a list that failed to
+/// appear.
+const MIN_LIST_HEIGHT: f64 = 120.0;
 
 /// Between a row's button, its bar and its reading. The same for both rows,
 /// because different spacing gives the two bars different lengths and they
@@ -295,6 +403,8 @@ pub struct Controls {
     on_sync: RefCell<Option<SyncHandler>>,
     /// Told which row of the chooser was picked.
     on_subtitle: RefCell<Option<SubtitleHandler>>,
+    /// Told which output was put onto which of its soundtrack rows.
+    on_audio: RefCell<Option<AudioHandler>>,
     /// Told to show or hide whatever is already chosen, which is what holding
     /// the subtitle button means. Kept as a handler rather than wired to the
     /// button's click, because the click now opens the list instead.
@@ -303,6 +413,8 @@ pub struct Controls {
     /// list the strip is.
     subtitle_panel: gtk::Revealer,
     subtitle_list: gtk::Box,
+    /// What that list scrolls inside, for a film with more subtitles than fit.
+    subtitle_scroll: gtk::ScrolledWindow,
     /// Rebuilt for every video, since what is on offer is a property of the
     /// file rather than of the strip.
     subtitle_rows: RefCell<Vec<gtk::Label>>,
@@ -315,13 +427,14 @@ pub struct Controls {
     panel: gtk::Revealer,
     outputs: Vec<Output>,
     output: Cell<usize>,
-    /// Which of the selected output's two controls is being driven. Together
-    /// with `output` this is the position in the panel: up and down step
-    /// through every control of every output in turn.
+    /// Which of the open menu's two controls is being driven, once the cursor
+    /// has left the soundtracks above them.
     control: Cell<Control>,
-    /// The volume button's own icon, which reports everything being silenced
-    /// at once: the panel it opens says so too, but not while it is closed.
-    volume_icon: gtk::Image,
+    /// Whether the cursor is down among the controls rather than up in the
+    /// list. Needed because the list keeps its own place: without it, stepping
+    /// off the last soundtrack onto the level would be indistinguishable from
+    /// still being on that soundtrack.
+    on_controls: Cell<bool>,
     /// Whether everything is silenced at once. Held here rather than in the
     /// configuration on purpose - see [`VolumeHandler`].
     hushed: Cell<bool>,
@@ -441,23 +554,55 @@ impl Controls {
         name_it(&subtitles, "Show or hide subtitles");
         subtitles.set_sensitive(false);
 
-        // A panel rather than a slider in the bar: two outputs need naming,
-        // and a pair of bare sliders cannot say which is the speakers and
-        // which the headphones - which is the whole distinction here.
-        let volume_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
-        volume_icon.add_css_class("tp-transport");
-        let volume = gtk::Button::new();
-        volume.set_child(Some(&volume_icon));
-        volume.add_css_class("tp-transport-button");
-        name_it(&volume, "Volume");
-
         let panel = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(12)
             .build();
         panel.add_css_class("tp-volume-panel");
         let mut rows = Vec::new();
-        for (role, name) in outputs {
+        for (index, (role, name)) in outputs.iter().enumerate() {
+            let (role, name) = (*role, name);
+            // One button per output rather than one for both. Which output a
+            // press is about is otherwise unanswerable without opening
+            // something first, and on a television that is a press spent
+            // finding out where you are.
+            let icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
+            icon.add_css_class("tp-transport");
+            // Numbered, because two speaker icons side by side say which is
+            // louder and not which is which. The number is the output, matching
+            // how the configuration and the documentation already count them.
+            //
+            // Over the icon rather than beside it: the row of buttons is evenly
+            // spaced, and a pair that were wider than the rest would pull the
+            // whole row off center.
+            let badge = gtk::Label::new(Some(&(index + 1).to_string()));
+            badge.add_css_class("tp-output-badge");
+            badge.set_halign(gtk::Align::Start);
+            badge.set_valign(gtk::Align::Start);
+            let stack = gtk::Overlay::new();
+            stack.set_child(Some(&icon));
+            stack.add_overlay(&badge);
+            let button = gtk::Button::new();
+            button.set_child(Some(&stack));
+            button.add_css_class("tp-transport-button");
+            // The number is in the name too. A screen reader gets "1" as a
+            // label over an icon it cannot describe otherwise, and "Soundtrack
+            // and volume" twice over would name neither.
+            name_it(
+                &button,
+                &format!("Soundtrack and volume, output {}, {name}", index + 1),
+            );
+
+            // Above the controls, and the same list the subtitle chooser uses,
+            // because it is the same act: a list of choices read from a sofa
+            // while a film runs.
+            let tracks = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .build();
+            // Only the list scrolls. The device's name and its two controls
+            // stay put at the bottom, where they can always be reached however
+            // many soundtracks a film carries.
+            let track_scroll = scroller(&tracks);
             // Cut rather than allowed to stretch the panel. Device names run
             // long - "Headphones (2- Arctis Nova Pro Wireless)" - and a panel
             // sized to the longest one would be most of the screen.
@@ -536,18 +681,39 @@ impl Controls {
             sync_row.append(&sync);
             sync_row.append(&sync_reading);
 
+            // The soundtracks first, then the output's name and its controls
+            // beneath them. The name sits with the controls rather than above
+            // the list because it labels the thing being adjusted, and the
+            // list is a choice about the film rather than about the device.
             let group = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
                 .spacing(4)
                 .build();
+            group.append(&track_scroll);
+            // Between the soundtracks and the device, because they are two
+            // different kinds of thing: one is a choice about the film, the
+            // other is the equipment playing it.
+            let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
+            divider.add_css_class("tp-menu-divider");
+            group.append(&divider);
             group.append(&label);
             group.append(&row);
             group.append(&sync_row);
+            group.set_visible(false);
             panel.append(&group);
 
             rows.push(Output {
                 role,
+                button,
+                icon,
                 group,
+                tracks,
+                track_scroll,
+                label,
+                track_rows: RefCell::new(Vec::new()),
+                track_at: Cell::new(0),
+                track_current: Cell::new(None),
+                in_use: Cell::new(index == 0),
                 row,
                 mute,
                 level,
@@ -585,13 +751,22 @@ impl Controls {
         let subtitle_list = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
-        subtitle_list.add_css_class("tp-subtitle-panel");
         subtitle_list.set_size_request((SUBTITLE_WIDTH * scale) as i32, -1);
-        subtitle_list.set_halign(gtk::Align::End);
+        // A film can carry more subtitles than fit above the bar - the sample
+        // one has thirteen - and without this the list simply ran off the top
+        // of the window with no way to reach what was up there.
+        //
+        // The panel's own look moves out here with it. Left on the list it
+        // would be inside the scroller: the background would scroll with the
+        // rows, and the margins that hold the panel off the edge of the screen
+        // would be measured from the wrong box.
+        let subtitle_scroll = scroller(&subtitle_list);
+        subtitle_scroll.add_css_class("tp-subtitle-panel");
+        subtitle_scroll.set_halign(gtk::Align::End);
         let subtitle_reveal = gtk::Revealer::builder()
             .transition_type(gtk::RevealerTransitionType::SlideUp)
             .transition_duration(150)
-            .child(&subtitle_list)
+            .child(&subtitle_scroll)
             .halign(gtk::Align::End)
             .build();
 
@@ -654,7 +829,9 @@ impl Controls {
             .spacing(16)
             .build();
         right.append(&subtitles);
-        right.append(&volume);
+        for output in &rows {
+            right.append(&output.button);
+        }
         right.append(&fullscreen);
         buttons.set_end_widget(Some(&right));
 
@@ -736,16 +913,19 @@ impl Controls {
         root.set_child(Some(video));
         root.add_overlay(&strip);
 
-        let order = vec![
+        // The order a controller steps through, which has to match the order
+        // they are drawn in above - including one button per output, however
+        // many there are.
+        let mut order = vec![
             settings.clone(),
             stop.clone(),
             skip_back.clone(),
             play.clone(),
             skip_forward.clone(),
             subtitles.clone(),
-            volume.clone(),
-            fullscreen.clone(),
         ];
+        order.extend(rows.iter().map(|output| output.button.clone()));
+        order.push(fullscreen.clone());
 
         let controls = Rc::new(Self {
             root,
@@ -772,9 +952,11 @@ impl Controls {
             on_volume: RefCell::new(None),
             on_sync: RefCell::new(None),
             on_subtitle: RefCell::new(None),
+            on_audio: RefCell::new(None),
             on_toggle_subtitles: RefCell::new(None),
             subtitle_panel: subtitle_reveal,
             subtitle_list,
+            subtitle_scroll,
             subtitle_rows: RefCell::new(Vec::new()),
             subtitle_at: Cell::new(0),
             subtitle_current: Cell::new(None),
@@ -782,7 +964,7 @@ impl Controls {
             outputs: rows,
             output: Cell::new(0),
             control: Cell::new(Control::Volume),
-            volume_icon,
+            on_controls: Cell::new(false),
             hushed: Cell::new(false),
             hold: Cell::new(0),
             holding: Cell::new(false),
@@ -796,17 +978,17 @@ impl Controls {
         // The button opens the panel rather than the panel following the
         // pointer around: hovering is invisible to a controller, and this is
         // the one control that has to work the same both ways.
-        {
-            let volume_button = volume.clone();
+        for index in 0..controls.outputs.len() {
+            let button = controls.outputs[index].button.clone();
             let handle = controls.clone();
-            volume_button.connect_clicked(move |_| {
+            button.connect_clicked(move |_| {
                 if handle.swallow_click.replace(false) {
                     return;
                 }
-                if handle.row.get() == Row::Volume {
+                if handle.row.get() == Row::Volume && handle.output.get() == index {
                     handle.set_row(Row::Buttons);
                 } else {
-                    handle.open_volume(false);
+                    handle.open_output(index, false);
                 }
             });
 
@@ -819,7 +1001,7 @@ impl Controls {
             let handle = controls.clone();
             controller.connect_event(move |_, event| {
                 match event.event_type() {
-                    gdk::EventType::ButtonPress => handle.press_hold(Hold::Volume),
+                    gdk::EventType::ButtonPress => handle.press_hold(Hold::Output(index)),
                     gdk::EventType::ButtonRelease if !handle.release_hold() => {
                         handle.swallow_click.set(true);
                     }
@@ -827,7 +1009,7 @@ impl Controls {
                 }
                 glib::Propagation::Proceed
             });
-            volume.add_controller(controller);
+            controls.outputs[index].button.add_controller(controller);
         }
 
         // The same arrangement, for the same reasons: the list is opened by
@@ -911,19 +1093,24 @@ impl Controls {
     /// this is how playback tells it what to show. An output not listed is not
     /// in use, and its row is hidden rather than sitting there doing nothing.
     pub fn set_levels(&self, levels: &[(&str, f64, bool)]) {
-        for output in &self.outputs {
+        for (index, output) in self.outputs.iter().enumerate() {
             match levels.iter().find(|(role, _, _)| *role == output.role) {
                 Some(&(_, level, muted)) => {
-                    output.group.set_visible(true);
+                    output.in_use.set(true);
                     output.level.set_value(level);
                     output
                         .level_reading
                         .set_text(&crate::app::volume_label(level, muted));
                     output.muted.set(muted);
-                    Self::draw_mute(&output.mute, level, muted);
                 }
-                None => output.group.set_visible(false),
+                // Not in use. Its button goes insensitive rather than hidden,
+                // so the row of buttons keeps its shape from one film to the
+                // next - and unlike the panel row this used to hide, a button
+                // that comes and goes moves everything beside it.
+                None => output.in_use.set(false),
             }
+            output.button.set_sensitive(output.in_use.get());
+            self.draw_output(index);
         }
     }
 
@@ -944,7 +1131,7 @@ impl Controls {
         if was == Row::Volume && row != Row::Volume {
             self.panel.set_reveal_child(false);
             self.selected.set(false);
-            self.select_output_row(None);
+            self.select_position(None);
         }
         if was == Row::Subtitles && row != Row::Subtitles {
             self.subtitle_panel.set_reveal_child(false);
@@ -977,19 +1164,39 @@ impl Controls {
                 self.flash(false);
             }
             Row::Volume => {
+                let index = self.output.get();
                 self.timeline_active(false);
-                self.focused.set(VOLUME);
-                self.highlight(Some(VOLUME));
-                // The row nearest the button, since the panel opens upward
-                // from it: going up the list, the first row reached is the one
-                // at the bottom of it, which is the last output's sync.
+                self.focused.set(FIRST_OUTPUT + index);
+                self.highlight(Some(FIRST_OUTPUT + index));
+                // Only this output's menu, which is what makes two buttons two
+                // menus rather than one panel opened from two places.
+                for (at, output) in self.outputs.iter().enumerate() {
+                    output.group.set_visible(at == index && output.in_use.get());
+                }
+                // Opened with nothing marked, resting at the bottom - the sync
+                // row, which is nearest the button the menu rises out of. The
+                // first press up marks it, the next reaches the level, and the
+                // soundtracks are above those.
                 //
-                // Also where `at_last_output` measures from, so moving down
-                // from here leaves the panel rather than stepping within it.
-                self.output.set(self.last_output());
+                // Unlike the subtitle chooser, which opens on the subtitle in
+                // force. The difference is what the menu is: that one is a list
+                // and nothing else, so its list is where you have arrived. This
+                // one is a list *and* two controls, and reaching for an output's
+                // menu mid-film is far more often about its level than about
+                // changing the soundtrack - so opening on a marked row would
+                // spend the first press travelling back down past the controls
+                // somebody actually came for.
+                let output = &self.outputs[index];
+                output.track_at.set(output.track_current.get().unwrap_or(0));
                 self.control.set(Control::Sync);
+                self.on_controls.set(true);
                 self.selected.set(false);
-                self.select_output_row(None);
+                // The name and the two controls sit below the list inside the
+                // same panel, so the list has to leave room for them as well
+                // as for the bar.
+                let below = output.label.height() + output.row.height() + output.sync_row.height();
+                self.cap_list_height(&output.track_scroll, below);
+                self.select_position(None);
                 self.panel.set_reveal_child(true);
                 self.flash(false);
             }
@@ -1009,6 +1216,9 @@ impl Controls {
                 self.subtitle_at
                     .set(self.subtitle_current.get().unwrap_or(0));
                 self.selected.set(true);
+                // Nothing below this list inside its own panel, unlike an
+                // output's menu, so the bar is all it has to clear.
+                self.cap_list_height(&self.subtitle_scroll.clone(), 0);
                 self.select_subtitle_row(Some(self.subtitle_at.get()));
                 self.subtitle_panel.set_reveal_child(true);
                 self.flash(false);
@@ -1019,14 +1229,60 @@ impl Controls {
         self.announce_current();
     }
 
-    /// Opens the panel, marking an output only when something that cannot
-    /// point at one is driving it.
-    pub fn open_volume(self: &Rc<Self>, selected: bool) {
+    /// Opens one output's menu, on the soundtrack it is already playing.
+    ///
+    /// `selected` is left from when the panel could be opened with nothing
+    /// marked. A list always opens marked now, so it only decides whether the
+    /// menu announces itself on opening.
+    pub fn open_output(self: &Rc<Self>, index: usize, selected: bool) {
+        if index >= self.outputs.len() {
+            return;
+        }
+        self.output.set(index);
         self.set_row(Row::Volume);
         if selected {
-            self.selected.set(true);
-            self.select_output();
+            self.announce_current();
         }
+    }
+
+    /// Silences one output, or puts it back. What holding that output's button
+    /// means, where the keyboard's `M` still silences everything.
+    ///
+    /// Going through the ordinary mute keeps one path for what an output's
+    /// silence means, including absorbing an everything-at-once silence first
+    /// so that the press acts on what is actually on screen.
+    fn press_mute(self: &Rc<Self>, index: usize) {
+        self.absorb_hush();
+        let Some(output) = self.outputs.get(index) else {
+            return;
+        };
+        let muted = !output.muted.get();
+        output.muted.set(muted);
+        self.draw_output(index);
+        self.report(index, true);
+        self.flash(false);
+    }
+
+    /// Caps a list so it cannot grow past the window, leaving room for the bar
+    /// it rises out of and for whatever sits below it inside its own panel.
+    ///
+    /// Set when the list is opened rather than once at build time, because the
+    /// height it has to fit inside is not a constant: the window is resized,
+    /// fullscreen changes it, and `ui_scale` changes how much a row costs. The
+    /// bar's own height is measured rather than assumed for the same reason.
+    ///
+    /// A floor under it, so that a window too short for any of this shows a
+    /// couple of rows and scrolls rather than collapsing the list to nothing
+    /// and looking broken.
+    fn cap_list_height(&self, scroll: &gtk::ScrolledWindow, below: i32) {
+        let available = self.root.height() - self.bar_height() - below;
+        let floor = (MIN_LIST_HEIGHT * self.scale) as i32;
+        scroll.set_max_content_height(available.max(floor));
+    }
+
+    /// How tall the bar itself is, so a list can be kept clear of it.
+    fn bar_height(&self) -> i32 {
+        self.strip.height().max(self.holder.height())
     }
 
     /// Opens the subtitle chooser on whatever is already in force, with that
@@ -1053,11 +1309,12 @@ impl Controls {
         if self.row.get() != Row::Buttons {
             return None;
         }
-        match self.focused.get() {
-            VOLUME => Some(Hold::Volume),
-            SUBTITLES => Some(Hold::Subtitles),
-            _ => None,
+        let focused = self.focused.get();
+        if focused == SUBTITLES {
+            return Some(Hold::Subtitles);
         }
+        let index = focused.checked_sub(FIRST_OUTPUT)?;
+        (index < self.outputs.len()).then_some(Hold::Output(index))
     }
 
     /// Starts a hold. Repeats are ignored: a keyboard sends a press over and
@@ -1081,7 +1338,7 @@ impl Controls {
             }
             handle.held.set(true);
             match which {
-                Hold::Volume => handle.toggle_hush(),
+                Hold::Output(index) => handle.press_mute(index),
                 Hold::Subtitles => handle.toggle_subtitles(),
             }
         });
@@ -1119,8 +1376,6 @@ impl Controls {
             self.hushed.set(true);
             for index in 0..self.outputs.len() {
                 self.outputs[index].muted.set(true);
-                let output = &self.outputs[index];
-                Self::draw_mute(&output.mute, output.level.value(), true);
                 self.report(index, false);
             }
             self.draw_hush();
@@ -1154,136 +1409,210 @@ impl Controls {
         for index in 0..self.outputs.len() {
             let muted = self.outputs[index].before_hush.get();
             self.outputs[index].muted.set(muted);
-            let output = &self.outputs[index];
-            Self::draw_mute(&output.mute, output.level.value(), muted);
             self.report(index, false);
         }
         self.draw_hush();
         true
     }
 
+    /// Redraws every output's button, since silencing everything at once shows
+    /// on all of them.
     fn draw_hush(&self) {
-        self.volume_icon.set_icon_name(Some(if self.hushed.get() {
-            "audio-volume-muted-symbolic"
-        } else {
-            "audio-volume-high-symbolic"
-        }));
+        for index in 0..self.outputs.len() {
+            self.draw_output(index);
+        }
     }
 
-    /// Points the panel at an output without marking it, which is what a
-    /// pointer does. If a mark is already showing it follows along, so the
-    /// two ways of driving it do not disagree about where it is.
+    /// Points the menu at an output's level, which is what a pointer touching
+    /// it means. If a mark is already showing it follows along, so the two
+    /// ways of driving it do not disagree about where it is.
     fn aim_at_output(&self, index: usize) {
         self.aim_at(index, Control::Volume);
     }
 
-    /// Points the panel at one control of one output, which is what a pointer
-    /// touching a slider means: it is about to change that one, so the
-    /// keyboard should carry on from there rather than from wherever it was.
+    /// Points the menu at one of its controls: the pointer is about to change
+    /// that one, so the keyboard should carry on from there rather than from
+    /// wherever it was.
     fn aim_at(&self, index: usize, control: Control) {
         self.output.set(index);
         self.control.set(control);
+        self.on_controls.set(true);
         if self.selected.get() {
-            self.select_output();
+            self.select_position(Some(self.position()));
         }
     }
 
-    /// The lowest row the panel is showing, which is where it starts.
-    fn last_output(&self) -> usize {
-        self.outputs
-            .iter()
-            .rposition(|output| output.group.is_visible())
-            .unwrap_or(0)
+    /// How many soundtracks the open menu is offering.
+    fn track_count(&self) -> usize {
+        self.outputs[self.output.get()].track_rows.borrow().len()
     }
 
-    /// The lowest place in the panel, counted through every control. Distinct
-    /// from [`Self::last_output`], which is an output: conflating the two made
-    /// the panel start at a position no output has, so nothing moved.
+    /// The lowest place in the open menu: past every soundtrack, then the
+    /// level, then the sync. One menu at a time, so this counts within it
+    /// rather than across both.
     fn last_position(&self) -> usize {
-        self.last_output() * 2 + 1
+        self.track_count() + 1
     }
 
-    /// Whether the selected output is the lowest one, which is what makes a
-    /// downward press leave the panel rather than move within it. Never while
-    /// nothing is marked, so the first press takes hold of the panel instead
-    /// of closing it.
+    /// Whether the cursor is at the bottom of the menu, which is what makes a
+    /// downward press leave it rather than move within it.
     pub fn at_last_output(&self) -> bool {
         self.selected.get() && self.position() >= self.last_position()
     }
 
-    /// Moves between outputs, stopping at either end rather than wrapping,
-    /// the same way the button row does.
+    /// Moves through the open menu, stopping at either end rather than
+    /// wrapping, the same way the button row and the subtitle chooser do.
+    ///
+    /// One run of positions from the top of the soundtracks to the sync at the
+    /// bottom, so going down from the last soundtrack lands on the level
+    /// rather than jumping out of the list. What used to be here stepped
+    /// between *outputs*, which is what having two menus replaces.
     pub fn move_output(self: &Rc<Self>, delta: isize) {
         if self.row.get() != Row::Volume {
             return;
         }
-        // The first press marks where the panel already is, rather than
-        // moving from an unmarked place nobody can see.
+        // The first press marks where the menu already rests rather than
+        // moving from a place nobody can see. It opens unmarked, so without
+        // this the press that takes hold of it would also move it, and the row
+        // it started on could never be reached in one press.
         if !self.selected.replace(true) {
-            self.select_output();
+            self.select_position(Some(self.position()));
             self.flash(false);
             return;
         }
-        // Every control of every output in turn, so that moving down from an
-        // output's volume lands on its own sync rather than skipping to the
-        // next device. Counted rather than held as a flat list: the outputs
-        // are the thing everything else here is indexed by, and a second
-        // ordering to keep in step would be one more thing to get wrong.
-        let mut position = self.position() as isize;
-        loop {
-            position += delta;
-            if position < 0 || position as usize >= self.outputs.len() * 2 {
-                return;
-            }
-            let (index, control) = Self::at(position as usize);
-            if self.outputs[index].group.is_visible() {
-                self.output.set(index);
-                self.control.set(control);
-                break;
-            }
+        let next = self.position() as isize + delta;
+        if next < 0 || next as usize > self.last_position() {
+            return;
         }
-        self.select_output();
-        self.flash(false);
-    }
-
-    /// Where the panel is now, counted through every control of every output.
-    fn position(&self) -> usize {
-        self.output.get() * 2 + usize::from(self.control.get() == Control::Sync)
-    }
-
-    /// The output and control at a counted position.
-    fn at(position: usize) -> (usize, Control) {
-        (
-            position / 2,
-            if position.is_multiple_of(2) {
+        let next = next as usize;
+        let tracks = self.track_count();
+        let output = &self.outputs[self.output.get()];
+        if next < tracks {
+            output.track_at.set(next);
+            self.on_controls.set(false);
+        } else {
+            self.control.set(if next == tracks {
                 Control::Volume
             } else {
                 Control::Sync
-            },
-        )
+            });
+            self.on_controls.set(true);
+        }
+        self.select_position(Some(next));
+        self.flash(false);
     }
 
-    fn select_output(&self) {
-        self.select_output_row(Some(self.position()));
-        // Everything that moves within the panel comes through here, both
-        // the first press that takes hold of it and every one after.
+    /// Where the cursor is in the open menu, counted from the first soundtrack.
+    fn position(&self) -> usize {
+        let tracks = self.track_count();
+        let output = &self.outputs[self.output.get()];
+        // Below the list, the two controls in order. On the list, wherever it
+        // was left - which is why the cursor is kept per output rather than
+        // recomputed: opening a menu should return to the choice in force, not
+        // to wherever the other menu happened to be.
+        if self.control.get() == Control::Sync {
+            tracks + 1
+        } else if output.track_at.get() < tracks && !self.on_controls.get() {
+            output.track_at.get()
+        } else {
+            tracks
+        }
+    }
+
+    /// Marks one place in the open menu and clears every other, in both menus
+    /// so that a closed one leaves nothing lit behind it. `None` clears all.
+    fn select_position(&self, position: Option<usize>) {
+        let open = self.output.get();
+        for (index, output) in self.outputs.iter().enumerate() {
+            let tracks = output.track_rows.borrow().len();
+            let here = (index == open).then_some(position).flatten();
+            for (at, row) in output.track_rows.borrow().iter().enumerate() {
+                mark(row, here == Some(at));
+                // Scrolled to as it is marked, so a cursor moving past the
+                // bottom of a long list brings the row with it rather than
+                // marking one nobody can see.
+                if here == Some(at) {
+                    reveal_row(&output.track_scroll, row);
+                }
+            }
+            mark(&output.row, here == Some(tracks));
+            mark(&output.sync_row, here == Some(tracks + 1));
+        }
+        // Deliberately does not touch `on_controls`. Every caller has just
+        // decided where the cursor is and said so; deriving it again here
+        // would undo that - and `None`, which means nothing is marked at all,
+        // would come out reading as the list.
         self.announce_current();
     }
 
-    /// Marks one control of one output, by counted position, and clears every
-    /// other. `None` clears them all.
-    fn select_output_row(&self, position: Option<usize>) {
-        for (index, output) in self.outputs.iter().enumerate() {
-            for control in [Control::Volume, Control::Sync] {
-                let this = index * 2 + usize::from(control == Control::Sync);
-                let row = output.row_for(control);
-                if Some(this) == position {
-                    row.add_css_class("tp-selected");
-                } else {
-                    row.remove_css_class("tp-selected");
-                }
-            }
+    /// Fills one output's soundtrack list, and says which of them it is
+    /// playing.
+    ///
+    /// Rebuilt whole for the same reason the subtitle chooser is: it is called
+    /// whenever any of it could have changed, and the list is a handful of
+    /// labels. `current` counts into `entries`, and `None` marks nothing.
+    pub fn set_audio_entries(
+        self: &Rc<Self>,
+        index: usize,
+        entries: &[String],
+        current: Option<usize>,
+    ) {
+        let Some(output) = self.outputs.get(index) else {
+            return;
+        };
+        while let Some(child) = output.tracks.first_child() {
+            output.tracks.remove(&child);
         }
+        let mut rows = Vec::new();
+        for (at, text) in entries.iter().enumerate() {
+            let row = subtitle_row(text);
+            name_it(&row, text);
+            if Some(at) == current {
+                row.add_css_class("tp-current");
+            }
+            // A pointer picks a row by clicking it, the same press a
+            // controller makes on the row it has moved to.
+            {
+                let handle = self.clone();
+                let gesture = gtk::GestureClick::new();
+                gesture.connect_released(move |_, _, _, _| handle.choose_audio(index, at));
+                row.add_controller(gesture);
+            }
+            output.tracks.append(&row);
+            rows.push(row);
+        }
+        *output.track_rows.borrow_mut() = rows;
+        output.track_current.set(current);
+
+        // Not the open menu, so there is no cursor to disturb: leave it where
+        // this output's list will open.
+        if self.row.get() != Row::Volume || self.output.get() != index {
+            output.track_at.set(current.unwrap_or(0));
+            return;
+        }
+        // The list changed under an open menu. The cursor stays where it was
+        // rather than being pulled back to what is playing: somebody is moving
+        // through it, and moving it under them would be worse than not
+        // redrawing at all.
+        let at = output.track_at.get().min(entries.len().saturating_sub(1));
+        output.track_at.set(at);
+        if self.selected.get() {
+            self.select_position(Some(self.position()));
+        }
+    }
+
+    /// Says which soundtrack was picked, and closes the menu the way choosing
+    /// a subtitle closes the chooser.
+    fn choose_audio(self: &Rc<Self>, index: usize, at: usize) {
+        if let Some(handler) = self.on_audio.borrow().as_ref() {
+            handler(self.outputs[index].role, at);
+        }
+        self.set_row(Row::Buttons);
+    }
+
+    /// Told which soundtrack an output was put onto.
+    pub fn connect_audio_chosen(&self, handler: impl Fn(&str, usize) + 'static) {
+        *self.on_audio.borrow_mut() = Some(Box::new(handler));
     }
 
     /// Fills the chooser with what this video offers, and says which of them
@@ -1377,10 +1706,12 @@ impl Controls {
     /// `subtitle_current`.
     fn select_subtitle_row(&self, at: Option<usize>) {
         for (index, row) in self.subtitle_rows.borrow().iter().enumerate() {
+            mark(row, Some(index) == at);
+            // Brought into view as it is marked, the same as an output's
+            // soundtracks: a list of thirteen subtitles is taller than the
+            // window, and a mark below the fold is a cursor that has vanished.
             if Some(index) == at {
-                row.add_css_class("tp-selected");
-            } else {
-                row.remove_css_class("tp-selected");
+                reveal_row(&self.subtitle_scroll, row);
             }
         }
     }
@@ -1526,7 +1857,7 @@ impl Controls {
         output
             .level_reading
             .set_text(&crate::app::volume_label(level, muted));
-        Self::draw_mute(&output.mute, level, muted);
+        self.draw_output(index);
         self.report(index, true);
         self.flash(false);
     }
@@ -1542,7 +1873,7 @@ impl Controls {
         };
         let muted = !output.muted.get();
         output.muted.set(muted);
-        Self::draw_mute(&output.mute, output.level.value(), muted);
+        self.draw_output(index);
         self.report(index, true);
         self.flash(false);
     }
@@ -1567,19 +1898,28 @@ impl Controls {
         *self.on_volume.borrow_mut() = Some(Box::new(handler));
     }
 
-    /// The icon says how loud the output is, not only whether it is silenced,
-    /// so the panel can be read at a glance from across a room.
-    fn draw_mute(button: &gtk::Button, level: f64, muted: bool) {
-        let name = if muted || level <= 0.0 {
-            "audio-volume-muted-symbolic"
-        } else if level < 0.34 {
-            "audio-volume-low-symbolic"
-        } else if level < 0.67 {
-            "audio-volume-medium-symbolic"
-        } else {
-            "audio-volume-high-symbolic"
+    /// Draws everything that reports one output's level: the button inside its
+    /// menu, and the button on the strip that opens it.
+    ///
+    /// One function rather than two, and read off the output rather than
+    /// passed in, so that a caller which has just changed a level cannot
+    /// update one of them and leave the other saying something else. Every
+    /// place that moves a level or a mute goes through here.
+    fn draw_output(&self, index: usize) {
+        let Some(output) = self.outputs.get(index) else {
+            return;
         };
-        button.set_icon_name(name);
+        let level = output.level.value();
+        // The blanket silence shows on the strip but not inside the menu: the
+        // menu is showing what this output is set to, which a hush lays over
+        // rather than replaces - and putting it back has to find it unchanged.
+        output
+            .mute
+            .set_icon_name(volume_icon_name(level, output.muted.get()));
+        output.icon.set_icon_name(Some(volume_icon_name(
+            level,
+            output.muted.get() || self.hushed.get(),
+        )));
     }
 
     /// A button worth landing on: one that is there and can act. Both, since
@@ -1614,7 +1954,7 @@ impl Controls {
         if self.row.get() == Row::Volume {
             self.panel.set_reveal_child(false);
             self.selected.set(false);
-            self.select_output_row(None);
+            self.select_position(None);
         }
         if self.row.get() == Row::Subtitles {
             self.subtitle_panel.set_reveal_child(false);
@@ -1643,14 +1983,16 @@ impl Controls {
 
     pub fn activate_focused(self: &Rc<Self>) {
         match self.row.get() {
-            // Volume goes its own way rather than through the button's click
-            // handler: that handler cannot tell a press from a pointer, and
-            // this is the one control where the difference shows.
-            // Opened with the button still the thing highlighted, and
-            // nothing inside it marked. Marking a row straight away meant the
-            // press that opened the panel was followed by one that worked a
-            // control nobody had moved to yet.
-            Row::Buttons if self.focused.get() == VOLUME => self.open_volume(false),
+            // An output's menu goes its own way rather than through the
+            // button's click handler: that handler cannot tell a press from a
+            // pointer, and these are buttons where the difference shows, since
+            // a press may yet turn out to be a hold.
+            Row::Buttons
+                if (FIRST_OUTPUT..FIRST_OUTPUT + self.outputs.len())
+                    .contains(&self.focused.get()) =>
+            {
+                self.open_output(self.focused.get() - FIRST_OUTPUT, false)
+            }
             // The same, and for the same reason: the click handler cannot
             // tell a press from a pointer, and this is a button where the
             // difference shows - a press may yet turn out to be a hold.
@@ -1660,14 +2002,22 @@ impl Controls {
                     button.emit_clicked();
                 }
             }
-            // In the panel it is the button belonging to the selected row,
-            // and both are the same gesture: mute on a volume row, use the
-            // delay or not on a sync row. Neither loses what it is turning
-            // off - the level and the delay both stay where they were.
-            // Nothing inside the panel taken hold of yet: the button is
-            // still what is highlighted, so pressing it again shuts what it
-            // opened - the same as clicking it a second time.
+            // Nothing inside the menu taken hold of yet: the button is still
+            // what is highlighted, so pressing it again shuts what it opened -
+            // the same as clicking it a second time.
             Row::Volume if !self.selected.get() => self.set_row(Row::Buttons),
+            // A soundtrack row takes the soundtrack. Asked of the position
+            // rather than of `control`, which only means anything once the
+            // cursor is down among the controls and otherwise still holds
+            // wherever it was last - which made a press on a soundtrack row
+            // mute the output instead of changing what it was playing.
+            Row::Volume if self.position() < self.track_count() => {
+                self.choose_audio(self.output.get(), self.position())
+            }
+            // Below the list it is the button belonging to the marked row, and
+            // both are the same gesture: mute on a level row, use the delay or
+            // not on a sync row. Neither loses what it is turning off - the
+            // level and the delay both stay where they were.
             Row::Volume => match self.control.get() {
                 Control::Volume => self.toggle_muted(self.output.get()),
                 Control::Sync => self.toggle_sync(self.output.get()),

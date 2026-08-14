@@ -239,6 +239,10 @@ impl AudioRouting {
 /// answer it, and the seek is simply refused.
 pub const EXTERNAL_AUDIO_DECODER: &str = "extaudio_dec_";
 
+/// The video's own decoder, named so a stream selection can be sent to it
+/// rather than to the pipeline. See where it is set for why that matters.
+pub const VIDEO_DECODER: &str = "video_dec";
+
 /// The subtitle chain's own source, named so a seek can be delivered to it by
 /// hand. There is only ever one, so it needs no number after it.
 pub const EXTERNAL_SUBTITLE_SOURCE: &str = "extsub_src";
@@ -322,6 +326,15 @@ pub fn build_pipeline(
     let src = make("urisourcebin")?;
     src.set_property("uri", source.uri());
     let decode = make("decodebin3")?;
+    // Named so a stream selection can be delivered straight here.
+    //
+    // Sending one to the pipeline instead makes it every sink's business, and
+    // a sink that cannot pass it upstream drags the whole answer down: an
+    // output sitting on None has an unlinked chain, and with it in the
+    // pipeline every `SelectStreams` came back refused - which reads as the
+    // decoder rejecting the choice rather than as an idle branch that was
+    // never asked. This is the one element that decides the question anyway.
+    decode.set_property("name", VIDEO_DECODER);
     pipeline
         .add_many([&src, &decode])
         .map_err(|e| e.to_string())?;
@@ -377,10 +390,23 @@ pub fn build_pipeline(
     {
         let mut routing = routing.lock().unwrap();
         for (role, audio) in [("primary", primary_audio), ("secondary", secondary_audio)] {
+            // A chain for every output the configuration names a device for,
+            // whether or not it starts with anything to play. An output set to
+            // None still has a device and still has a menu to be switched on
+            // from, and building its chain up front is what lets that happen
+            // without rebuilding anything mid-film.
+            let named = match role {
+                "primary" => config.primary_sink.is_some(),
+                _ => config.secondary_sink.is_some(),
+            };
+            if !named {
+                continue;
+            }
+            routing.chains.insert(
+                role.into(),
+                build_output_chain(&pipeline, role, config, audio.is_none())?,
+            );
             let Some(audio) = audio else { continue };
-            routing
-                .chains
-                .insert(role.into(), build_output_chain(&pipeline, role, config)?);
             routing.want(
                 role,
                 Some(match audio {
@@ -672,6 +698,9 @@ fn build_output_chain(
     pipeline: &gst::Pipeline,
     role: &str,
     config: &Config,
+    // Whether this output starts with nothing to play, which decides whether
+    // its sink is allowed to hold up the pipeline waiting to preroll.
+    idle: bool,
 ) -> Result<gst::Element, String> {
     let queue = make("queue")?;
     let convert = make("audioconvert")?;
@@ -687,6 +716,19 @@ fn build_output_chain(
     volume.set_property("volume", config.volume(role));
     volume.set_property("mute", config.muted(role));
     let sink = build_device_sink(role, config)?;
+
+    // An output that starts on None has a chain with nothing feeding it. A
+    // sink gates the pipeline's state change until it has prerolled, and one
+    // that is never sent a buffer never will - so the whole pipeline would sit
+    // ASYNC and the film would not start at all. Letting this one sink out of
+    // that is what makes an empty output cost nothing until it is switched on.
+    //
+    // The same property Linux sets on every sink, for a different reason - see
+    // `build_device_sink` - and with the same consequence, which is that the
+    // sink still honors `sync` and so stays in step once it does get audio.
+    if idle && sink.find_property("async").is_some() {
+        sink.set_property("async", false);
+    }
 
     pipeline
         .add_many([&queue, &convert, &resample, &volume, &sink])

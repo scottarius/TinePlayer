@@ -69,6 +69,33 @@ fn is_audio(collection: Option<&gst::StreamCollection>, id: &str) -> bool {
     })
 }
 
+/// Seeks through the video branch rather than through the pipeline.
+///
+/// A bin hands an event to every one of its sinks and reports success only if
+/// all of them took it. An output resting on None has a chain that is
+/// deliberately fed by nothing, and a sink with an unlinked pad has nowhere to
+/// send a seek upstream - so it fails, and takes the whole seek's answer down
+/// with it. Resuming a film with the second output on None therefore reported
+/// a seek failure while the seek itself had worked.
+///
+/// The video sink is the right one to ask. A seek travels upstream to the
+/// source, and every branch hangs off the same `urisourcebin` - so the flush
+/// and the new segment reach the audio the same as before. What it skips is
+/// asking a branch that has nothing to answer with.
+///
+/// External audio and subtitles still need their own, because those chains
+/// have sources of their own that this never reaches. See `run_seek`.
+fn seek_through_video(
+    pipeline: &gst::Pipeline,
+    flags: gst::SeekFlags,
+    target: gst::ClockTime,
+) -> Result<(), glib::BoolError> {
+    match pipeline.by_name("vsink") {
+        Some(sink) => sink.seek_simple(flags, target),
+        None => pipeline.seek_simple(flags, target),
+    }
+}
+
 /// Why playback stopped on its own.
 ///
 /// The two are worth telling apart because reaching the end is the ordinary
@@ -314,12 +341,12 @@ impl Playback {
             // zero and started it over. Accurate seeking decodes forward from
             // that keyframe to the exact position instead, which costs a
             // moment once at startup and lands where the viewer actually was.
-            pipeline
-                .seek_simple(
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                    gst::ClockTime::from_nseconds(ns),
-                )
-                .map_err(|e| e.to_string())?;
+            seek_through_video(
+                &pipeline,
+                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                gst::ClockTime::from_nseconds(ns),
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         pipeline
@@ -675,9 +702,11 @@ impl Playback {
             }
         }
 
-        let result = self
-            .pipeline
-            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target);
+        let result = seek_through_video(
+            &self.pipeline,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            target,
+        );
 
         // Unconditional, not part of the workaround above. Measured on the Pi
         // on 2026-08-10: an external file goes silent on the first seek with
@@ -849,10 +878,7 @@ impl Playback {
         // Sent even when nothing was added: that is how a subtitle stops being
         // decoded when subtitles are turned off.
         if !keep.is_empty() {
-            let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
-            let _ = self
-                .pipeline
-                .send_event(gst::event::SelectStreams::new(&ids));
+            let _ = self.select_streams(&keep);
         }
 
         if let Some(SubtitleSource::Uri(uri)) = subtitle {
@@ -1010,12 +1036,23 @@ impl Playback {
         if keep.is_empty() {
             return Ok(());
         }
-        let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
-        if !self
+        self.select_streams(&keep)
+    }
+
+    /// Asks the video's decoder for exactly these streams and no others.
+    ///
+    /// Sent to the decoder by name rather than to the pipeline. A pipeline
+    /// hands an upstream event to every sink, and one that cannot pass it on
+    /// makes the whole answer false - which an output resting on None does,
+    /// since its chain is deliberately left unlinked. See [`VIDEO_DECODER`].
+    fn select_streams(&self, keep: &[String]) -> Result<(), String> {
+        let decoder = self
             .pipeline
-            .send_event(gst::event::SelectStreams::new(&ids))
-        {
-            return Err("The pipeline refused the stream selection".into());
+            .by_name(crate::pipeline::VIDEO_DECODER)
+            .ok_or("The pipeline has no video decoder to select streams on")?;
+        let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
+        if !decoder.send_event(gst::event::SelectStreams::new(&ids)) {
+            return Err("The decoder refused the stream selection".into());
         }
         Ok(())
     }

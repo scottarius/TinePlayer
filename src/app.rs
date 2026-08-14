@@ -12,6 +12,7 @@ use crate::appearance;
 use crate::config::Config;
 use crate::controls::Controls;
 use crate::devices::list_audio_output_devices;
+use crate::pipeline::Playing;
 use crate::player::Playback;
 use crate::probe::AudioTrack;
 use crate::sound::Sounds;
@@ -1568,12 +1569,18 @@ impl App {
                 // spending Escape on it as well made leaving a film two
                 // presses when it reads as one.
                 //
-                // The gamepad's B still steps out of the strip first, which is
-                // not an inconsistency: it has no second button to spare for
-                // it, and that is what its own comment above Action::Back is
-                // about.
+                // With one exception, added because the menus made it one: an
+                // open chooser is closed first, exactly as the gamepad's B
+                // does. A list of soundtracks laid over the film is something
+                // you are inside of, and Escape is the key for getting out of
+                // what you are inside of - leaving the film outright from
+                // there is a much bigger step than the press suggests.
+                //
+                // Only for an open chooser. With nothing open, Escape still
+                // goes straight out rather than putting the strip away, which
+                // is what Down is for on a keyboard.
                 gdk::Key::Escape => {
-                    app.go_back();
+                    app.close_chooser_or_go_back();
                     glib::Propagation::Stop
                 }
                 // Ours rather than GTK's, which cannot see the lists at all.
@@ -2470,6 +2477,27 @@ impl App {
         }
     }
 
+    /// Escape: shuts an open chooser, or leaves whatever is on screen.
+    ///
+    /// Back to the buttons rather than off the strip entirely, so the icon the
+    /// chooser came out of is highlighted and can be seen to have changed -
+    /// the same landing choosing a row gives, and the same the gamepad's B
+    /// gives.
+    fn close_chooser_or_go_back(self: &Rc<Self>) {
+        use crate::controls::Row;
+        // Cloned out rather than acted on through the borrow, the way every
+        // other caller here does it: `set_row` runs the strip's own handlers,
+        // and holding the cell open across them is how a re-entrant borrow
+        // panic gets written.
+        let controls = self.controls.borrow().clone();
+        match controls {
+            Some(controls) if matches!(controls.row(), Row::Volume | Row::Subtitles) => {
+                controls.set_row(Row::Buttons);
+            }
+            _ => self.go_back(),
+        }
+    }
+
     /// Down: back to the buttons from the timeline, then let the strip go.
     fn leave_controls(self: &Rc<Self>) {
         use crate::controls::Row;
@@ -3078,6 +3106,80 @@ impl App {
             entries.push(subtitle_label(option));
         }
         (entries, current)
+    }
+
+    /// One output's soundtrack list, and which row it is playing.
+    ///
+    /// The film's own tracks, with "None" first for the second output only:
+    /// playing nothing on the second is a legitimate choice in a way it is not
+    /// on the first, where it would mean a film with no sound at all.
+    ///
+    /// Browsing for a separate audio file is deliberately not here, though the
+    /// media page's version of this list ends with it. That opens a screen of
+    /// its own, and going looking on disk belongs to the page you choose from
+    /// before pressing play - the same rule the subtitle chooser follows.
+    /// Takes the playback rather than reading it off `self`, because playback
+    /// starting has not put it into its cell yet - the same reason
+    /// [`Self::show_subtitle_state`] takes one. Reading `self` here marked the
+    /// first row of both lists on every film, since with no playback to ask,
+    /// nothing matched what was playing.
+    fn audio_entries(&self, playback: &Playback, role: Role) -> (Vec<String>, Option<usize>) {
+        let offers_none = role == Role::Secondary;
+        let mut entries = Vec::new();
+        if offers_none {
+            entries.push("None".to_string());
+        }
+        let playing = playback.playing_on(role.key());
+        let offset = usize::from(offers_none);
+        // None when the output is on a separate file, which this list has no
+        // row for: nothing in it is in force, so nothing is marked.
+        let mut current = match playing {
+            Some(Playing::File(_)) => None,
+            None if offers_none => Some(0),
+            _ => None,
+        };
+        for (position, track) in self.tracks.borrow().iter().enumerate() {
+            if playing == Some(Playing::Track(track.index)) {
+                current = Some(position + offset);
+            }
+            entries.push(describe_audio_track(track));
+        }
+        (entries, current)
+    }
+
+    /// Fills both outputs' menus with what this video offers.
+    fn push_audio_entries(&self, playback: &Playback, controls: &Rc<Controls>) {
+        for (index, role) in [Role::Primary, Role::Secondary].into_iter().enumerate() {
+            let (entries, current) = self.audio_entries(playback, role);
+            controls.set_audio_entries(index, &entries, current);
+        }
+    }
+
+    /// Puts one output onto the soundtrack at `at` in its own list, without
+    /// stopping the film.
+    fn choose_audio(self: &Rc<Self>, role: &str, at: usize) {
+        let Some(playback) = self.playback.borrow().clone() else {
+            return;
+        };
+        let offers_none = role == Role::Secondary.key();
+        // The "None" row on the second output's list, which is a row rather
+        // than a track and so cannot be looked up among them.
+        let wanted = match (offers_none, at) {
+            (true, 0) => None,
+            _ => {
+                let index = at - usize::from(offers_none);
+                match self.tracks.borrow().get(index) {
+                    Some(track) => Some(Playing::Track(track.index)),
+                    None => return,
+                }
+            }
+        };
+        if let Err(reason) = playback.set_audio(role, wanted) {
+            eprintln!("Cannot change the {role} soundtrack: {reason}");
+        }
+        if let Some(controls) = self.controls.borrow().clone() {
+            self.push_audio_entries(&playback, &controls);
+        }
     }
 
     /// Tells the strip what subtitles are doing and what there is to choose
@@ -10455,6 +10557,10 @@ impl App {
                     controls.connect_subtitle_chosen(move |entry| app.choose_subtitle(entry));
                 }
                 {
+                    let app = self.clone();
+                    controls.connect_audio_chosen(move |role, entry| app.choose_audio(role, entry));
+                }
+                {
                     // Under a launcher there is no menu worth returning to:
                     // something else chose this video and is waiting for the
                     // playback to end, which stopping is a way of saying.
@@ -10604,6 +10710,7 @@ impl App {
                     playback.toggle_subtitles();
                 }
                 self.show_subtitle_state(&playback, &controls);
+                self.push_audio_entries(&playback, &controls);
                 controls.update(&playback);
                 // Where playback has reached, and nothing else. A film
                 // opening with a full row of buttons over it announces the
@@ -12966,6 +13073,50 @@ fn style_css(scale: f64) -> String {
             -gtk-icon-size: {icon}px;
             color: #ffffff;
         }}
+        /* The 1 and 2 on the two output buttons, tucked into the lower
+           trailing corner of the speaker. Drawn on its own dark disc: the
+           strip sits over a moving picture, and a bare numeral lands on
+           whatever the film happens to be showing.
+
+           Sized off the icon rather than off the body text, so it stays a mark
+           on an icon at every ui_scale instead of growing into a second
+           glyph. */
+        .tp-output-badge {{
+            font-size: {badge}px;
+            font-weight: bold;
+            color: #ffffff;
+            background-color: rgba(0, 0, 0, 0.8);
+            border-radius: {badge}px;
+            padding: 0 {badge_pad}px;
+            margin: 0;
+        }}
+        /* Between the soundtracks and the device below them. Faint rather than
+           a rule: it separates two kinds of thing inside one menu, and a hard
+           line would read as two panels that had run together. */
+        .tp-menu-divider {{
+            background-color: rgba(255, 255, 255, 0.25);
+            margin-top: {crumb_pad}px;
+            margin-bottom: {crumb_pad}px;
+        }}
+        /* A list taller than the window scrolls rather than running off the
+           top of it. The scrolled window itself carries no background: the
+           panel behind it already has one, and a second would show as a
+           lighter block wherever the list did not fill its box. */
+        .tp-volume-panel scrolledwindow {{ background-color: transparent; }}
+        /* Drawn over the list rather than beside it, so that a film with more
+           soundtracks than fit does not come out a different width from one
+           that fits - the panel is opened and closed constantly, and a width
+           that moved with the content would read as the menu jumping. */
+        .tp-volume-panel scrollbar,
+        .tp-subtitle-panel scrollbar {{
+            background-color: transparent;
+            border: none;
+        }}
+        .tp-volume-panel scrollbar slider,
+        .tp-subtitle-panel scrollbar slider {{
+            background-color: rgba(255, 255, 255, 0.35);
+            border-radius: {radius}px;
+        }}
         /* The subtitle chooser, laid over the bar exactly as the volume panel
            is and out of the same corner: they are the two things the strip
            opens rather than does, and a list that arrived looking like
@@ -13231,6 +13382,11 @@ fn style_css(scale: f64) -> String {
         icon = px(ICON_PX + 3.5),
         icon_main = px(38.4),
         crumb_pad = px(6.0),
+        // The 1 and 2 on the output buttons. About half the icon, which is
+        // what keeps it a mark on a speaker rather than a numeral with a
+        // speaker behind it.
+        badge = px(ICON_PX * 0.5),
+        badge_pad = px(3.0),
         leading = px(38.0),
         back_icon = px(22.0),
         row_icon = px(18.0),
