@@ -325,6 +325,16 @@ enum Screen {
     KodiConfirm,
     KodiPermission,
     KodiError,
+    /// The Quick Connect code, while it waits to be approved. Its own screen
+    /// rather than one of the panels below, because something is running
+    /// behind it: the polling stops when this stops being what is on screen.
+    JellyfinConnect,
+    /// Everything else the Jellyfin pane opens over itself - the server
+    /// address, the question asked before disconnecting, and anything that
+    /// went wrong. One variant rather than three, since what they have in
+    /// common is the whole of what is asked of them: Escape returns to the
+    /// pane, exactly as pressing Cancel does.
+    JellyfinPanel,
     ConfirmQuit,
     Error,
     Playing,
@@ -429,6 +439,15 @@ enum Item {
     /// is empty rather than only offering to add something.
     KodiNone,
     KodiAdd,
+    /// The rows the Jellyfin pane has, which depend on how far a pairing has
+    /// got. Only one of Connect and the pair below it is ever on screen: a
+    /// Connect that is really a Disconnect, or a Disconnect on a pane with
+    /// nothing to disconnect from, would each be a row that means the opposite
+    /// of what it says.
+    JellyfinServer,
+    JellyfinConnect,
+    JellyfinAccount,
+    JellyfinDisconnect,
     Notices,
 }
 
@@ -486,6 +505,20 @@ impl Item {
 /// A descriptor rather than the `Setup` itself, so `Category::items` stays a
 /// plain function of its inputs: a test can ask what the pane holds for three
 /// imagined installations without a disk to find any of them on.
+/// How far the pairing with a Jellyfin server has got, which is all the pane
+/// needs to know to say what is on it.
+///
+/// Two states rather than three. A server that has been named but never
+/// approved reads exactly like one that has not been named at all - there is
+/// an address to set and a code to ask for - and the difference between them
+/// is whether Connect can be pressed, which is a fact about one row rather
+/// than about the pane.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum JellyfinPane {
+    NotConnected,
+    Connected,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct KodiPane {
     /// The group heading, which is the installation's name: "KODI 21.1
@@ -507,15 +540,19 @@ enum Category {
     /// of integration would land among them with nothing to say where Kodi
     /// ends and it begins. Whatever comes next gets a category of its own.
     Kodi,
+    /// Which is what happened: the server TinePlayer can be cast from. Named
+    /// for the one thing in it, on the rule the Kodi category set.
+    Jellyfin,
     About,
 }
 
 impl Category {
-    const ALL: [Category; 5] = [
+    const ALL: [Category; 6] = [
         Category::General,
         Category::Outputs,
         Category::Subtitles,
         Category::Kodi,
+        Category::Jellyfin,
         Category::About,
     ];
 
@@ -525,22 +562,28 @@ impl Category {
             Category::Outputs => "Outputs",
             Category::Subtitles => "Subtitles",
             Category::Kodi => "Kodi",
+            Category::Jellyfin => "Jellyfin",
             Category::About => "About",
         }
     }
 
     /// What the right-hand pane shows, and the heading each group opens with.
     ///
-    /// `kodis` is every Kodi installation found, which only the Kodi category uses.
-    /// Passed in rather than looked up here so this stays a plain function of
-    /// its inputs, and so a test can ask what a category holds without an
-    /// application to ask it of.
+    /// `kodis` is every Kodi installation found, and `jellyfin` how far the
+    /// pairing with a server has got. Both are passed in rather than looked up
+    /// here so this stays a plain function of its inputs, and so a test can ask
+    /// what a category holds without an application to ask it of - one walks
+    /// the disk and the other reads a credentials file.
     ///
     /// The headings are what make Outputs readable: it holds two rows called
     /// Volume and two called Audio Sync, and until now they were told apart
     /// only by which half of the list they were in. The Kodi category now works the
     /// same way, one heading per installation.
-    fn items(self, kodis: &[KodiPane]) -> Vec<(Option<Cow<'static, str>>, Item)> {
+    fn items(
+        self,
+        kodis: &[KodiPane],
+        jellyfin: JellyfinPane,
+    ) -> Vec<(Option<Cow<'static, str>>, Item)> {
         match self {
             Category::General => vec![
                 (Some("INTERFACE".into()), Item::InterfaceScale),
@@ -602,6 +645,22 @@ impl Category {
                 rows.push((Some("OTHER".into()), Item::KodiAdd));
                 rows
             }
+            // One heading over the lot. Unlike Kodi there is only ever one
+            // server, so a group per anything would be a group of one.
+            Category::Jellyfin => match jellyfin {
+                JellyfinPane::NotConnected => vec![
+                    (Some("JELLYFIN".into()), Item::JellyfinServer),
+                    (None, Item::JellyfinConnect),
+                ],
+                JellyfinPane::Connected => vec![
+                    (Some("JELLYFIN".into()), Item::JellyfinServer),
+                    (None, Item::JellyfinAccount),
+                    // Last, and it is the one row here that takes something
+                    // away - the same place and the same reason as Clear
+                    // Saved Playback Data at the foot of General.
+                    (None, Item::JellyfinDisconnect),
+                ],
+            },
             // The text itself is not a row - see `about_body`, which the
             // pane draws above these.
             Category::About => vec![(None, Item::Notices)],
@@ -639,6 +698,23 @@ enum Step {
     /// How many of the three windows have finished.
     Window(usize),
     Done(crate::align::Verdict),
+}
+
+/// How far the Quick Connect thread has got, on its way back to the main
+/// thread.
+///
+/// One channel for the whole pairing rather than one per stage: asking for a
+/// code and waiting for it to be approved are two halves of one errand, and
+/// the panel shows them in the same place.
+enum QuickConnect {
+    /// The six characters to show, once the server has issued them.
+    Code(String),
+    /// Approved, with the account it granted. Boxed because it is much the
+    /// largest of the three, and every message would otherwise be its size.
+    Done(Box<crate::jellyfin::Account>),
+    /// Refused, expired, or a server that could not be reached. All of them
+    /// end the same way: say so, and let another code be asked for.
+    Failed(String),
 }
 
 /// Choices given on the command line, which skip the menu entirely.
@@ -922,6 +998,17 @@ pub struct App {
     /// and while the server is unreachable - all of which are ordinary, and
     /// none of which stop anything else working.
     jellyfin: RefCell<Option<crate::jellyfin::Client>>,
+    /// What the pairing file says, as the settings pane last read it.
+    ///
+    /// Held rather than read per row, for the same reason the Kodi
+    /// installations are: every label, value and enabled state on that pane
+    /// comes out of this, and a file read apiece would be a dozen for one
+    /// screen. Re-read whenever the pane is built, so a token revoked from
+    /// elsewhere shows up on the next visit.
+    jellyfin_pairing: RefCell<Option<crate::jellyfin::Pairing>>,
+    /// Bumped whenever a Quick Connect is started or abandoned, so the polling
+    /// left over from one attempt cannot outlive it and approve another.
+    jellyfin_attempt: Cell<u64>,
     /// What Jellyfin knows about the video on screen, when it was cast from
     /// there. The counterpart to `kodi_item`, and read by the same three
     /// accessors: a launcher's library knows the title and where the viewer
@@ -1109,6 +1196,8 @@ impl App {
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
             jellyfin: RefCell::new(None),
+            jellyfin_pairing: RefCell::new(crate::jellyfin::load()),
+            jellyfin_attempt: Cell::new(0),
             jellyfin_item: RefCell::new(None),
             jellyfin_session: RefCell::new(None),
             jellyfin_reported: Cell::new(0),
@@ -2048,6 +2137,9 @@ impl App {
         let Some(pairing) = crate::jellyfin::load() else {
             return;
         };
+        // What the settings pane reads. Set here as well as when that pane is
+        // built, so the rows are right the first time it is opened.
+        *self.jellyfin_pairing.borrow_mut() = Some(pairing.clone());
         let Some(client) = crate::jellyfin::Client::new(&pairing) else {
             // Paired with a server but signed out of it, which is where a 401
             // leaves things. The settings screen offers a new code.
@@ -2338,8 +2430,16 @@ impl App {
             if let Err(e) = crate::jellyfin::save(&pairing) {
                 eprintln!("Couldn't forget the Jellyfin token: {e}");
             }
+            *self.jellyfin_pairing.borrow_mut() = Some(pairing);
         }
         eprintln!("Jellyfin no longer accepts this connection. Connect again in Settings.");
+        // Redrawn only where it is being looked at. A pairing can be revoked
+        // at any moment, and rebuilding a screen under somebody who is part
+        // way through choosing a soundtrack would be a worse interruption than
+        // the one being reported.
+        if self.showing_jellyfin_pane() {
+            self.show_settings();
+        }
     }
 
     /// Tells Jellyfin where playback has reached.
@@ -2473,6 +2573,11 @@ impl App {
             | Screen::KodiFolder
             | Screen::KodiPermission
             | Screen::KodiError => self.return_to_kodi_settings(),
+            // The same, for the pane beside it. Backing out of a waiting code
+            // abandons the pairing rather than pausing it: the polling stops
+            // because this screen is no longer showing, and the code the
+            // server issued is left to expire on its own.
+            Screen::JellyfinConnect | Screen::JellyfinPanel => self.return_to_jellyfin_settings(),
             // Nothing to go back to when the video we were started for could
             // not be opened.
             Screen::Error if self.error_is_fatal.get() => self.window.close(),
@@ -7964,6 +8069,10 @@ impl App {
             // playercorefactory.xml goes, and choosing it lands one level
             // above the folder that is.
             Item::KodiAdd => "Add User Data Folder".to_string(),
+            Item::JellyfinServer => "Server Address".to_string(),
+            Item::JellyfinConnect => "Connect".to_string(),
+            Item::JellyfinAccount => "Connected As".to_string(),
+            Item::JellyfinDisconnect => "Disconnect".to_string(),
             Item::Notices => "Third-Party Notices".to_string(),
         }
     }
@@ -8020,6 +8129,27 @@ impl App {
             // Not a claim that it has been granted, which nothing here checks.
             // The row opens the instructions, and this says there are some.
             Item::KodiPermission(_) => "Action needed".to_string(),
+            Item::JellyfinServer => {
+                drop(config);
+                self.jellyfin_pairing
+                    .borrow()
+                    .as_ref()
+                    .map(|pairing| pairing.server.clone())
+                    .unwrap_or_else(|| "Not set".to_string())
+            }
+            // The name the server calls them, which is what they will
+            // recognise from their own phone. An account whose name the server
+            // did not give reads as connected rather than as nothing at all.
+            Item::JellyfinAccount => {
+                drop(config);
+                self.jellyfin_pairing
+                    .borrow()
+                    .as_ref()
+                    .and_then(|pairing| pairing.account.as_ref())
+                    .map(|account| account.user_name.clone())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "Connected".to_string())
+            }
             Item::UpdateStatus => {
                 drop(config);
                 self.version_status()
@@ -8088,6 +8218,16 @@ impl App {
             // exist until Kodi has been run once.
             Item::KodiAdd => {
                 "For a Kodi that was not found, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
+            }
+            // Says what will happen, because the answer is unusual enough to
+            // be worth knowing before pressing it: no password is ever typed
+            // into TinePlayer, which is the whole reason this is a code and
+            // not a login form.
+            Item::JellyfinConnect => {
+                "Shows a code to enter in a Jellyfin app you are already signed in to. No password is typed here."
+            }
+            Item::JellyfinDisconnect => {
+                "Removes the access token stored on this machine and signs this device out of the server."
             }
             _ => return None,
         })
@@ -8158,7 +8298,73 @@ impl App {
                 }),
             // There to be read. Landing on it would be landing on a sentence.
             Item::KodiNone => false,
+            // The address belongs to the token: changing it while connected
+            // would sign the viewer out of a server they never asked to leave.
+            // Disconnect is the way to change it, and the row below says so.
+            Item::JellyfinServer => !self.jellyfin_connected(),
+            // Nothing to ask a server for until there is a server to ask.
+            Item::JellyfinConnect => self
+                .jellyfin_pairing
+                .borrow()
+                .as_ref()
+                .is_some_and(|pairing| !pairing.server.is_empty()),
+            // A readout, like the version row. There is nothing to do to it.
+            Item::JellyfinAccount => false,
             _ => true,
+        }
+    }
+
+    /// Whether there is a token to cast with, as the pane last read it.
+    fn jellyfin_connected(&self) -> bool {
+        self.jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .is_some_and(crate::jellyfin::Pairing::is_connected)
+    }
+
+    /// Whether the Jellyfin pane is what is on screen right now.
+    ///
+    /// Asked by the two things that can finish long after they were started -
+    /// a token going stale, and a server being told about a disconnection - so
+    /// that neither redraws a screen nobody is looking at or throws a panel
+    /// over a film. The screen is copied out rather than tested in place,
+    /// which is the rule `go_back` records: a caller acting on the answer takes
+    /// the same cell mutably.
+    fn showing_jellyfin_pane(&self) -> bool {
+        let screen = *self.screen.borrow();
+        screen == Screen::Settings && self.settings_category.get() == Category::Jellyfin
+    }
+
+    /// Which of the two shapes the Jellyfin pane takes.
+    fn jellyfin_pane(&self) -> JellyfinPane {
+        match self.jellyfin_connected() {
+            true => JellyfinPane::Connected,
+            false => JellyfinPane::NotConnected,
+        }
+    }
+
+    /// What the Jellyfin heading says under itself.
+    ///
+    /// What the feature is, since a pane nobody has set up says nothing else
+    /// about why it is there - and what pairing leaves behind, which is the
+    /// one thing about this worth stating outright. Obfuscating a credential
+    /// TinePlayer can read unattended would be theatre; saying where it is is
+    /// not.
+    fn jellyfin_group_note(&self) -> GroupNote {
+        GroupNote {
+            sentence: match self.jellyfin_pane() {
+                JellyfinPane::NotConnected => {
+                    "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app on a phone or tablet. Connecting stores an access token on this machine that can read and stream that library."
+                }
+                JellyfinPane::Connected => {
+                    "Videos can be cast to TinePlayer from the Jellyfin app on a phone or tablet. An access token that can read and stream this library is stored on this machine, and disconnecting removes it."
+                }
+            }
+            .to_string(),
+            // Named rather than opened. The folder holds the token, and a
+            // settings screen that offers to show somebody their own
+            // credential in a file manager is offering the wrong thing.
+            folder: None,
         }
     }
 
@@ -8298,6 +8504,13 @@ impl App {
                 if app.settings_category.get() == Category::Kodi {
                     *app.kodi_setups.borrow_mut() = app.known_kodis();
                 }
+                // Re-read for the same reason, and it is the more important of
+                // the two: the token in that file can be revoked from a
+                // dashboard on the other side of the house, and this pane is
+                // where somebody comes to find out that it was.
+                if app.settings_category.get() == Category::Jellyfin {
+                    *app.jellyfin_pairing.borrow_mut() = crate::jellyfin::load();
+                }
                 let panes: Vec<KodiPane> = app
                     .kodi_setups
                     .borrow()
@@ -8307,7 +8520,10 @@ impl App {
                         confinement: setup.confinement,
                     })
                     .collect();
-                let entries = app.settings_category.get().items(&panes);
+                let entries = app
+                    .settings_category
+                    .get()
+                    .items(&panes, app.jellyfin_pane());
                 *app.pane_items.borrow_mut() = entries.iter().map(|(_, item)| *item).collect();
 
                 for (index, (_, item)) in entries.iter().enumerate() {
@@ -8404,6 +8620,7 @@ impl App {
                     .iter()
                     .map(|(heading, item)| match (heading, item) {
                         (Some(_), Item::KodiType(index)) => app.kodi_group_note(*index),
+                        (Some(_), Item::JellyfinServer) => Some(app.jellyfin_group_note()),
                         _ => None,
                     })
                     .collect();
@@ -8744,6 +8961,9 @@ impl App {
             // about where Kodi keeps its settings.
             Item::KodiAdd => self.show_kodi_folder(&crate::browser::home()),
             Item::KodiPermission(index) => self.show_kodi_permission(index),
+            Item::JellyfinServer => self.show_jellyfin_server(),
+            Item::JellyfinConnect => self.show_jellyfin_connect(),
+            Item::JellyfinDisconnect => self.confirm_jellyfin_disconnect(),
             Item::Notices => self.show_notices(),
             Item::UpdateStatus => self.open_release_page(),
             _ => {}
@@ -10319,6 +10539,466 @@ impl App {
         *self.screen.borrow_mut() = Screen::KodiPermission;
         self.window.set_child(Some(&self.dialog(&page)));
         ok.grab_focus();
+    }
+
+    // --- Jellyfin pairing ----------------------------------------------
+
+    /// Puts the settings screen back with the Jellyfin category showing.
+    ///
+    /// The counterpart to [`return_to_kodi_settings`], and it does the same
+    /// job: rebuilding is what re-reads the pairing file, so the rows state
+    /// what is stored rather than what was asked for.
+    ///
+    /// [`return_to_kodi_settings`]: Self::return_to_kodi_settings
+    fn return_to_jellyfin_settings(self: &Rc<Self>) {
+        // Any code still waiting is abandoned by leaving, so nothing arriving
+        // late can pair a server the viewer has walked away from.
+        self.jellyfin_attempt.set(self.jellyfin_attempt.get() + 1);
+        self.settings_category.set(Category::Jellyfin);
+        self.in_settings_pane.set(true);
+        self.show_settings();
+    }
+
+    /// Where the server is, typed.
+    ///
+    /// The one thing about Jellyfin that cannot be discovered: a server
+    /// announces itself on the local network, but TinePlayer is as likely to
+    /// be pointed at one through a hostname or across a VPN. Modelled on the
+    /// address panel the video browser opens, because it is the same act.
+    fn show_jellyfin_server(self: &Rc<Self>) {
+        let page = wizard_page("Jellyfin Server");
+        page.append(&wizard_text(
+            "Enter the address of your Jellyfin server, as you would type it into a browser.",
+            false,
+        ));
+
+        let field = gtk::Entry::new();
+        field.add_css_class("tp-path");
+        field.set_placeholder_text(Some("http://jellyfin.local:8096"));
+        gtk::prelude::EditableExt::set_alignment(&field, 0.5);
+        field.set_hexpand(true);
+        if let Some(pairing) = self.jellyfin_pairing.borrow().as_ref() {
+            field.set_text(&pairing.server);
+        }
+        page.append(&field);
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        let save = gtk::Button::with_label("Save");
+        save.add_css_class("tp-button");
+        save.add_css_class("tp-action");
+        save.set_sensitive(!field.text().trim().is_empty());
+        {
+            let save = save.clone();
+            field.connect_changed(move |field| {
+                save.set_sensitive(!field.text().trim().is_empty());
+            });
+        }
+        buttons.append(&cancel);
+        buttons.append(&save);
+        page.append(&buttons);
+
+        {
+            let app = self.clone();
+            let field = field.clone();
+            save.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.save_jellyfin_server(&field.text());
+            });
+        }
+        {
+            let app = self.clone();
+            field.connect_activate(move |field| {
+                if !field.text().trim().is_empty() {
+                    app.save_jellyfin_server(&field.text());
+                }
+            });
+        }
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_jellyfin_settings();
+            });
+        }
+
+        // Its own tab order, the way the address panel has one: without stops
+        // there is nothing for Tab to move between and Save cannot be reached
+        // from the keyboard at all.
+        self.set_nav(None, &[], &[]);
+        self.add_nav_stop(&field);
+        self.add_nav_stop(&cancel);
+        self.add_nav_stop(&save);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinPanel;
+        self.window.set_child(Some(&self.modal(&page)));
+        field.grab_focus();
+        // Selected rather than left with a caret at the end: an address being
+        // changed is usually being replaced, not edited.
+        field.select_region(0, -1);
+    }
+
+    /// Writes down where the server is, keeping this installation's identity.
+    ///
+    /// A scheme is added when there is none, because "hoth:8096" is what
+    /// somebody types and every request made with it would fail with nothing
+    /// on screen to say why. Plain HTTP is the assumption a Jellyfin server on
+    /// a home network answers to; anybody reaching one over the internet types
+    /// the https themselves.
+    fn save_jellyfin_server(self: &Rc<Self>, typed: &str) {
+        let typed = typed.trim();
+        let address = match typed.contains("://") {
+            true => typed.to_string(),
+            false => format!("http://{typed}"),
+        };
+
+        let pairing = match self.jellyfin_pairing.borrow().clone() {
+            Some(mut pairing) => {
+                pairing.set_server(&address);
+                pairing
+            }
+            None => crate::jellyfin::Pairing::new(&address),
+        };
+        if let Err(e) = crate::jellyfin::save(&pairing) {
+            return self.jellyfin_notice("Could Not Save", &[&e]);
+        }
+        *self.jellyfin_pairing.borrow_mut() = Some(pairing);
+        self.return_to_jellyfin_settings();
+    }
+
+    /// Quick Connect, from asking for a code to being signed in.
+    ///
+    /// A code rather than a login form, and that is not a matter of taste: this
+    /// runs on a television, where typing a password with a remote is
+    /// miserable, and it means no password is ever typed into TinePlayer at
+    /// all. The viewer approves it in a Jellyfin app they are already signed
+    /// in to.
+    ///
+    /// One thread does the whole of it - asking for the code, then polling
+    /// until somebody approves it - and reports each step back to the main loop
+    /// through a channel, which is the same shape everything else here uses to
+    /// talk to a server without the interface stopping.
+    fn show_jellyfin_connect(self: &Rc<Self>) {
+        /// How often to ask whether the code has been approved. Often enough
+        /// that pressing approve on a phone and looking up at the television
+        /// shows it done, rarely enough not to be a request a second for the
+        /// several minutes somebody may take to find their phone.
+        const ASK_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+        /// Five minutes of asking. Jellyfin expires a code of its own accord
+        /// around then, so waiting longer only produces a code that cannot
+        /// work and a screen that does not say so.
+        const TRIES: usize = 150;
+
+        let Some(pairing) = self.jellyfin_pairing.borrow().clone() else {
+            return;
+        };
+        if pairing.server.is_empty() {
+            return;
+        }
+
+        let attempt = self.jellyfin_attempt.get() + 1;
+        self.jellyfin_attempt.set(attempt);
+
+        let page = wizard_page("Connect to Jellyfin");
+        // Filled in once the server answers. Empty rather than absent, so the
+        // panel does not change shape under the eye when the code arrives.
+        let code = gtk::Label::new(None);
+        code.add_css_class("tp-code");
+        code.set_selectable(true);
+        code.set_can_focus(false);
+        page.append(&code);
+        let status = wizard_text("Asking the server for a code...", false);
+        page.append(&status);
+
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.set_halign(gtk::Align::Center);
+        page.append(&cancel);
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_jellyfin_settings();
+            });
+        }
+
+        self.set_nav(None, std::slice::from_ref(&cancel), &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinConnect;
+        self.window.set_child(Some(&self.modal(&page)));
+        cancel.grab_focus();
+
+        let server = pairing.server.clone();
+        let device_id = pairing.device_id.clone();
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let asking = alive.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let pending = match crate::jellyfin::quick_connect_start(&server, &device_id) {
+                Ok(pending) => pending,
+                Err(e) => {
+                    let _ = sender.send(QuickConnect::Failed(e.to_string()));
+                    return;
+                }
+            };
+            if sender
+                .send(QuickConnect::Code(pending.code.clone()))
+                .is_err()
+            {
+                return;
+            }
+            for _ in 0..TRIES {
+                // Checked before the request rather than after it, so
+                // cancelling stops the asking rather than stopping one round
+                // later.
+                if !asking.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                match crate::jellyfin::quick_connect_poll(&server, &device_id, &pending) {
+                    Ok(Some(account)) => {
+                        let _ = sender.send(QuickConnect::Done(Box::new(account)));
+                        return;
+                    }
+                    // Nobody has approved it yet, which is the ordinary answer
+                    // while somebody finds their phone.
+                    Ok(None) => {}
+                    Err(e) => {
+                        let _ = sender.send(QuickConnect::Failed(e.to_string()));
+                        return;
+                    }
+                }
+                std::thread::sleep(ASK_EVERY);
+            }
+            let _ = sender.send(QuickConnect::Failed(
+                "Nobody approved the code in time. Ask for another.".to_string(),
+            ));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            // Left behind by a panel that has been closed, or by a second
+            // attempt started over the top of this one. Either way this one is
+            // over, and the thread is told so it stops asking.
+            if app.jellyfin_attempt.get() != attempt {
+                alive.store(false, std::sync::atomic::Ordering::Relaxed);
+                return glib::ControlFlow::Break;
+            }
+            let step = match receiver.try_recv() {
+                Ok(step) => step,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            match step {
+                QuickConnect::Code(shown) => {
+                    code.set_text(&shown);
+                    status.set_text(
+                        "In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code.",
+                    );
+                    glib::ControlFlow::Continue
+                }
+                QuickConnect::Done(account) => {
+                    app.jellyfin_paired(*account);
+                    glib::ControlFlow::Break
+                }
+                QuickConnect::Failed(why) => {
+                    app.jellyfin_notice("Could Not Connect", &[&why]);
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    }
+
+    /// Somebody approved the code. Writes the token down and goes on the air.
+    ///
+    /// Connecting straight away rather than at the next start: this is the
+    /// moment the viewer is watching to see whether it worked, and a cast
+    /// target that appears on their phone only after a restart looks like one
+    /// that did not.
+    fn jellyfin_paired(self: &Rc<Self>, account: crate::jellyfin::Account) {
+        let Some(mut pairing) = self.jellyfin_pairing.borrow().clone() else {
+            return;
+        };
+        pairing.account = Some(account);
+        if let Err(e) = crate::jellyfin::save(&pairing) {
+            return self.jellyfin_notice("Could Not Save", &[&e]);
+        }
+        *self.jellyfin_pairing.borrow_mut() = Some(pairing);
+        self.start_jellyfin();
+        self.return_to_jellyfin_settings();
+    }
+
+    /// Asked before disconnecting, because it throws a pairing away.
+    fn confirm_jellyfin_disconnect(self: &Rc<Self>) {
+        let server = self
+            .jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .map(|pairing| pairing.server.clone())
+            .unwrap_or_default();
+
+        let app = self.clone();
+        self.confirm_jellyfin(
+            "Disconnect from Jellyfin?",
+            &[
+                &format!("TinePlayer will no longer appear as a player in {server}."),
+                "The access token stored on this machine will be removed. Connecting again takes a new code.",
+            ],
+            Confirm {
+                label: "Disconnect",
+                destructive: true,
+            },
+            move || app.disconnect_jellyfin(),
+        );
+    }
+
+    /// Ends the pairing here and, as far as it can, at the server too.
+    ///
+    /// The server is told on a worker thread while the local file goes at
+    /// once. Waiting on it would mean a settings screen that hangs for as long
+    /// as a switched-off server takes to time out, for a message the viewer has
+    /// already decided the answer to - and what they asked for is to stop being
+    /// paired, which is true the moment the token is gone from this machine.
+    fn disconnect_jellyfin(self: &Rc<Self>) {
+        let client = self
+            .jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .and_then(crate::jellyfin::Client::new);
+        if let Some(client) = client {
+            let app = self.clone();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = sender.send(client.disconnect());
+            });
+            glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+                match receiver.try_recv() {
+                    Ok(Ok(())) => {}
+                    // Said rather than swallowed, and said where it can be
+                    // acted on: the token here is gone either way, but a
+                    // device the server still lists is one the viewer has to
+                    // remove themselves. Only over the pane it was asked
+                    // from - a panel arriving over a film minutes later would
+                    // be a worse fault than the one it reports.
+                    Ok(Err(e)) => {
+                        eprintln!("Jellyfin was not told about the disconnection: {e}");
+                        if app.showing_jellyfin_pane() {
+                            app.jellyfin_notice(
+                                "Disconnected Here Only",
+                                &[
+                                    "The access token stored on this machine has been removed.",
+                                    "The server could not be told, so this device may still be listed under Devices in the Jellyfin dashboard. Removing it there revokes the token for good.",
+                                    &e.to_string(),
+                                ],
+                            );
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        return glib::ControlFlow::Continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
+                glib::ControlFlow::Break
+            });
+        }
+
+        *self.jellyfin.borrow_mut() = None;
+        // Dropping it closes the socket, which is what takes TinePlayer off
+        // everybody's phone.
+        *self.jellyfin_session.borrow_mut() = None;
+        if let Err(e) = crate::jellyfin::remove() {
+            eprintln!("Couldn't remove the Jellyfin pairing: {e}");
+        }
+        *self.jellyfin_pairing.borrow_mut() = None;
+        self.return_to_jellyfin_settings();
+    }
+
+    /// A panel stating something the Jellyfin pane has to say, with the one
+    /// way on from it.
+    fn jellyfin_notice(self: &Rc<Self>, title: &str, lines: &[&str]) {
+        let page = wizard_page(title);
+        for line in lines {
+            page.append(&wizard_text(line, false));
+        }
+
+        let ok = gtk::Button::with_label("OK");
+        ok.add_css_class("tp-button");
+        ok.set_halign(gtk::Align::Center);
+        page.append(&ok);
+        {
+            let app = self.clone();
+            ok.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_jellyfin_settings();
+            });
+        }
+
+        self.set_nav(None, std::slice::from_ref(&ok), &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinPanel;
+        self.window.set_child(Some(&self.dialog(&page)));
+        ok.grab_focus();
+    }
+
+    /// The same question shape the Kodi pane asks, returning to this pane
+    /// instead.
+    fn confirm_jellyfin(
+        self: &Rc<Self>,
+        title: &str,
+        lines: &[&str],
+        confirm: Confirm<'_>,
+        action: impl Fn() + 'static,
+    ) {
+        let page = wizard_page(title);
+        for line in lines {
+            page.append(&wizard_text(line, false));
+        }
+
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        let destructive = confirm.destructive;
+        let confirm = gtk::Button::with_label(confirm.label);
+        confirm.add_css_class("tp-button");
+        confirm.add_css_class(match destructive {
+            true => "tp-danger",
+            false => "tp-action",
+        });
+        row.append(&cancel);
+        row.append(&confirm);
+        page.append(&row);
+
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_jellyfin_settings();
+            });
+        }
+        {
+            let app = self.clone();
+            confirm.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                action();
+            });
+        }
+
+        self.set_nav(None, &[cancel.clone(), confirm.clone()], &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinPanel;
+        self.window.set_child(Some(&self.dialog(&page)));
+        // Cancel, so a reflexive second press changes nothing.
+        cancel.grab_focus();
     }
 
     fn confirm_clear_data(self: &Rc<Self>) {
@@ -13475,6 +14155,17 @@ fn style_css(scale: f64) -> String {
         /* Taller than a stock entry: this is the one thing on its panel, and
            it is read from the same distance as everything else. */
         .tp-path {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
+        /* The Quick Connect code, which is copied off the screen a character
+           at a time into a phone across the room. Sized like a film's title
+           because that is the one other thing in the interface meant to be
+           read from that far away, and spaced out so no two characters run
+           together - a 6 beside a G at a glance is what turns this into two
+           attempts. */
+        .tp-code {{
+            font-size: {film_title}px;
+            font-weight: bold;
+            letter-spacing: {code_tracking}px;
+        }}
         /* A soundtrack icon whose output is silenced, faded the same way and
            for the same reason as the subtitle mark: the button reports the
            state as well as offering to change it. It is the only thing on
@@ -13704,6 +14395,7 @@ fn style_css(scale: f64) -> String {
         modal_pad = px(16.0),
         highlight = "#3584e4",
         film_title = px(48.0),
+        code_tracking = px(8.0).max(2),
         film_facts = px(24.0),
         film_plot = px(22.0),
         fact = px(20.0),
@@ -13975,6 +14667,16 @@ mod settings_rows {
     /// it is, and what it does when it hands a video over.
     const ROWS_PER_KODI: usize = 2;
 
+    /// Every row the whole screen holds, for one state of the Jellyfin
+    /// pairing.
+    fn every_row(jellyfin: JellyfinPane) -> Vec<Item> {
+        Category::ALL
+            .iter()
+            .flat_map(|category| category.items(&kodis(), jellyfin))
+            .map(|(_, item)| item)
+            .collect()
+    }
+
     /// Every setting is somewhere, and nowhere twice.
     ///
     /// This is what the old numbering could not promise. Rows were positions
@@ -13985,24 +14687,78 @@ mod settings_rows {
     /// be left out of every list and never appear at all.
     #[test]
     fn every_item_appears_in_exactly_one_category() {
-        let all: Vec<Item> = Category::ALL
-            .iter()
-            .flat_map(|category| category.items(&kodis()))
-            .map(|(_, item)| item)
-            .collect();
-        for item in &all {
-            let count = all.iter().filter(|other| *other == item).count();
-            assert_eq!(count, 1, "an item appears {count} times");
+        // Both states of the pairing, because the Jellyfin pane shows
+        // different rows in each - and a row placed in neither would be a row
+        // nobody can ever reach.
+        for jellyfin in [JellyfinPane::NotConnected, JellyfinPane::Connected] {
+            let all = every_row(jellyfin);
+            for item in &all {
+                let count = all.iter().filter(|other| *other == item).count();
+                assert_eq!(count, 1, "an item appears {count} times");
+            }
+            // Written out rather than derived, so adding a setting and
+            // forgetting to place it fails here instead of at a glance. It is
+            // not the number of `Item` variants: the five an output has are
+            // placed once for each output, and the Kodi category holds a group
+            // of rows per Kodi found, plus the one row that belongs to no
+            // installation and names another by hand.
+            let elsewhere = 24;
+            let kodi = ROWS_PER_KODI * kodis().len() + 1;
+            let paired = match jellyfin {
+                // The address and a code to ask for.
+                JellyfinPane::NotConnected => 2,
+                // The address, who it is signed in as, and the way out.
+                JellyfinPane::Connected => 3,
+            };
+            assert_eq!(all.len(), elsewhere + kodi + paired);
         }
-        // Written out rather than derived, so adding a setting and forgetting
-        // to place it fails here instead of at a glance. It is not the number
-        // of `Item` variants: the five an output has are placed once for each
-        // output, and the Kodi category holds a group of rows per Kodi found, plus
-        // the one row that belongs to no installation and names another by
-        // hand.
-        let elsewhere = 24;
-        let integrations = ROWS_PER_KODI * kodis().len() + 1;
-        assert_eq!(all.len(), elsewhere + integrations);
+
+        // And between the two states, every Jellyfin row is reachable.
+        let both: Vec<Item> = every_row(JellyfinPane::NotConnected)
+            .into_iter()
+            .chain(every_row(JellyfinPane::Connected))
+            .collect();
+        for item in [
+            Item::JellyfinServer,
+            Item::JellyfinConnect,
+            Item::JellyfinAccount,
+            Item::JellyfinDisconnect,
+        ] {
+            assert!(both.contains(&item), "{item:?} is on no pane at all");
+        }
+    }
+
+    /// The pane says one thing or the other, and never both: a Connect on a
+    /// pane that is already connected, or a Disconnect on one with nothing to
+    /// disconnect from, would each mean the opposite of what it says.
+    #[test]
+    fn the_jellyfin_pane_takes_two_shapes() {
+        let rows = |state| -> Vec<Item> {
+            Category::Jellyfin
+                .items(&[], state)
+                .into_iter()
+                .map(|(_, item)| item)
+                .collect()
+        };
+        assert_eq!(
+            rows(JellyfinPane::NotConnected),
+            vec![Item::JellyfinServer, Item::JellyfinConnect]
+        );
+        assert_eq!(
+            rows(JellyfinPane::Connected),
+            vec![
+                Item::JellyfinServer,
+                Item::JellyfinAccount,
+                // Last, being the one row here that takes something away.
+                Item::JellyfinDisconnect,
+            ]
+        );
+        // One heading over the lot, in both.
+        for state in [JellyfinPane::NotConnected, JellyfinPane::Connected] {
+            let rows = Category::Jellyfin.items(&[], state);
+            assert_eq!(rows[0].0.as_deref(), Some("JELLYFIN"));
+            assert!(rows[1..].iter().all(|(heading, _)| heading.is_none()));
+        }
     }
 
     /// Every installation heads its own group, and the row that adds one by
@@ -14013,7 +14769,7 @@ mod settings_rows {
     /// handover - are the heading and the two rows under it.
     #[test]
     fn each_installation_heads_its_own_group() {
-        let rows = Category::Kodi.items(&kodis());
+        let rows = Category::Kodi.items(&kodis(), JellyfinPane::NotConnected);
         let headed: Vec<(String, Item)> = rows
             .iter()
             .filter_map(|(heading, item)| heading.as_ref().map(|text| (text.to_string(), *item)))
@@ -14048,10 +14804,13 @@ mod settings_rows {
     fn a_sandbox_changes_which_rows_an_installation_has() {
         let sandboxed = |confinement| {
             Category::Kodi
-                .items(&[KodiPane {
-                    heading: "KODI".to_string(),
-                    confinement,
-                }])
+                .items(
+                    &[KodiPane {
+                        heading: "KODI".to_string(),
+                        confinement,
+                    }],
+                    JellyfinPane::NotConnected,
+                )
                 .into_iter()
                 .map(|(_, item)| item)
                 .collect::<Vec<_>>()
@@ -14075,7 +14834,7 @@ mod settings_rows {
     /// add something and leaving open whether it ever looked.
     #[test]
     fn an_empty_pane_says_why_it_is_empty() {
-        let rows = Category::Kodi.items(&[]);
+        let rows = Category::Kodi.items(&[], JellyfinPane::NotConnected);
         let items: Vec<Item> = rows.iter().map(|(_, item)| *item).collect();
         assert_eq!(items, vec![Item::KodiNone, Item::KodiAdd]);
         // One heading over both, since the row saying nothing was found and
@@ -14090,7 +14849,7 @@ mod settings_rows {
     #[test]
     fn the_version_follows_the_update_switch() {
         let general: Vec<Item> = Category::General
-            .items(&kodis())
+            .items(&kodis(), JellyfinPane::NotConnected)
             .into_iter()
             .map(|(_, item)| item)
             .collect();
@@ -14103,7 +14862,7 @@ mod settings_rows {
     /// General rather than among the everyday toggles.
     #[test]
     fn clearing_data_comes_last() {
-        let general = Category::General.items(&kodis());
+        let general = Category::General.items(&kodis(), JellyfinPane::NotConnected);
         assert_eq!(general.last().map(|(_, item)| *item), Some(Item::ClearData));
     }
 
@@ -14115,7 +14874,7 @@ mod settings_rows {
     fn every_switch_row_has_something_to_switch() {
         for (_, item) in Category::ALL
             .iter()
-            .flat_map(|category| category.items(&kodis()))
+            .flat_map(|category| category.items(&kodis(), JellyfinPane::Connected))
         {
             if item.has_switch() {
                 assert!(
