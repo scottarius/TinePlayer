@@ -7549,6 +7549,10 @@ impl App {
         // The arrow's slot holds a fixed width for every screen to line up
         // against. With no arrow in it, that is just a gap before the trail.
         slot.set_visible(false);
+        // Keeps its place marked while the keyboard is over in the places
+        // column, since that is the row you are put back on when you come
+        // out of it - see `.tp-resting` in the stylesheet.
+        list.add_css_class("tp-resting");
         self.add_places_column(&page, directory, mode.folders_only(), &crumb_buttons);
         self.follow_focus(&list);
 
@@ -9078,6 +9082,9 @@ impl App {
 
         // The categories, down the left.
         let (categories_scroller, categories) = scrolling_list();
+        // Which keeps its place marked after the keyboard has left it - see
+        // `.tp-resting` in the stylesheet for which lists do that and why.
+        categories.add_css_class("tp-resting");
         categories_scroller.set_size_request(px(CATEGORY_WIDTH), -1);
         for category in Category::ALL {
             append_named(
@@ -10460,11 +10467,10 @@ impl App {
         }
         let selected = selected.map(|(index, _)| index);
         if let Some(row) = selected.and_then(|index| list.row_at_index(index)) {
-            // Marked as the one in force, and the cursor starts there - but
-            // the two part company as soon as the viewer moves, which is the
-            // whole point of marking it separately.
+            // Marked as the one in force. No selection to go with it: the
+            // screen opens with the cursor in the listing, and a column that
+            // is not being driven should not be showing a cursor.
             row.add_css_class("tp-current");
-            list.select_row(Some(&row));
         }
 
         {
@@ -10482,6 +10488,39 @@ impl App {
             });
         }
         self.follow_focus(&list);
+
+        // The column keeps no cursor between visits. Where you are is already
+        // marked, so a selection left behind after the keyboard moved into the
+        // listing said nothing beyond "this list has been visited" - and said
+        // it in the theme's own selection color, which nothing else on the
+        // screen is drawn in.
+        //
+        // Coming back lands on the place in force rather than resuming
+        // wherever the cursor was left, because this column is a statement of
+        // where the listing is, not a position of its own to hold.
+        {
+            let controller = gtk::EventControllerFocus::new();
+            // Weak both ways: the controller is added to the list it watches.
+            let entering = list.downgrade();
+            controller.connect_enter(move |_| {
+                let Some(list) = entering.upgrade() else {
+                    return;
+                };
+                // The first row when nothing here contains the listing, so the
+                // arrows always have somewhere to start from.
+                let landing = selected
+                    .and_then(|index| list.row_at_index(index))
+                    .or_else(|| list.row_at_index(0));
+                list.select_row(landing.as_ref());
+            });
+            let leaving = list.downgrade();
+            controller.connect_leave(move |_| {
+                if let Some(list) = leaving.upgrade() {
+                    list.select_row(None::<&gtk::ListBoxRow>);
+                }
+            });
+            list.add_controller(controller);
+        }
 
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -14526,12 +14565,18 @@ fn style_css(scale: f64) -> String {
            conflating them is actively misleading in the places column: moving
            the cursor there would appear to change the folder being shown.
 
-           A bar down the leading edge rather than a fill, so it reads as
-           'you are here' beside the focus rather than competing with it.
-           Drawn with an inset shadow rather than a border so that marking a
-           row does not shift its text. */
+           The same backed-off white the settings categories rest at, so the
+           whole application says 'in force but not where the keys are' one
+           way. It was a blue bar down the leading edge, which read as a
+           different kind of thing entirely - an accent mark rather than a
+           quieter version of the highlight beside it - and left two idioms
+           for one idea.
+
+           Hover deliberately does not override it, which falls out of this
+           rule coming after the hover one. That is what the focused row does
+           too: a row carrying a mark keeps it under the pointer. */
         .tp-menu > row.tp-current {{
-            box-shadow: inset {mark}px 0 0 0 {highlight};
+            background-color: {resting_row};
         }}
         /* Belongs to the row above it: indented so the group reads as one
            thing without every label having to name the output again. */
@@ -14554,6 +14599,22 @@ fn style_css(scale: f64) -> String {
         .tp-menu:focus-within > row:selected .tp-chevron {{
             color: {on_focus};
             opacity: 0.85;
+        }}
+        /* The exception to the rule above, for the lists that keep their place
+           marked once the keyboard has gone somewhere else: the settings
+           categories, which are the heading of everything in the pane beside
+           them, and the browser's listing, which is where you will be put
+           back when you come out of the places column.
+
+           Backed well off the focused row's white so the two read in order
+           rather than as a pair - the bright one is where the keys are going,
+           this one is only saying where you were. Without it the row falls
+           through to the theme's own selection color, which is a blue nothing
+           else on the screen is drawn in and reads as an accent rather than
+           as a quieter cursor. */
+        .tp-resting > row:selected {{
+            background-image: none;
+            background-color: {resting_row};
         }}
         /* A ring rather than a fill. Recoloring a focused button changes what
            it looks like it does - a Cancel that turns blue reads as the one
@@ -14993,7 +15054,6 @@ fn style_css(scale: f64) -> String {
         shadow_drop = px(4.0),
         shadow_blur = px(18.0),
         subrow = px(28.0),
-        mark = px(4.0),
         // A shade larger than `ICON_PX`, which is what every other icon in
         // the interface uses. The gear sits beside the fullscreen mark, and
         // that mark is a picture with clear space drawn into it - so at the
@@ -15059,6 +15119,12 @@ fn style_css(scale: f64) -> String {
         // row: the ring on a focused button stays at full strength, being a
         // thin outline that has nothing like the area to spare.
         focus_row = "rgba(255, 255, 255, 0.7)",
+        // The same white again, right back, for a row that is still in force
+        // while the keyboard is somewhere else - the settings category on
+        // show. Weak enough that the focused row is plainly the louder of the
+        // two, since one of them is where the next key goes and the other is
+        // only saying what is being looked at.
+        resting_row = "rgba(255, 255, 255, 0.16)",
         on_focus = "#1c1c1c",
         // The ink both corner marks share. The fullscreen image is drawn in
         // it as a picture; the gear is told to match.
