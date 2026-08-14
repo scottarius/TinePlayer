@@ -1659,6 +1659,17 @@ impl App {
                     app.toggle_time_readout();
                     glib::Propagation::Stop
                 }
+                // Steps each output through the file's audio tracks while it
+                // plays. A shortcut ahead of the real thing, which is a chooser
+                // per output on the control strip.
+                gdk::Key::a | gdk::Key::A if playing => {
+                    app.cycle_audio("primary");
+                    glib::Propagation::Stop
+                }
+                gdk::Key::s | gdk::Key::S if playing => {
+                    app.cycle_audio("secondary");
+                    glib::Propagation::Stop
+                }
                 // The shortcut GTK's own file chooser and every web browser use
                 // to reach an address bar, worth having from the menu which is
                 // otherwise two steps away from the panel.
@@ -3023,6 +3034,24 @@ impl App {
         let showing = playback.toggle_subtitles();
         self.subtitles_hidden.set(!showing);
         self.push_subtitle_state();
+        self.wake_controls();
+    }
+
+    /// Steps one output to the next audio track in the file, on `A` for the
+    /// primary and `S` for the secondary.
+    ///
+    /// Ahead of the chooser rather than instead of it: switching live is
+    /// proven, and this makes it reachable while the rest - a menu per output,
+    /// and the branch regrouping that two outputs on one track needs - is
+    /// built. The reason it says nothing on screen is that there is nowhere
+    /// yet to say it; the chooser is where a track name belongs.
+    fn cycle_audio(&self, role: &str) {
+        let Some(playback) = self.playback.borrow().clone() else {
+            return;
+        };
+        if let Err(reason) = playback.cycle_audio(role) {
+            eprintln!("Cannot step the {role} audio: {reason}");
+        }
         self.wake_controls();
     }
 
