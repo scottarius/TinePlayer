@@ -2038,6 +2038,18 @@ impl App {
         while let Some(child) = frame.first_child() {
             frame.remove(&child);
         }
+        // **The frame was sized before there was a picture to measure**, so a
+        // wide one - an episode still - would still be cropped into a slot
+        // shaped for a poster, which is why fixing this at build time alone
+        // changed nothing: the artwork arrives on a thread, after the page.
+        // Sized again now its shape is known, by the same rule.
+        let scale = self.scale.get();
+        let height = self.poster_height(scale);
+        let width = height * 2.0 / 3.0;
+        frame.set_size_request(
+            width.round() as i32,
+            poster_frame_height(Some(&texture), width, height).round() as i32,
+        );
         let picture = crate::artwork::Artwork::poster();
         picture.set_texture(Some(texture));
         picture.set_hexpand(true);
@@ -2108,6 +2120,9 @@ impl App {
         let id = item.id.clone();
         let poster_tag = item.poster_tag.clone();
         let backdrop_tag = item.backdrop_tag.clone();
+        // Not always the same item: an episode's backdrop belongs to its
+        // series, and a tag is only good against the item it came from.
+        let backdrop_id = item.backdrop_item.clone();
         // The film these belong to, so a viewer who casts one and immediately
         // casts another does not get the first one's backdrop.
         let generation = self.art_generation.get();
@@ -2120,7 +2135,7 @@ impl App {
                 .and_then(|tag| client.image(&id, "Primary", &tag, 600).ok())
                 .map(crate::metadata::Art::Embedded);
             let backdrop = backdrop_tag
-                .and_then(|tag| client.image(&id, "Backdrop/0", &tag, 1920).ok())
+                .and_then(|tag| client.image(&backdrop_id, "Backdrop/0", &tag, 1920).ok())
                 .map(crate::metadata::Art::Embedded);
             let _ = sender.send((poster, backdrop));
         });
@@ -4753,14 +4768,32 @@ impl App {
         // the gap that appeared to sit between the poster and the rows.
         column.set_hexpand(false);
 
+        // How tall the frame actually is, which is the poster's height for a
+        // poster and less for anything wider.
+        //
+        // **An episode is not a poster.** Its Primary image is a 16:9 still
+        // from the episode, and cropping that into a two-by-three slot scales
+        // it to fill the height and throws away the sides - which is most of
+        // the picture. Reported on 2026-08-16. So a picture wider than the
+        // slot keeps the slot's *width* and takes only the height it needs,
+        // sitting shorter in the column. Anything at or narrower than two by
+        // three is a real poster and is unaffected.
+        //
+        // The width never changes, whatever the shape: it is what the column
+        // is sized to, and letting it vary would move the page beside it every
+        // time a different kind of thing was loaded.
+        let frame_height = poster_frame_height(self.poster_art.borrow().as_ref(), width, height);
+
         let frame = gtk::Box::builder()
             .css_classes(["tp-poster"])
             .halign(gtk::Align::Start)
-            // Clipped, so a poster that is not exactly two by three is
-            // cropped by the frame rather than allowed to reshape it.
+            // Clipped, so a poster a few pixels out of square is cropped by
+            // the frame rather than allowed to reshape it. A picture of a
+            // quite different shape is given a frame of its own shape above,
+            // so there is nothing left for this to cut off.
             .overflow(gtk::Overflow::Hidden)
             .build();
-        frame.set_size_request(width.round() as i32, height.round() as i32);
+        frame.set_size_request(width.round() as i32, frame_height.round() as i32);
 
         match self.poster_art.borrow().clone() {
             Some(texture) => {
@@ -14922,6 +14955,47 @@ mod summary_lines {
 }
 
 #[cfg(test)]
+mod poster_shape {
+    /// The rule without the texture, so it can be checked without a display -
+    /// the same reason `artwork::fitted` is written to be testable.
+    fn height_for(picture: (f64, f64), slot: (f64, f64)) -> f64 {
+        let (width, height) = slot;
+        let aspect = picture.0 / picture.1;
+        match aspect > (width / height) * 1.15 {
+            true => (width / aspect).min(height),
+            false => height,
+        }
+    }
+
+    /// A real poster fills the slot exactly, which is the case that must not
+    /// change: every library's film artwork is two by three.
+    #[test]
+    fn a_poster_fills_the_slot() {
+        assert_eq!(height_for((1000.0, 1500.0), (300.0, 450.0)), 450.0);
+        // And one a few pixels out is still treated as a poster, cropped by
+        // the frame rather than reshaping it.
+        assert_eq!(height_for((1000.0, 1490.0), (300.0, 450.0)), 450.0);
+    }
+
+    /// An episode still is 16:9, and gets the slot's width and its own height
+    /// rather than being scaled up until its sides fall off the frame.
+    #[test]
+    fn a_wide_still_keeps_its_width_and_loses_height() {
+        let tall = height_for((1920.0, 1080.0), (300.0, 450.0));
+        assert!((tall - 168.75).abs() < 0.01, "{tall}");
+        // Shorter than the slot, never taller, so the rows beside it stay put.
+        assert!(tall < 450.0);
+    }
+
+    /// Taller than two by three - some libraries carry 1000x1500 and some
+    /// carry narrower scans - still fills the slot, and is cropped by it.
+    #[test]
+    fn a_narrow_picture_still_fills_the_slot() {
+        assert_eq!(height_for((1000.0, 2000.0), (300.0, 450.0)), 450.0);
+    }
+}
+
+#[cfg(test)]
 mod readings {
     use super::{offset_label, volume_label};
 
@@ -15214,6 +15288,36 @@ mod settings_rows {
                 );
             }
         }
+    }
+}
+
+/// How tall the poster frame should be for the picture going into it.
+///
+/// The slot's full height for a poster, and only what it needs for anything
+/// wider - an episode's Primary image is a 16:9 still, and cropping that into a
+/// two-by-three slot scales it to fill the height and throws the sides away,
+/// which is most of the picture. Reported on 2026-08-16.
+///
+/// **The width is never touched**, whatever the shape. It is what the column is
+/// sized to, so letting it vary would shift the page beside it every time a
+/// different kind of item was loaded.
+fn poster_frame_height(texture: Option<&gdk::Texture>, width: f64, height: f64) -> f64 {
+    let Some(texture) = texture.filter(|texture| texture.width() > 0 && texture.height() > 0)
+    else {
+        return height;
+    };
+    let aspect = f64::from(texture.width()) / f64::from(texture.height());
+    // **With room to spare, so a near-miss is still cropped.** Libraries carry
+    // posters a few pixels off two by three, and reshaping for those would let
+    // the frame's height wobble from one film to the next for no reason anyone
+    // could name. The two real cases are nowhere near each other - a poster is
+    // about 0.67 and an episode still is 1.78 - so this only has to be wide
+    // enough to tell a bad scan from a different kind of picture.
+    const CLEARLY_WIDER: f64 = 1.15;
+    match aspect > (width / height) * CLEARLY_WIDER {
+        // Wider than the slot: keep the width, take less height.
+        true => (width / aspect).min(height),
+        false => height,
     }
 }
 

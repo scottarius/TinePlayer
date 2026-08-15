@@ -584,6 +584,35 @@ impl Client {
                 .and_then(|value| value.as_u64())
                 .map(|value| value as u32)
         };
+        // The backdrop, and which item it actually belongs to.
+        //
+        // **An episode has none of its own.** Verified across a library on
+        // 2026-08-16: every episode in it answers with an empty
+        // `BackdropImageTags`, because the artwork belongs to the *series* -
+        // which the episode carries as `ParentBackdropImageTags`, alongside
+        // the series id in `ParentBackdropItemId`. Asking for
+        // `/Items/{episode}/Images/Backdrop/0` gets nothing, which is why a TV
+        // show cast from Jellyfin came up with a bare page while a film did
+        // not. The poster is unaffected: an episode has its own.
+        //
+        // The owner travels with the tag rather than being worked out later,
+        // because a tag is only good against the item it came from.
+        let first_tag = |field: &str| {
+            body.get(field)
+                .and_then(|tags| tags.as_array())
+                .and_then(|tags| tags.first())
+                .and_then(|tag| tag.as_str())
+                .map(str::to_string)
+        };
+        let backdrop = first_tag("BackdropImageTags")
+            .map(|tag| (tag, id.to_string()))
+            .or_else(|| {
+                let owner = body
+                    .get("ParentBackdropItemId")
+                    .and_then(|owner| owner.as_str())?;
+                Some((first_tag("ParentBackdropImageTags")?, owner.to_string()))
+            });
+
         // The first media source, which is the file itself for anything that
         // has not been given a second version.
         let source = body
@@ -627,12 +656,10 @@ impl Client {
                 .and_then(|tags| tags.get("Primary"))
                 .and_then(|tag| tag.as_str())
                 .map(str::to_string),
-            backdrop_tag: body
-                .get("BackdropImageTags")
-                .and_then(|tags| tags.as_array())
-                .and_then(|tags| tags.first())
-                .and_then(|tag| tag.as_str())
-                .map(str::to_string),
+            backdrop_tag: backdrop.as_ref().map(|(tag, _)| tag.clone()),
+            backdrop_item: backdrop
+                .map(|(_, owner)| owner)
+                .unwrap_or_else(|| id.to_string()),
             container: source
                 .and_then(|source| source.get("Container"))
                 .and_then(|container| container.as_str())
@@ -831,6 +858,11 @@ pub struct Item {
     /// none, which is how not to ask for one that is not there.
     pub poster_tag: Option<String>,
     pub backdrop_tag: Option<String>,
+    /// Which item the backdrop belongs to, which is not always this one: an
+    /// episode has no artwork of its own and wears the series'. Its own id
+    /// where there is nothing to inherit, so a caller never has to ask which
+    /// case it is in.
+    pub backdrop_item: String,
     /// Every stream the library found, which is what spares TinePlayer from
     /// reading a four-gigabyte file across the house to learn the same thing.
     pub streams: Streams,
