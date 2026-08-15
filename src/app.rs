@@ -14808,11 +14808,11 @@ fn style_css(scale: f64) -> String {
         }}
         /* The subtitle in force, marked apart from where the cursor is - the
            two part company as soon as anybody moves, which is the point of
-           marking them separately. The same bar down the leading edge the
-           menus draw, so 'you are here' and 'this is what is on' read the
-           same way over a film as they do on a page. */
+           marking them separately. The same backed-off white the menus rest
+           at, so 'this is what is on' reads the same way over a film as it
+           does on a page. */
         .tp-subtitle-row.tp-current {{
-            box-shadow: inset {mark}px 0 0 0 {highlight};
+            background-color: {resting_row};
         }}
         /* The handle, not the whole bar: filling the trough drew over the
            very thing that says where playback is. */
