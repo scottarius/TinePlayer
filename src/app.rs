@@ -10727,15 +10727,45 @@ impl App {
     /// **What is found fills the field rather than becoming a list to choose
     /// from.** A list would be a second question on a panel that has one, and
     /// on a home network the answer is one server.
+    ///
+    /// **The field is not there while it looks.** An address box offered and
+    /// then filled in underneath somebody is an invitation to start typing
+    /// into something that is about to change; waiting, with a spinner and a
+    /// sentence saying so, asks nothing of anybody for the two seconds it
+    /// takes. It appears with the answer, whether or not there was one.
     fn show_jellyfin_address(self: &Rc<Self>) {
         /// Long enough for a server to answer twice over, short enough to sit
         /// through. Jellyfin replies in milliseconds; the wait is for one that
         /// is busy or asleep, not for the network.
         const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+        /// What the waiting half of the panel is held to, so that the field
+        /// arriving changes what the panel says rather than how big it is.
+        /// The same floor the Opening panel keeps for the same reason.
+        const BODY_MIN: f64 = 132.0;
 
+        let scale = self.scale.get();
         let page = wizard_page("Connect to Jellyfin");
+
+        // Both states live in here, which is what gives the panel one height:
+        // a spinner and a sentence while it looks, a sentence and a field
+        // afterwards.
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(16)
+            .valign(gtk::Align::Center)
+            .build();
+        body.set_size_request(-1, (BODY_MIN * scale).round() as i32);
+        page.append(&body);
+
+        let spinner = gtk::Spinner::new();
+        let spin = (48.0 * scale).round() as i32;
+        spinner.set_size_request(spin, spin);
+        spinner.set_halign(gtk::Align::Center);
+        spinner.start();
+        body.append(&spinner);
+
         let hint = wizard_text("Looking for a server on this network...", false);
-        page.append(&hint);
+        body.append(&hint);
 
         let field = gtk::Entry::new();
         field.add_css_class("tp-path");
@@ -10751,7 +10781,11 @@ impl App {
             .map(|pairing| pairing.server.clone())
             .unwrap_or_default();
         field.set_text(&known);
-        page.append(&field);
+        // Hidden rather than merely empty: a widget that is not visible takes
+        // no space, which is what leaves the sentence centred in the body
+        // above it.
+        field.set_visible(false);
+        body.append(&field);
 
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -10802,11 +10836,10 @@ impl App {
             });
         }
 
-        // Its own tab order: the field, then the two buttons. Without stops
-        // there is nothing for Tab to move between and Connect cannot be
-        // reached from the keyboard at all.
+        // Its own tab order. The field is deliberately not a stop yet: it is
+        // hidden, and a stop that cannot be seen is a place the focus
+        // disappears into. It is added when it appears.
         self.set_nav(None, &[], &[]);
-        self.add_nav_stop(&field);
         self.add_nav_stop(&cancel);
         self.add_nav_stop(&connect);
         *self.copy_root.borrow_mut() = Some(page.clone().upcast());
@@ -10817,16 +10850,16 @@ impl App {
         // be - which on a wide monitor is most of the screen, and makes the
         // two halves of this one flow visibly different shapes.
         self.window.set_child(Some(&self.dialog(&page)));
-        field.grab_focus();
-        // Selected, so typing replaces it: an address being offered is usually
-        // taken or replaced whole rather than edited.
-        field.select_region(0, -1);
+        // Cancel while there is nothing else to be on. The field takes the
+        // focus the moment it appears, which is the two-second mark.
+        cancel.grab_focus();
 
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = sender.send(crate::jellyfin::discover(LOOK_FOR));
         });
 
+        let app = self.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
             let found = match receiver.try_recv() {
                 Ok(found) => found,
@@ -10841,6 +10874,14 @@ impl App {
             if page.root().is_none() {
                 return glib::ControlFlow::Break;
             }
+            // Whatever it found, the looking is over: the spinner goes and
+            // the field takes its place, as a stop and as the focus.
+            spinner.stop();
+            spinner.set_visible(false);
+            field.set_visible(true);
+            app.add_nav_stop(&field);
+            field.grab_focus();
+            field.select_region(0, -1);
             match found.first() {
                 Some(server) => {
                     hint.set_text(&format!("Found {} on this network.", server.name));
@@ -10849,7 +10890,6 @@ impl App {
                     // thing this could do with its answer.
                     if field.text() == known {
                         field.set_text(&server.address);
-                        field.select_region(0, -1);
                     }
                 }
                 None => hint.set_text(
