@@ -656,6 +656,17 @@ impl Client {
                 .and_then(|tags| tags.get("Primary"))
                 .and_then(|tag| tag.as_str())
                 .map(str::to_string),
+            // The series an episode belongs to, which is a thing in its own
+            // right: it has the name and the poster that the episode has not.
+            // Empty for a film, which belongs to nothing.
+            series_name: text("SeriesName"),
+            series_id: text("SeriesId"),
+            season_id: text("SeasonId"),
+            season_name: text("SeasonName"),
+            series_poster_tag: body
+                .get("SeriesPrimaryImageTag")
+                .and_then(|tag| tag.as_str())
+                .map(str::to_string),
             backdrop_tag: backdrop.as_ref().map(|(tag, _)| tag.clone()),
             backdrop_item: backdrop
                 .map(|(_, owner)| owner)
@@ -686,8 +697,18 @@ impl Client {
     /// artwork was changed.
     pub fn image(&self, id: &str, kind: &str, tag: &str, width: u32) -> Result<Vec<u8>, Error> {
         let response = minreq::get(format!(
-            "{}/Items/{id}/Images/{kind}?tag={tag}&maxWidth={width}&api_key={}",
-            self.server, self.token
+            "{}/Items/{id}/Images/{kind}?{}maxWidth={width}&api_key={}",
+            self.server,
+            // Quoted only when there is one. A tag makes the answer cacheable
+            // and names a particular version; without one the server hands
+            // back whatever is current, which is what a caller that never saw
+            // a tag wants. Verified against 10.11.11 - the same bytes either
+            // way.
+            match tag.is_empty() {
+                true => String::new(),
+                false => format!("tag={tag}&"),
+            },
+            self.token
         ))
         .with_timeout(TIMEOUT)
         .send()
@@ -858,6 +879,22 @@ pub struct Item {
     /// none, which is how not to ask for one that is not there.
     pub poster_tag: Option<String>,
     pub backdrop_tag: Option<String>,
+    /// What the series is called, for an episode: "Breaking Bad". Empty for
+    /// anything that is not one.
+    pub series_name: String,
+    /// The series itself, which is where its poster is fetched from.
+    pub series_id: String,
+    /// The season this episode is in, which is an item in its own right and
+    /// carries its own poster - the one that says which run of a programme
+    /// this is. Empty for anything that is not an episode.
+    pub season_id: String,
+    /// What the library calls that season: usually "Season 1", and sometimes
+    /// something a number cannot say - "Specials" is season zero.
+    pub season_name: String,
+    /// The series' own poster, which an episode does not have and is not the
+    /// same picture as its own Primary image - that is a still from the
+    /// episode.
+    pub series_poster_tag: Option<String>,
     /// Which item the backdrop belongs to, which is not always this one: an
     /// episode has no artwork of its own and wears the series'. Its own id
     /// where there is nothing to inherit, so a caller never has to ask which

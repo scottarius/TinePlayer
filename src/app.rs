@@ -810,8 +810,16 @@ pub struct App {
     /// yet.
     backdrop_widget: RefCell<Option<crate::artwork::Artwork>>,
     poster_frame: RefCell<Option<gtk::Box>>,
+    /// The small frame under the file details that holds the series' poster,
+    /// kept for the same reason `poster_frame` is: the picture is fetched on a
+    /// thread and arrives after the page it belongs on.
+    series_frame: RefCell<Option<gtk::Box>>,
     poster_art: RefCell<Option<gdk::Texture>>,
     backdrop_art: RefCell<Option<gdk::Texture>>,
+    /// The series' poster, for an episode. Kept apart from `poster_art`
+    /// because they are two different pictures of two different things: that
+    /// one is a still from this episode, this one is the show.
+    series_art: RefCell<Option<gdk::Texture>>,
     /// Bumped whenever a different file is loaded, so artwork still arriving
     /// from a thread for the previous one is dropped rather than drawn.
     art_generation: Cell<u64>,
@@ -1159,8 +1167,10 @@ impl App {
             fade_art: Cell::new(false),
             backdrop_widget: RefCell::new(None),
             poster_frame: RefCell::new(None),
+            series_frame: RefCell::new(None),
             poster_art: RefCell::new(None),
             backdrop_art: RefCell::new(None),
+            series_art: RefCell::new(None),
             art_generation: Cell::new(0),
             device_names: RefCell::new(Vec::new()),
             device_scan: Cell::new(false),
@@ -2058,6 +2068,33 @@ impl App {
         frame.append(&picture);
     }
 
+    /// The same for the series' poster under the file details, which arrives by
+    /// the same route and just as late.
+    fn show_late_series_art(self: &Rc<Self>) {
+        let (Some(frame), Some(texture)) = (
+            self.series_frame.borrow().clone(),
+            self.series_art.borrow().clone(),
+        ) else {
+            return;
+        };
+        // Already hung, which is what a page rebuilt after the picture landed
+        // looks like - every trip in and out of a chooser does that.
+        if frame.first_child().is_some() {
+            return;
+        }
+        // Sized again now the picture's shape is known. Until it arrived the
+        // frame stood at two by three, and anything else would have been
+        // cropped to fit it.
+        let width = f64::from(frame.width_request().max(1));
+        frame.set_size_request(
+            width.round() as i32,
+            series_frame_height(Some(&texture), width).round() as i32,
+        );
+        let picture = series_picture(texture);
+        fade_in(&picture);
+        frame.append(&picture);
+    }
+
     /// Fills the page in from the library, for a video that came from one.
     ///
     /// Only the fields Jellyfin actually answered: an empty overview or a
@@ -2092,6 +2129,15 @@ impl App {
             if !item.aired.is_empty() {
                 details.aired = item.aired.clone();
             }
+            // What a local episode reads out of `<showtitle>`, arriving from
+            // the library instead. Both end up in the same field, so the page
+            // draws one thing and does not care which source answered.
+            if !item.series_name.is_empty() {
+                details.series_title = item.series_name.clone();
+            }
+            if !item.season_name.is_empty() {
+                details.season_name = item.season_name.clone();
+            }
             // The stream measures itself, so a runtime is only worth taking
             // where the container could not say.
             if details.duration_s <= 0.0
@@ -2113,12 +2159,33 @@ impl App {
         let Some(client) = self.jellyfin.borrow().clone() else {
             return;
         };
-        if item.poster_tag.is_none() && item.backdrop_tag.is_none() {
+        if item.poster_tag.is_none()
+            && item.backdrop_tag.is_none()
+            && item.series_poster_tag.is_none()
+            && item.season_id.is_empty()
+        {
             return;
         }
 
         let id = item.id.clone();
         let poster_tag = item.poster_tag.clone();
+        // The picture that says which programme - and which run of it - this
+        // episode belongs to. A different thing from the episode's own Primary
+        // image, which is a still from the episode.
+        //
+        // The season is asked for first and without a tag, because the episode
+        // does not carry one: the season is an item of its own and only it
+        // knows. Answering without a tag hands back whatever is current, which
+        // is what a caller that never saw one wants, and saves fetching the
+        // season item merely to learn a cache key. Not every season has a
+        // picture - "Specials" often has none - so the series' is the fallback,
+        // and that tag the episode does carry.
+        let season_id = Some(item.season_id.clone()).filter(|id| !id.is_empty());
+        let series = item
+            .series_poster_tag
+            .clone()
+            .filter(|_| !item.series_id.is_empty())
+            .map(|tag| (item.series_id.clone(), tag));
         let backdrop_tag = item.backdrop_tag.clone();
         // Not always the same item: an episode's backdrop belongs to its
         // series, and a tag is only good against the item it came from.
@@ -2137,13 +2204,21 @@ impl App {
             let backdrop = backdrop_tag
                 .and_then(|tag| client.image(&backdrop_id, "Backdrop/0", &tag, 1920).ok())
                 .map(crate::metadata::Art::Embedded);
-            let _ = sender.send((poster, backdrop));
+            // Small on the page, so asked for small: this one is drawn under
+            // the file details rather than in the poster slot.
+            let series = season_id
+                .and_then(|id| client.image(&id, "Primary", "", 300).ok())
+                .or_else(|| {
+                    series.and_then(|(id, tag)| client.image(&id, "Primary", &tag, 300).ok())
+                })
+                .map(crate::metadata::Art::Embedded);
+            let _ = sender.send((poster, backdrop, series));
         });
 
         let app = self.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
-            let (poster, backdrop) = match receiver.try_recv() {
-                Ok(pair) => pair,
+            let (poster, backdrop, series) = match receiver.try_recv() {
+                Ok(art) => art,
                 Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     return glib::ControlFlow::Break;
@@ -2160,6 +2235,9 @@ impl App {
                 }
                 if backdrop.is_some() {
                     details.backdrop = backdrop;
+                }
+                if series.is_some() {
+                    details.series_poster = series;
                 }
             }
             app.start_art_load();
@@ -4880,6 +4958,119 @@ impl App {
             facts.append(&line);
         }
         column.append(&facts);
+
+        // What show this is, under the details of the file it lives in.
+        //
+        // Only for an episode, and only under everything else: the page names
+        // the episode, because that is what is being watched, and the series
+        // is the answer to "which programme is that" rather than a heading for
+        // it. A film has neither and this is simply absent.
+        //
+        // The picture is the *series'* poster, which is a different thing from
+        // the poster slot above: for an episode that slot holds a still from
+        // the episode itself.
+        let series_title = self.details.borrow().series_title.clone();
+        let series_art = self.series_art.borrow().clone();
+        // Whether a picture is on the way, which is not the same as having
+        // one: this page is built long before either source answers.
+        //
+        // The library is asked directly rather than through `Details`, and it
+        // has to be. A local episode's series poster is a path found while the
+        // page is being resolved, so it is in hand by now; a cast one is an
+        // HTTP request still in flight, so `series_poster` is empty at this
+        // moment and stays empty until after the page exists. Consulting only
+        // that field built no frame for a cast episode, and the picture then
+        // had nowhere to go when it arrived - which is exactly what it looked
+        // like: the title without it.
+        let expecting_series_art =
+            series_art.is_some()
+                || self.details.borrow().series_poster.is_some()
+                || self.jellyfin_item.borrow().as_ref().is_some_and(|item| {
+                    item.series_poster_tag.is_some() || !item.season_id.is_empty()
+                });
+        if !series_title.is_empty() || expecting_series_art {
+            let series = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(px(8.0))
+                .margin_top(px(10.0))
+                .margin_start(px(4.0))
+                .margin_end(px(4.0))
+                .build();
+
+            // Built whenever a picture is *expected* rather than only when
+            // one is already decoded: a library's is a file read on a thread
+            // and a cast one is an HTTP request, so at the moment this page is
+            // built there is usually nothing to draw yet. The frame is kept and
+            // `show_late_series_art` fills it - which is why the title alone
+            // appeared at first.
+            if expecting_series_art {
+                // Three eighths of the poster's width: a reference beside the
+                // details rather than a second poster competing with the one
+                // above it, and settled by looking at it rather than by
+                // reasoning about it.
+                let small = width * 3.0 / 8.0;
+                let frame = gtk::Box::builder()
+                    .css_classes(["tp-poster"])
+                    .halign(gtk::Align::Start)
+                    .valign(gtk::Align::Start)
+                    .overflow(gtk::Overflow::Hidden)
+                    .build();
+                // **Explicitly not expanding, and this is the whole bug it
+                // fixes.** The picture inside asks to expand so that it fills
+                // this frame, and GTK propagates that upwards - so in a
+                // horizontal row the frame grew to take half the width, while
+                // its height stayed at what was asked for. The picture then
+                // covered a box far wider than it was tall and was cropped top
+                // and bottom. A size request is a minimum; this is what makes
+                // it the size. The column above sets the same two for the same
+                // reason.
+                frame.set_hexpand(false);
+                frame.set_vexpand(false);
+                frame.set_size_request(
+                    small.round() as i32,
+                    series_frame_height(series_art.as_ref(), small).round() as i32,
+                );
+                if let Some(texture) = series_art {
+                    frame.append(&series_picture(texture));
+                }
+                *self.series_frame.borrow_mut() = Some(frame.clone());
+                series.append(&frame);
+            }
+
+            // The show, and which run of it, stacked beside the picture.
+            let words = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .valign(gtk::Align::Start)
+                .hexpand(true)
+                .build();
+            for (text, dim) in [(series_title.clone(), false), (self.season_label(), true)] {
+                if text.is_empty() {
+                    continue;
+                }
+                let line = gtk::Label::new(Some(&text));
+                line.add_css_class("tp-fact");
+                if dim {
+                    // Subordinate to the name above it: which season is a
+                    // qualifier, not a second thing of equal weight.
+                    line.add_css_class("tp-fact-name");
+                }
+                line.set_xalign(0.0);
+                line.set_yalign(0.0);
+                line.set_wrap(true);
+                line.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                // Capped like the facts above it, and for the same reason: a
+                // long show name would otherwise ask for the width of its own
+                // text and push the whole page to the right.
+                line.set_max_width_chars(16);
+                words.append(&line);
+            }
+            if words.first_child().is_some() {
+                series.append(&words);
+            }
+
+            column.append(&series);
+        }
+
         column
     }
 
@@ -5480,11 +5671,15 @@ impl App {
     /// on screen before it - a film's details held back until its wallpaper
     /// loads is the wrong thing to wait for.
     fn start_art_load(self: &Rc<Self>) {
-        let (poster, backdrop) = {
+        let (poster, backdrop, series) = {
             let details = self.details.borrow();
-            (details.poster.clone(), details.backdrop.clone())
+            (
+                details.poster.clone(),
+                details.backdrop.clone(),
+                details.series_poster.clone(),
+            )
         };
-        if poster.is_none() && backdrop.is_none() {
+        if poster.is_none() && backdrop.is_none() && series.is_none() {
             return;
         }
 
@@ -5497,12 +5692,12 @@ impl App {
             let read = |art: Option<crate::metadata::Art>| {
                 art.as_ref().and_then(crate::metadata::load_image)
             };
-            let _ = sender.send((read(poster), read(backdrop)));
+            let _ = sender.send((read(poster), read(backdrop), read(series)));
         });
 
         let app = self.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
-            let (poster, backdrop) = match receiver.try_recv() {
+            let (poster, backdrop, series) = match receiver.try_recv() {
                 Ok(art) => art,
                 Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -5531,11 +5726,13 @@ impl App {
             };
             *app.poster_art.borrow_mut() = decode(poster);
             *app.backdrop_art.borrow_mut() = decode(backdrop);
+            *app.series_art.borrow_mut() = decode(series);
 
             // Put into the page rather than rebuilding it, so that somebody
             // already choosing their tracks is left where they were.
             if *app.screen.borrow() == Screen::Menu {
                 app.show_late_art();
+                app.show_late_series_art();
             }
             glib::ControlFlow::Break
         });
@@ -6418,6 +6615,7 @@ impl App {
         *self.details.borrow_mut() = Default::default();
         *self.poster_art.borrow_mut() = None;
         *self.backdrop_art.borrow_mut() = None;
+        *self.series_art.borrow_mut() = None;
         // Anything still being read for the file being forgotten is now for
         // the wrong one, and this is what tells it so.
         self.art_generation.set(self.art_generation.get() + 1);
@@ -6487,6 +6685,7 @@ impl App {
         // moved out of `media`, and this reads the whole of it.
         *self.poster_art.borrow_mut() = None;
         *self.backdrop_art.borrow_mut() = None;
+        *self.series_art.borrow_mut() = None;
         self.art_generation.set(self.art_generation.get() + 1);
         let beside = {
             let config = self.config.borrow();
@@ -8479,6 +8678,24 @@ impl App {
             .map(crate::jellyfin::Pairing::label)
     }
 
+    /// Which run of the programme this is: "Season 2".
+    ///
+    /// The library's own wording wins where it gave one, because a number
+    /// cannot say everything a name can - season zero is "Specials", and
+    /// reading it back as "Season 0" would be wrong in the one case anybody
+    /// would notice. Empty for a film, and for an episode whose source said
+    /// neither.
+    fn season_label(&self) -> String {
+        let details = self.details.borrow();
+        if !details.season_name.is_empty() {
+            return details.season_name.clone();
+        }
+        match details.episode {
+            Some((season, _)) => format!("Season {season}"),
+            None => String::new(),
+        }
+    }
+
     /// Whether there is a token to cast with, as the pane last read it.
     fn jellyfin_connected(&self) -> bool {
         self.jellyfin_pairing
@@ -9378,6 +9595,7 @@ impl App {
         *self.details.borrow_mut() = details;
         *self.poster_art.borrow_mut() = None;
         *self.backdrop_art.borrow_mut() = None;
+        *self.series_art.borrow_mut() = None;
         self.art_generation.set(self.art_generation.get() + 1);
         self.start_art_load();
     }
@@ -15289,6 +15507,37 @@ mod settings_rows {
             }
         }
     }
+}
+
+/// How tall the series' small frame should be for the picture in it.
+///
+/// **Whatever the picture needs, so none of it is cropped.** This one is a
+/// reference rather than a composition - it says which programme this is - and
+/// a poster with its title lettering cut off the bottom fails at exactly that.
+/// The frame above it crops on purpose, because it is a fixed slot in a layout;
+/// this is not.
+///
+/// Two by three until a picture turns up, which is what most posters are, so
+/// the space reserved is about right before the fetch lands.
+fn series_frame_height(texture: Option<&gdk::Texture>, width: f64) -> f64 {
+    let Some(texture) = texture.filter(|texture| texture.width() > 0 && texture.height() > 0)
+    else {
+        return width * 3.0 / 2.0;
+    };
+    width * f64::from(texture.height()) / f64::from(texture.width())
+}
+
+/// The series' poster as a widget, filling its small frame.
+///
+/// Expanding both ways for the reason the main poster does: the widget draws a
+/// texture and measures as nothing, so without it the frame allocates no room
+/// at all and the picture simply does not appear.
+fn series_picture(texture: gdk::Texture) -> crate::artwork::Artwork {
+    let picture = crate::artwork::Artwork::poster();
+    picture.set_texture(Some(texture));
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture
 }
 
 /// How tall the poster frame should be for the picture going into it.
