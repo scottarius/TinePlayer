@@ -5336,8 +5336,13 @@ impl App {
         // The mark only where the screen is otherwise empty. Over a film it
         // would be the application introducing itself in the middle of being
         // used.
+        //
+        // The mark alone rather than the lockup with the name beneath it: the
+        // window is titled TinePlayer and the settings header carries the
+        // full logo, so spelling the name out again here bought nothing and
+        // took the room the prompt below it wants.
         if !cancel {
-            middle.append(&logo_image(scale * 2.2));
+            middle.append(&marked_image(APP_MARK, EMPTY_MARK * scale));
         }
 
         let prompt = gtk::Label::new(Some(
@@ -7544,6 +7549,10 @@ impl App {
         // The arrow's slot holds a fixed width for every screen to line up
         // against. With no arrow in it, that is just a gap before the trail.
         slot.set_visible(false);
+        // Keeps its place marked while the keyboard is over in the places
+        // column, since that is the row you are put back on when you come
+        // out of it - see `.tp-resting` in the stylesheet.
+        list.add_css_class("tp-resting");
         self.add_places_column(&page, directory, mode.folders_only(), &crumb_buttons);
         self.follow_focus(&list);
 
@@ -8828,17 +8837,45 @@ impl App {
     fn show_settings(self: &Rc<Self>) {
         let scale = self.scale.get();
         let px = |base: f64| (base * scale).round() as i32;
-        let (page, list, back, _header) = list_page("Settings", true);
+        let (page, list, back, slot) = list_page("Settings", true);
 
-        // A fifth of what the window has, so a bar is a consistent share of
-        // the screen whether that is a laptop or a television. The monitor
-        // stands in before the window has been given a size.
-        let slider_width = match self.window.width() {
+        // What the window has to spend. The monitor stands in before the
+        // window has been given a size.
+        let window_width = match self.window.width() {
             0 => appearance::monitor_for_window(&self.window)
                 .map(|monitor| monitor.geometry().width())
                 .unwrap_or(1920),
             width => width,
-        } / 5;
+        };
+        // A fifth of it, so a bar is a consistent share of the screen whether
+        // that is a laptop or a television.
+        let slider_width = window_width / 5;
+
+        // The logo at the trailing end of the header, which is otherwise dead
+        // space beside the heading.
+        //
+        // Added here rather than in `list_page_with`, which the file browser
+        // shares: that screen's header carries a breadcrumb trail along the
+        // same row, and a logo would be competing with the one thing on it
+        // that has to be read.
+        //
+        // Drawn at every window size. A header is a box and a box does not
+        // overlap what is in it: with the screen narrow enough for the two to
+        // meet, what happens is the heading and the logo are pushed together,
+        // not one over the other.
+        if let Some(header) = slot.parent().and_downcast::<gtk::Box>() {
+            let lockup = lockup_image(HORIZONTAL_LOCKUP, SETTINGS_LOCKUP * scale);
+            // Takes the room left over and sits at the end of it, so the
+            // heading keeps its place at the start of the row rather than
+            // being centered by what follows it.
+            lockup.set_hexpand(true);
+            lockup.set_halign(gtk::Align::End);
+            // Held off the edge by the radius of the panel beneath it, so it
+            // lines up with where that corner turns rather than with a corner
+            // the panel does not actually have.
+            lockup.set_margin_end(px(PANEL_RADIUS));
+            header.append(&lockup);
+        }
 
         // The right-hand pane, rebuilt in place when the category changes
         // rather than by rebuilding the screen: the cursor is in the column on
@@ -9045,6 +9082,9 @@ impl App {
 
         // The categories, down the left.
         let (categories_scroller, categories) = scrolling_list();
+        // Which keeps its place marked after the keyboard has left it - see
+        // `.tp-resting` in the stylesheet for which lists do that and why.
+        categories.add_css_class("tp-resting");
         categories_scroller.set_size_request(px(CATEGORY_WIDTH), -1);
         for category in Category::ALL {
             append_named(
@@ -9891,26 +9931,16 @@ impl App {
             .margin_end(px(ABOUT_INSET))
             .build();
 
-        // The mark beside the name, which is the one place in the application
-        // that says which player this is in so many words.
-        let title = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(px(14.0))
-            .build();
-        // Larger than the one in the corner of a header, which shares a fixed
-        // slot with the back arrow and is sized to it. Here it stands beside
-        // the application's name and is the only picture on the page.
-        let mark = logo_image(self.scale.get());
-        mark.set_pixel_size(px(ABOUT_LOGO));
-        // Both centered against each other, or the mark hangs above a line of
-        // text half its height.
-        mark.set_valign(gtk::Align::Center);
+        // The name and the version, and no mark beside it: the lockup in the
+        // header above says which player this is, a couple of inches away and
+        // on every category rather than only this one. Two logos on one screen
+        // is one of them repeating the other.
+        //
+        // The version stays here rather than moving into the lockup, which
+        // carries a name and cannot carry a number.
         let name = about_heading(&format!("TinePlayer {}", env!("CARGO_PKG_VERSION")));
         name.add_css_class("tp-about-title");
-        name.set_valign(gtk::Align::Center);
-        title.append(&mark);
-        title.append(&name);
-        body.append(&title);
+        body.append(&name);
 
         // What it is, before what it is made of. Everything else on this page
         // assumes you already know, which is no use to somebody who has
@@ -10437,11 +10467,10 @@ impl App {
         }
         let selected = selected.map(|(index, _)| index);
         if let Some(row) = selected.and_then(|index| list.row_at_index(index)) {
-            // Marked as the one in force, and the cursor starts there - but
-            // the two part company as soon as the viewer moves, which is the
-            // whole point of marking it separately.
+            // Marked as the one in force. No selection to go with it: the
+            // screen opens with the cursor in the listing, and a column that
+            // is not being driven should not be showing a cursor.
             row.add_css_class("tp-current");
-            list.select_row(Some(&row));
         }
 
         {
@@ -10459,6 +10488,39 @@ impl App {
             });
         }
         self.follow_focus(&list);
+
+        // The column keeps no cursor between visits. Where you are is already
+        // marked, so a selection left behind after the keyboard moved into the
+        // listing said nothing beyond "this list has been visited" - and said
+        // it in the theme's own selection color, which nothing else on the
+        // screen is drawn in.
+        //
+        // Coming back lands on the place in force rather than resuming
+        // wherever the cursor was left, because this column is a statement of
+        // where the listing is, not a position of its own to hold.
+        {
+            let controller = gtk::EventControllerFocus::new();
+            // Weak both ways: the controller is added to the list it watches.
+            let entering = list.downgrade();
+            controller.connect_enter(move |_| {
+                let Some(list) = entering.upgrade() else {
+                    return;
+                };
+                // The first row when nothing here contains the listing, so the
+                // arrows always have somewhere to start from.
+                let landing = selected
+                    .and_then(|index| list.row_at_index(index))
+                    .or_else(|| list.row_at_index(0));
+                list.select_row(landing.as_ref());
+            });
+            let leaving = list.downgrade();
+            controller.connect_leave(move |_| {
+                if let Some(list) = leaving.upgrade() {
+                    list.select_row(None::<&gtk::ListBoxRow>);
+                }
+            });
+            list.add_controller(controller);
+        }
 
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -12468,25 +12530,16 @@ fn scrolling_list() -> (gtk::ScrolledWindow, gtk::ListBox) {
     (scroller, list)
 }
 
-/// The application mark, decoded from the PNG compiled into the binary.
-///
-/// A PNG rather than the SVG it was drawn from, because GStreamer's Windows
-/// distribution ships no gdk-pixbuf loaders at all and so cannot decode SVG
-/// at runtime. The SVG is still what Linux installs, where librsvg is present.
-fn logo_image(scale: f64) -> gtk::Image {
-    const LOGO: &[u8] = include_bytes!("../data/ui/tineplayer.png");
+/// The mark on its own, for a screen that says the name some other way.
+const APP_MARK: &[u8] = include_bytes!("../data/ui/tineplayer.png");
 
-    let image = gtk::Image::new();
-    match gdk::Texture::from_bytes(&glib::Bytes::from_static(LOGO)) {
-        Ok(texture) => image.set_paintable(Some(&texture)),
-        Err(e) => eprintln!("Could not load the application icon: {e}"),
-    }
-    // Shares the back arrow's fixed slot, so the title beside it sits in the
-    // same place on every screen instead of shifting as you move between
-    // them. Drawn a little smaller than the slot so it cannot force it wider.
-    image.set_valign(gtk::Align::Center);
-    image.set_pixel_size((30.0 * scale).round() as i32);
-    image
+/// The mark with the name beside it, for a header.
+const HORIZONTAL_LOCKUP: &[u8] = include_bytes!("../data/ui/lockup-horizontal.png");
+
+/// The full logo at `width`, in [`crate::lockup`], which explains why it is
+/// not a `GtkImage` like every other picture here.
+fn lockup_image(bytes: &'static [u8], width: f64) -> crate::lockup::Lockup {
+    crate::lockup::Lockup::new(bytes, width)
 }
 
 /// How much room the film's description may take, in interface units.
@@ -12605,7 +12658,7 @@ const PLOT_UNITS: f64 = 90.0;
 /// What stands in for a poster when there is none, which is most of the time.
 ///
 /// A PNG per theme rather than the SVG it was drawn from, for the reason
-/// [`logo_image`] gives: GStreamer's Windows distribution ships no gdk-pixbuf
+/// [`lockup_image`] gives: GStreamer's Windows distribution ships no gdk-pixbuf
 /// loaders, so nothing there can decode an SVG at runtime. The two versions
 /// carry the same ink as the fullscreen marks beside them.
 fn video_file_image(size: f64) -> gtk::Image {
@@ -12782,9 +12835,30 @@ fn os_name() -> &'static str {
 /// How much room the About text keeps inside its panel, in interface units.
 const ABOUT_INSET: f64 = 18.0;
 
-/// The mark beside the application's name on the About page, in interface
-/// units.
-const ABOUT_LOGO: f64 = 46.0;
+/// How wide the mark is drawn on the empty screen, in interface units.
+///
+/// The size the mark has been drawn at since the logo there was enlarged,
+/// so taking the name out from under it changes what the screen says and not
+/// how big the picture is. Half again the size it was before that, which was
+/// judged too timid for the one screen whose whole job is to introduce the
+/// application.
+const EMPTY_MARK: f64 = 99.0;
+
+/// How wide the horizontal lockup is drawn in the settings header, in
+/// interface units.
+///
+/// The lockup is 4.5:1, so this is 48 units tall, which is deeper than the
+/// header's own 38-unit footprint - the header grows to hold it rather than
+/// the logo being kept down to a row sized for a back arrow.
+const SETTINGS_LOCKUP: f64 = 218.0;
+
+/// The corner radius of a panel, in interface units.
+///
+/// Named because two things have to agree about it: the stylesheet rounds
+/// `.tp-menu-panel` by this much, and the logo above that panel is inset by
+/// the same amount so it stands level with where the corner's curve begins
+/// rather than with the edge it never quite reaches.
+const PANEL_RADIUS: f64 = 16.0;
 
 /// How tall the notices are allowed to grow before they scroll, as a share of
 /// the window. A dialog is a thing on top of a screen, and one that reaches
@@ -14491,12 +14565,18 @@ fn style_css(scale: f64) -> String {
            conflating them is actively misleading in the places column: moving
            the cursor there would appear to change the folder being shown.
 
-           A bar down the leading edge rather than a fill, so it reads as
-           'you are here' beside the focus rather than competing with it.
-           Drawn with an inset shadow rather than a border so that marking a
-           row does not shift its text. */
+           The same backed-off white the settings categories rest at, so the
+           whole application says 'in force but not where the keys are' one
+           way. It was a blue bar down the leading edge, which read as a
+           different kind of thing entirely - an accent mark rather than a
+           quieter version of the highlight beside it - and left two idioms
+           for one idea.
+
+           Hover deliberately does not override it, which falls out of this
+           rule coming after the hover one. That is what the focused row does
+           too: a row carrying a mark keeps it under the pointer. */
         .tp-menu > row.tp-current {{
-            box-shadow: inset {mark}px 0 0 0 {highlight};
+            background-color: {resting_row};
         }}
         /* Belongs to the row above it: indented so the group reads as one
            thing without every label having to name the output again. */
@@ -14519,6 +14599,22 @@ fn style_css(scale: f64) -> String {
         .tp-menu:focus-within > row:selected .tp-chevron {{
             color: {on_focus};
             opacity: 0.85;
+        }}
+        /* The exception to the rule above, for the lists that keep their place
+           marked once the keyboard has gone somewhere else: the settings
+           categories, which are the heading of everything in the pane beside
+           them, and the browser's listing, which is where you will be put
+           back when you come out of the places column.
+
+           Backed well off the focused row's white so the two read in order
+           rather than as a pair - the bright one is where the keys are going,
+           this one is only saying where you were. Without it the row falls
+           through to the theme's own selection color, which is a blue nothing
+           else on the screen is drawn in and reads as an accent rather than
+           as a quieter cursor. */
+        .tp-resting > row:selected {{
+            background-image: none;
+            background-color: {resting_row};
         }}
         /* A ring rather than a fill. Recoloring a focused button changes what
            it looks like it does - a Cancel that turns blue reads as the one
@@ -14712,11 +14808,11 @@ fn style_css(scale: f64) -> String {
         }}
         /* The subtitle in force, marked apart from where the cursor is - the
            two part company as soon as anybody moves, which is the point of
-           marking them separately. The same bar down the leading edge the
-           menus draw, so 'you are here' and 'this is what is on' read the
-           same way over a film as they do on a page. */
+           marking them separately. The same backed-off white the menus rest
+           at, so 'this is what is on' reads the same way over a film as it
+           does on a page. */
         .tp-subtitle-row.tp-current {{
-            box-shadow: inset {mark}px 0 0 0 {highlight};
+            background-color: {resting_row};
         }}
         /* The handle, not the whole bar: filling the trough drew over the
            very thing that says where playback is. */
@@ -14927,7 +15023,7 @@ fn style_css(scale: f64) -> String {
         // Larger than a row's corner, in proportion to the box it rounds. At
         // the row radius a panel this size reads as a rectangle with the
         // corners knocked off.
-        panel_radius = px(16.0),
+        panel_radius = px(PANEL_RADIUS),
         panel_pad = px(8.0),
         outline = px(2.0).max(1),
         handle = px(18.0),
@@ -14958,7 +15054,6 @@ fn style_css(scale: f64) -> String {
         shadow_drop = px(4.0),
         shadow_blur = px(18.0),
         subrow = px(28.0),
-        mark = px(4.0),
         // A shade larger than `ICON_PX`, which is what every other icon in
         // the interface uses. The gear sits beside the fullscreen mark, and
         // that mark is a picture with clear space drawn into it - so at the
@@ -15024,6 +15119,12 @@ fn style_css(scale: f64) -> String {
         // row: the ring on a focused button stays at full strength, being a
         // thin outline that has nothing like the area to spare.
         focus_row = "rgba(255, 255, 255, 0.7)",
+        // The same white again, right back, for a row that is still in force
+        // while the keyboard is somewhere else - the settings category on
+        // show. Weak enough that the focused row is plainly the louder of the
+        // two, since one of them is where the next key goes and the other is
+        // only saying what is being looked at.
+        resting_row = "rgba(255, 255, 255, 0.16)",
         on_focus = "#1c1c1c",
         // The ink both corner marks share. The fullscreen image is drawn in
         // it as a picture; the gear is told to match.
