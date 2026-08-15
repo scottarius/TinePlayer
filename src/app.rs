@@ -11047,11 +11047,13 @@ impl App {
                 match receiver.try_recv() {
                     Ok(Ok(())) => {}
                     // Said rather than swallowed, and said where it can be
-                    // acted on: the token here is gone either way, but a
-                    // device the server still lists is one the viewer has to
-                    // remove themselves. Only over the pane it was asked
-                    // from - a panel arriving over a film minutes later would
-                    // be a worse fault than the one it reports.
+                    // acted on. This is now only reached when the server could
+                    // not be reached at all - a single logout either revokes
+                    // the token and removes the device or does neither - so the
+                    // pairing really is still live over there, and the viewer
+                    // is the only one who can end it. Only over the pane it was
+                    // asked from: a panel arriving over a film minutes later
+                    // would be a worse fault than the one it reports.
                     Ok(Err(e)) => {
                         eprintln!("Jellyfin was not told about the disconnection: {e}");
                         if app.showing_jellyfin_pane() {
@@ -11059,7 +11061,7 @@ impl App {
                                 "Disconnected Here Only",
                                 &[
                                     "The access token stored on this machine has been removed.",
-                                    "The server could not be told, so this device may still be listed under Devices in the Jellyfin dashboard. Removing it there revokes the token for good.",
+                                    "The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there.",
                                     &e.to_string(),
                                 ],
                             );

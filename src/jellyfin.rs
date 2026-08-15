@@ -460,44 +460,29 @@ impl Client {
         }
     }
 
-    /// A DELETE, whose reply is not wanted either.
-    fn delete(&self, path: &str) -> Result<(), Error> {
-        let response = minreq::delete(format!("{}{path}", self.server))
-            .with_header(
-                "Authorization",
-                authorization(&self.device_id, Some(&self.token)),
-            )
-            .with_timeout(TIMEOUT)
-            .send()
-            .map_err(|e| Error::Failed(e.to_string()))?;
-        match response.status_code {
-            200..=299 => Ok(()),
-            code => Err(failed(code, response.as_str().unwrap_or_default())),
-        }
-    }
-
     /// Ends the pairing at the server, which is half of disconnecting.
     ///
-    /// Two calls, because they undo two different things and either can be
-    /// refused without the other mattering:
+    /// **One call, and it does the whole job.** `POST /Sessions/Logout` reaches
+    /// `SessionManager.Logout`, which looks the device up by its access token
+    /// and calls `DeleteDevice` on it - so the token is revoked *and* the entry
+    /// disappears from the viewer's Devices page. Read out of Jellyfin's own
+    /// source on 2026-08-15.
     ///
-    /// - **Logout** revokes this token. That is the half that matters, and it
-    ///   is the viewer's own session, so it needs no special standing.
-    /// - **Deleting the device** takes TinePlayer out of the list on the
-    ///   viewer's Devices page. Without it the entry lingers there for ever,
-    ///   which is what this exists to prevent - but Jellyfin guards that page
-    ///   for administrators, so an ordinary account is refused and that is not
-    ///   a failure worth stopping for. The token is already gone by then.
+    /// **It deliberately does not also `DELETE /Devices?id=`, which is what
+    /// this used to do.** That endpoint is redundant after the logout above,
+    /// and `DevicesController` carries
+    /// `[Authorize(Policy = Policies.RequiresElevation)]` on the class, so an
+    /// ordinary account is refused it. Pairing the two meant a viewer who is
+    /// not an administrator got a 403 from a call that never needed making,
+    /// and was told the server could not be told - when it had been, and had
+    /// already removed the device. `Sessions/Logout` is plain `[Authorize]`:
+    /// it is the viewer's own session, so anybody may end their own.
     ///
     /// Whatever this answers, the caller deletes the local file: a viewer who
     /// asked to disconnect has disconnected, whether or not a server that may
     /// be switched off agreed to hear about it.
     pub fn disconnect(&self) -> Result<(), Error> {
-        let logout = self.post("/Sessions/Logout", serde_json::json!({}));
-        let forgotten = self.delete(&format!("/Devices?id={}", self.device_id));
-        // The token first: it is the one whose failure leaves something
-        // behind that matters.
-        logout.and(forgotten)
+        self.post("/Sessions/Logout", serde_json::json!({}))
     }
 
     /// Says what TinePlayer can be asked to do.
