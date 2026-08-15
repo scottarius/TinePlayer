@@ -28,6 +28,27 @@ use serde::{Deserialize, Serialize};
 /// device list, so it is a name rather than an identifier.
 const CLIENT: &str = "TinePlayer";
 
+/// The mark this device offers to the viewer's Jellyfin device list.
+///
+/// **Sent, accepted, stored - and not drawn.** Tried against 10.11.11 on
+/// 2026-08-15: the dashboard shows Kodi and the browsers with their own icons
+/// and TinePlayer without one. So the icons in that list do not come from
+/// this field, whatever the API suggests, and where they do come from was not
+/// chased further.
+///
+/// Kept rather than removed, because it costs one line in a request already
+/// being made and it is what the server asks for: `ClientCapabilitiesDto`
+/// carries an `IconUrl`, `DeviceManager` stores it against the device, and
+/// `DeviceInfoDto` hands it back. If a version ever renders it, this is
+/// already right.
+///
+/// An address rather than a picture, because that is the shape of the field:
+/// whatever draws it fetches it, so it has to be somewhere public rather than
+/// inside this binary. TinePlayer's own mark on TinePlayer's own site -
+/// **never Jellyfin's**, whose logo needs their express permission. A site
+/// that is down costs an icon and nothing else.
+const ICON_URL: &str = "https://tineplayer.app/images/icon.png";
+
 /// Long enough for a server waking a spun-down disk, short enough that one
 /// which has gone away does not hold a worker thread for ever.
 const TIMEOUT: u64 = 15;
@@ -544,6 +565,7 @@ impl Client {
                 ],
                 "SupportsMediaControl": true,
                 "SupportsPersistentIdentifier": true,
+                "IconUrl": ICON_URL,
             }),
         )
     }
