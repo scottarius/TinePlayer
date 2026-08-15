@@ -2148,12 +2148,38 @@ impl App {
 
         // Off the main thread: this talks to a server that may be asleep, and
         // the interface has a menu to draw.
+        //
+        // **Its answer is acted on, not merely printed.** This is the first
+        // call made with a stored token, so it is the first thing to know that
+        // a pairing has been revoked - and until 2026-08-15 it logged
+        // "Jellyfin no longer accepts this connection" and carried on, leaving
+        // the settings screen claiming to be connected to a server that had
+        // deleted this device. Reported by Scott, who had done exactly that.
         let announcing = client.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            if let Err(e) = announcing.announce() {
-                eprintln!("Jellyfin would not take our capabilities: {e}");
-            }
+            let _ = sender.send(announcing.announce());
         });
+        {
+            let app = self.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+                match receiver.try_recv() {
+                    Ok(Ok(())) => {}
+                    // The pairing is gone. Everything else about this server is
+                    // now wrong, including the socket that is being opened
+                    // below, which signing out puts down.
+                    Ok(Err(crate::jellyfin::Error::Unauthorized)) => app.jellyfin_signed_out(),
+                    // A server that is off or asleep, which is ordinary and
+                    // not a reason to throw the pairing away.
+                    Ok(Err(e)) => eprintln!("Jellyfin would not take our capabilities: {e}"),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        return glib::ControlFlow::Continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
+                glib::ControlFlow::Break
+            });
+        }
         *self.jellyfin.borrow_mut() = Some(client);
 
         let app = self.clone();
@@ -2423,6 +2449,14 @@ impl App {
     /// out loud, because a cast target that has quietly stopped being one is
     /// the failure nobody can diagnose from the sofa.
     fn jellyfin_signed_out(self: &Rc<Self>) {
+        // Both halves of the connection find this out for themselves - the
+        // capabilities call by its 401, the socket by its 403 - and either
+        // alone has to be enough, since a server may refuse one and not the
+        // other. So the second one to arrive says nothing and writes nothing
+        // rather than repeating the message and the file write.
+        if self.jellyfin.borrow().is_none() && self.jellyfin_session.borrow().is_none() {
+            return;
+        }
         *self.jellyfin.borrow_mut() = None;
         *self.jellyfin_session.borrow_mut() = None;
         if let Some(mut pairing) = crate::jellyfin::load() {

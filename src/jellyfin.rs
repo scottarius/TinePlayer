@@ -382,9 +382,20 @@ fn hostname() -> String {
     glib::host_name().replace(['"', '\\'], "")
 }
 
+/// Whether a status means "this pairing is gone" rather than "try again".
+///
+/// The distinction is the whole of how a dead pairing is told from a server
+/// having a bad moment: one is retried with a backoff, the other stops and
+/// asks to be paired again. Jellyfin says it both ways - 401 from the REST
+/// endpoints, 403 from the WebSocket handshake - so the answer lives here
+/// rather than being written out at each place that has to decide.
+fn is_refusal(code: u16) -> bool {
+    matches!(code, 401 | 403)
+}
+
 fn failed(code: i32, body: &str) -> Error {
-    match code {
-        401 | 403 => Error::Unauthorized,
+    match u16::try_from(code).map(is_refusal) {
+        Ok(true) => Error::Unauthorized,
         _ => Error::Failed(format!("Jellyfin answered {code}: {}", body.trim())),
     }
 }
@@ -1402,12 +1413,23 @@ fn socket_url(server: &str, token: &str, device_id: &str) -> String {
 fn hold(url: &str, alive: &std::sync::atomic::AtomicBool) -> Result<(), Error> {
     let (mut socket, response) = match tungstenite::connect(url) {
         Ok(pair) => pair,
-        Err(tungstenite::Error::Http(response)) if response.status() == 401 => {
+        // **A revoked token is a 403 here and a 401 on every REST call**,
+        // measured 2026-08-15 by deleting this device from the Jellyfin
+        // dashboard and watching both: `/Users/Me` answered 401 and the socket
+        // handshake answered 403 Forbidden. Reading only 401 is what made a
+        // dead pairing retry for ever with a widening backoff - the one thing
+        // the note below says must never happen - while the log said plainly
+        // that the connection was no longer accepted.
+        //
+        // Both are read as "the pairing is gone", the same rule `failed`
+        // already applies to the REST side. Two places deciding what a revoked
+        // token looks like is how they came to disagree.
+        Err(tungstenite::Error::Http(response)) if is_refusal(response.status().as_u16()) => {
             return Err(Error::Unauthorized);
         }
         Err(e) => return Err(Error::Failed(e.to_string())),
     };
-    if response.status() == 401 {
+    if is_refusal(response.status().as_u16()) {
         return Err(Error::Unauthorized);
     }
 
@@ -1562,6 +1584,29 @@ mod tests {
         // Not in the container, so there is no position in it to have.
         assert_eq!(streams.subtitle_position(0), None);
         assert_eq!(streams.subtitle_position(9), None);
+    }
+
+    /// A revoked pairing must be recognised however the server phrases it.
+    ///
+    /// Jellyfin says it two ways - 401 from the REST endpoints, 403 from the
+    /// WebSocket handshake, both measured on 2026-08-15 against a device
+    /// deleted from the dashboard. Reading only 401 left the socket retrying a
+    /// dead pairing for ever, which is the exact failure the design set out to
+    /// avoid: TinePlayer absent from every phone with nothing said about why.
+    #[test]
+    fn a_revoked_pairing_is_recognised_either_way() {
+        assert!(is_refusal(401), "the REST endpoints answer 401");
+        assert!(is_refusal(403), "the socket handshake answers 403");
+        assert_eq!(failed(401, ""), Error::Unauthorized);
+        assert_eq!(failed(403, ""), Error::Unauthorized);
+
+        // A server having a bad moment is not a revoked pairing, and must stay
+        // retryable - stopping on one of these would take TinePlayer off
+        // everyone's phone until it was next started.
+        for code in [500, 502, 503, 404, 400] {
+            assert!(!is_refusal(code), "{code} is worth retrying");
+            assert!(matches!(failed(code.into(), "trouble"), Error::Failed(_)));
+        }
     }
 
     #[test]
