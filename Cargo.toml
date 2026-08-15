@@ -8,7 +8,7 @@ name = "tineplayer"
 # The update check parses the three leading numbers and ignores the rest, so a
 # dev build is never told to downgrade to the release behind it. Windows
 # packaging trims the suffix for the one field Inno insists is numeric.
-version = "1.2.0-dev"
+version = "1.3.0-dev"
 edition = "2024"
 
 # The crate keeps its lowercase name for crates.io conventions, while the
