@@ -5111,6 +5111,11 @@ impl App {
 
         const BROWSE_ICON: &[u8] = include_bytes!("../data/ui/browse.png");
         const LINK_ICON: &[u8] = include_bytes!("../data/ui/link.png");
+        const CONNECT_ICON: &[u8] = include_bytes!("../data/ui/connect.png");
+        // Green in the file rather than tinted here, because a GTK image
+        // cannot be recoloured - the same reason the muted soundtrack mark
+        // fades with opacity instead of changing colour.
+        const CONNECTED_ICON: &[u8] = include_bytes!("../data/ui/connected.png");
 
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -5161,7 +5166,7 @@ impl App {
             false => {
                 let connect = gtk::Button::new();
                 connect.set_child(Some(&marked_face(
-                    marked_image(LINK_ICON, PLAY_MARK_PX * scale),
+                    marked_image(CONNECT_ICON, PLAY_MARK_PX * scale),
                     "  Connect to Jellyfin",
                 )));
                 connect.add_css_class("tp-button");
@@ -5174,13 +5179,20 @@ impl App {
             // the navigation: there is nothing to press, and a stop that does
             // nothing is worse than no stop at all.
             true => {
-                let connected = gtk::Label::new(Some(&match self.jellyfin_server_label() {
-                    Some(server) => format!("Connected to Jellyfin ({server})"),
-                    None => "Connected to Jellyfin".to_string(),
-                }));
-                connected.add_css_class("tp-hint");
+                let words = match self.jellyfin_server_label() {
+                    Some(server) => format!("  Connected to Jellyfin ({server})"),
+                    None => "  Connected to Jellyfin".to_string(),
+                };
+                // The same mark-and-words shape the buttons above use, so the
+                // line reads as belonging with them rather than as a caption
+                // that wandered in - but as a plain box, since there is
+                // nothing to press.
+                let connected =
+                    marked_face(marked_image(CONNECTED_ICON, PLAY_MARK_PX * scale), &words);
+                connected.add_css_class("tp-connected");
                 connected.set_halign(gtk::Align::Center);
                 connected.set_can_focus(false);
+                name_it(&connected, &words);
                 middle.append(&connected);
                 None
             }
@@ -14051,6 +14063,12 @@ fn style_css(scale: f64) -> String {
            of text of one weight. */
         .tp-fact-name {{ opacity: 0.6; }}
         .tp-empty-prompt {{ font-size: {row}px; opacity: 0.7; }}
+        /* The line that stands where the Connect button stands when there is
+           nothing to connect. Sized like the buttons it sits under rather than
+           like small print, because it answers the same question they ask -
+           and at full strength, so the green mark beside it stays green
+           instead of being dimmed along with the words. */
+        .tp-connected {{ font-size: {row}px; }}
         /* Backing out, on every screen that offers it. A literal red for the
            same reason the highlight is literal: a theme name that does not
            exist makes the whole declaration fail to parse. */
