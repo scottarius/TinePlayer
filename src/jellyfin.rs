@@ -196,6 +196,14 @@ pub struct Pairing {
     /// replaces the existing device rather than leaving the viewer's device
     /// list full of one entry per attempt.
     pub device_id: String,
+    /// What the server calls itself - "hoth" - for saying which server this is
+    /// without reciting an address at somebody.
+    ///
+    /// Absent when it could not be asked, which is not worth failing a pairing
+    /// over: everywhere this is shown falls back to the address, which is
+    /// always known. Absent too in every file written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Absent until Quick Connect has been approved, and absent again the
     /// moment the server stops accepting the token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,8 +228,18 @@ impl Pairing {
         Self {
             server: normalize(server),
             device_id: new_device_id(),
+            name: None,
             account: None,
         }
+    }
+
+    /// What to call this server on screen: its own name where it gave one, and
+    /// otherwise the address, which is always known.
+    pub fn label(&self) -> String {
+        self.name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| self.server.clone())
     }
 
     /// Whether there is a token to try. Not whether it still works - only the
@@ -248,7 +266,9 @@ impl Pairing {
     pub fn set_server(&mut self, server: &str) {
         let server = normalize(server);
         if server != self.server {
+            // The name belongs to the old server as much as the token does.
             self.account = None;
+            self.name = None;
         }
         self.server = server;
     }
@@ -1160,6 +1180,27 @@ pub struct QuickConnect {
     secret: String,
 }
 
+/// What the server calls itself, asked without a token.
+///
+/// `/System/Info/Public` needs no authentication, which is what makes this
+/// safe to do before a pairing exists and safe to fail: a server that will not
+/// say is shown by its address instead. Deliberately not `/System/Info`, which
+/// is the same answer behind a token and would be one more thing to go wrong.
+pub fn server_name(server: &str) -> Option<String> {
+    let response = minreq::get(format!("{}/System/Info/Public", normalize(server)))
+        .with_timeout(TIMEOUT)
+        .send()
+        .ok()?;
+    if response.status_code != 200 {
+        return None;
+    }
+    let body: serde_json::Value = response.json().ok()?;
+    body.get("ServerName")
+        .and_then(|name| name.as_str())
+        .map(str::to_string)
+        .filter(|name| !name.trim().is_empty())
+}
+
 /// Asks the server to start a pairing.
 ///
 /// Quick Connect can be switched off by an administrator, in which case this
@@ -1684,6 +1725,34 @@ mod tests {
         assert_eq!(read_discovery(reply).unwrap().address, "http://hoth:8096");
     }
 
+    /// What a server is called on screen, and what stands in when it never
+    /// said. The address is always known, so there is always an answer.
+    #[test]
+    fn a_server_is_named_where_it_gave_one() {
+        let mut pairing = Pairing::new("http://192.168.3.2:8096");
+        assert_eq!(pairing.label(), "http://192.168.3.2:8096");
+
+        pairing.name = Some("hoth".to_string());
+        assert_eq!(pairing.label(), "hoth");
+
+        // A server that answered with nothing useful is the same as one that
+        // did not answer: an empty name would read as no server at all.
+        pairing.name = Some("   ".to_string());
+        assert_eq!(pairing.label(), "http://192.168.3.2:8096");
+    }
+
+    /// The name belongs to the server that gave it, so pointing this
+    /// installation somewhere else must not keep calling it by the old name.
+    #[test]
+    fn a_new_server_is_not_called_by_the_old_ones_name() {
+        let mut pairing = Pairing::new("http://hoth:8096");
+        pairing.name = Some("hoth".to_string());
+
+        pairing.set_server("http://endor:8096");
+        assert_eq!(pairing.name, None);
+        assert_eq!(pairing.label(), "http://endor:8096");
+    }
+
     #[test]
     fn naming_a_different_server_drops_the_account() {
         let mut pairing = Pairing::new("http://hoth:8096");
@@ -1816,6 +1885,18 @@ mod tests {
             );
         }
         assert!(!found.is_empty(), "no server answered on this network");
+
+        // And that the same server says what it is called when asked directly,
+        // which is the route a typed address has to take - there is no
+        // broadcast reply to read a name out of then.
+        let server = &found[0];
+        let asked = server_name(&server.address);
+        println!("    {} calls itself {asked:?}", server.address);
+        assert_eq!(
+            asked.as_deref(),
+            Some(server.name.as_str()),
+            "the broadcast and the API should agree on the name"
+        );
     }
 
     /// The whole pairing, against a real server, driven by this code rather
