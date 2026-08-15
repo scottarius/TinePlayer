@@ -5333,16 +5333,16 @@ impl App {
             .halign(gtk::Align::Center)
             .vexpand(true)
             .build();
-        // The logo only where the screen is otherwise empty. Over a film it
+        // The mark only where the screen is otherwise empty. Over a film it
         // would be the application introducing itself in the middle of being
         // used.
         //
-        // The stacked lockup rather than the bare mark, because this is the
-        // one screen that has to say what the program is called: nothing else
-        // on it names the application, and it is what somebody sees first on
-        // a machine they have just installed it on.
+        // The mark alone rather than the lockup with the name beneath it: the
+        // window is titled TinePlayer and the settings header carries the
+        // full logo, so spelling the name out again here bought nothing and
+        // took the room the prompt below it wants.
         if !cancel {
-            middle.append(&lockup_image(STACKED_LOCKUP, EMPTY_LOCKUP * scale));
+            middle.append(&marked_image(APP_MARK, EMPTY_MARK * scale));
         }
 
         let prompt = gtk::Label::new(Some(
@@ -12530,9 +12530,10 @@ fn scrolling_list() -> (gtk::ScrolledWindow, gtk::ListBox) {
     (scroller, list)
 }
 
-/// The mark with the name: stacked for a screen with room beneath it,
-/// horizontal for a header.
-const STACKED_LOCKUP: &[u8] = include_bytes!("../data/ui/lockup-stacked.png");
+/// The mark on its own, for a screen that says the name some other way.
+const APP_MARK: &[u8] = include_bytes!("../data/ui/tineplayer.png");
+
+/// The mark with the name beside it, for a header.
 const HORIZONTAL_LOCKUP: &[u8] = include_bytes!("../data/ui/lockup-horizontal.png");
 
 /// The full logo at `width`, in [`crate::lockup`], which explains why it is
@@ -12834,15 +12835,14 @@ fn os_name() -> &'static str {
 /// How much room the About text keeps inside its panel, in interface units.
 const ABOUT_INSET: f64 = 18.0;
 
-/// How wide the stacked lockup is drawn on the empty screen, in interface
-/// units.
+/// How wide the mark is drawn on the empty screen, in interface units.
 ///
-/// Half again bigger than the size that kept the mark inside it exactly as
-/// large as the bare mark this replaced, which was the cautious answer and
-/// looked it: this is the one screen whose whole job is to say what the
-/// program is, so the logo is what it has to spend its space on. Scott's call
-/// on seeing it drawn.
-const EMPTY_LOCKUP: f64 = 168.0;
+/// The size the mark has been drawn at since the logo there was enlarged,
+/// so taking the name out from under it changes what the screen says and not
+/// how big the picture is. Half again the size it was before that, which was
+/// judged too timid for the one screen whose whole job is to introduce the
+/// application.
+const EMPTY_MARK: f64 = 99.0;
 
 /// How wide the horizontal lockup is drawn in the settings header, in
 /// interface units.
