@@ -22,6 +22,7 @@ mod controls;
 mod devices;
 mod display;
 mod gamepad;
+mod jellyfin;
 mod kodi;
 mod kodi_setup;
 mod languages;
@@ -367,7 +368,9 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     // The same list the menu offers, in the same order, so the numbers here
     // are the ones `--subtitle` takes. Includes subtitle files sitting beside
     // the video, not just what is inside it.
-    let subtitles = subtitles::options(source.local(), &media.subtitles);
+    // Nothing from a library here: listing tracks is a question about a file,
+    // and reaching a server would mean pairing before answering it.
+    let subtitles = subtitles::options(source.local(), &media.subtitles, &[]);
 
     // Indices right-aligned to the widest of them, so a file with ten or more
     // tracks keeps its numbers in a column instead of stepping sideways. Both

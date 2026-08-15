@@ -92,6 +92,8 @@ from a single pipeline, staying in sync because it is all one clock.
   named and announced
 - Integrates with Kodi and reports playback progress, including libraries from
   add-ons like Jellyfin and Plex
+- Connects to a Jellyfin server as a cast target, so anyone in the room can send
+  a video to the television from their own phone
 - Launches straight into playback from command-line arguments, for custom
   integrations
 

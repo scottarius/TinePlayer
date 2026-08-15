@@ -63,6 +63,21 @@ pub struct Details {
     /// part and belongs on a thread - see [`load_image`].
     pub poster: Option<Art>,
     pub backdrop: Option<Art>,
+    /// What the show is called, for an episode. Empty for anything else, and
+    /// so also how the page knows whether to name a series at all.
+    pub series_title: String,
+    /// What the library calls this season, where it said - "Specials" rather
+    /// than the "Season 0" a number would produce. Empty otherwise, and the
+    /// page falls back to the season number it already has.
+    pub season_name: String,
+    /// The series' own poster, which is a different picture from
+    /// [`Self::poster`] when that one is a still from this episode.
+    ///
+    /// `None` when it would be the same picture twice: a library that keeps no
+    /// per-episode thumbnail lets the poster above climb to the series' own,
+    /// and drawing it again underneath would be a duplicate rather than an
+    /// addition.
+    pub series_poster: Option<Art>,
 }
 
 /// A picture to draw, and where it came from.
@@ -239,6 +254,10 @@ pub fn resolve(source: &Source, media: &Media, beside: Beside, launcher_title: &
         ns => ns as f64 / 1e9,
     };
 
+    // Resolved once, because the series poster below has to know whether it
+    // would be the very same picture.
+    let poster = path.and_then(|path| find_poster(path, &sidecar, media));
+
     Details {
         title,
         // The name is asked last, after anything that was actually written
@@ -258,10 +277,43 @@ pub fn resolve(source: &Source, media: &Media, beside: Beside, launcher_title: &
             .map(|m| m.len()),
         video: media.video.clone(),
         container: container(source),
-        poster: path.and_then(|path| find_poster(path, &sidecar, media)),
+        poster: poster.clone(),
         backdrop: path
             .filter(|_| beside.backdrop)
             .and_then(|path| find_backdrop(path, &sidecar)),
+        series_title: sidecar.show.clone(),
+        // Nothing on disk says this: a Kodi episode NFO carries the numbers
+        // and not a name for the season, so the page falls back to "Season N"
+        // from the numbers it already has. A library that does say - Jellyfin
+        // does - fills this in over the top.
+        season_name: String::new(),
+        // The season's poster where the library keeps one, and the series'
+        // otherwise - a season poster says which run of the programme this is,
+        // which is more than the series' does.
+        //
+        // Whichever is taken must not be the picture already in the slot
+        // above. An episode with no thumbnail of its own lets that slot fall
+        // to the season's poster, and drawing it again underneath would be the
+        // same file twice; the series' is then the one worth showing.
+        series_poster: path.filter(|_| sidecar.episode.is_some()).and_then(|path| {
+            let folder = path.parent()?;
+            let season = sidecar.episode.map(|(season, _)| season);
+            [
+                // Inside the season folder, which is where Jellyfin and Emby
+                // put it. Qualified because `beside` here is the settings this
+                // was called with, which shadows the function of that name.
+                self::beside(folder, shared_poster_names()),
+                // Beside the season folder rather than in it, named for the
+                // season - which is how Kodi writes them, and what a library
+                // scraped by Kodi actually has on disk.
+                season.and_then(|season| season_poster(folder, season)),
+                // Failing both, the series' own.
+                climbed(folder, shared_poster_names),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|art| Some(art) != poster.as_ref())
+        }),
     }
 }
 
@@ -468,6 +520,29 @@ fn find_poster(video: &Path, sidecar: &crate::nfo::Sidecar, media: &Media) -> Op
         // the only one that needs no file at all. Real files do carry it -
         // the Matroska rips here hold a 395x500 JPEG apiece.
         .or_else(|| media.tags.image.clone().map(Art::Embedded))
+}
+
+/// A season's poster where Kodi puts it: in the *series* folder, named for the
+/// season rather than sitting inside it.
+///
+/// `season02-poster.jpg` beside a `Season 02` folder, which is the layout a
+/// Kodi-scraped library has on disk. Both the padded and unpadded spellings are
+/// tried, since scrapers have written each, and `season-specials-poster` is
+/// what season zero is called.
+///
+/// Only from a folder that is demonstrably a season, for the reason [`climbed`]
+/// gives at length: a folder above a video is not a series root just because it
+/// is above it.
+fn season_poster(folder: &Path, season: u32) -> Option<Art> {
+    if !is_season_folder(folder) {
+        return None;
+    }
+    let root = folder.parent()?;
+    let names = match season {
+        0 => vec!["season-specials-poster".to_string()],
+        n => vec![format!("season{n:02}-poster"), format!("season{n}-poster")],
+    };
+    beside(root, names)
 }
 
 /// The backdrop, by the same rules.
@@ -847,5 +922,157 @@ mod tests {
         assert!(stated("").is_none());
         // A path from the machine that did the scraping, absent here.
         assert!(stated("/mnt/hoth/Videos/Movies/Nothing/folder.jpg").is_none());
+    }
+}
+
+#[cfg(test)]
+mod series_block {
+    use super::*;
+
+    /// The layout Kodi, Jellyfin and Emby share: the episode's own thumbnail
+    /// beside it, the show's poster at the series root, and a `tvshow.nfo`
+    /// saying what that root is.
+    /// A probe result carrying no cover art of its own, which is what the
+    /// last fallback in `find_poster` would otherwise supply.
+    fn bare_media() -> Media {
+        Media {
+            audio: Vec::new(),
+            subtitles: Vec::new(),
+            duration_ns: 0,
+            video: VideoDetails::default(),
+            tags: crate::probe::Tags::default(),
+        }
+    }
+
+    fn library(root: &Path) {
+        let season = root.join("Breaking Bad").join("Season 01");
+        std::fs::create_dir_all(&season).unwrap();
+        std::fs::write(root.join("Breaking Bad").join("tvshow.nfo"), "<tvshow/>").unwrap();
+        std::fs::write(root.join("Breaking Bad").join("poster.jpg"), b"series").unwrap();
+        std::fs::write(season.join("S01E01.mkv"), b"video").unwrap();
+    }
+
+    /// An episode with a thumbnail of its own shows both pictures: its own in
+    /// the slot, the series' underneath.
+    #[test]
+    fn an_episode_with_its_own_thumbnail_gets_both() {
+        let root = std::env::temp_dir().join("tp-series-both");
+        let _ = std::fs::remove_dir_all(&root);
+        library(&root);
+        let episode = root
+            .join("Breaking Bad")
+            .join("Season 01")
+            .join("S01E01.mkv");
+        std::fs::write(episode.with_file_name("S01E01-thumb.jpg"), b"still").unwrap();
+
+        let own = find_poster(&episode, &crate::nfo::Sidecar::default(), &bare_media());
+        let series = climbed(episode.parent().unwrap(), shared_poster_names);
+        assert!(matches!(own, Some(Art::Path(ref p)) if p.ends_with("S01E01-thumb.jpg")));
+        assert!(matches!(series, Some(Art::Path(ref p)) if p.ends_with("poster.jpg")));
+        // Two different pictures, which is the whole reason to draw a second.
+        assert!(own != series);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// With no thumbnail of its own, the slot climbs to the series poster -
+    /// and the block underneath must then not repeat it.
+    #[test]
+    fn the_same_picture_is_not_drawn_twice() {
+        let root = std::env::temp_dir().join("tp-series-once");
+        let _ = std::fs::remove_dir_all(&root);
+        library(&root);
+        let episode = root
+            .join("Breaking Bad")
+            .join("Season 01")
+            .join("S01E01.mkv");
+
+        let own = find_poster(&episode, &crate::nfo::Sidecar::default(), &bare_media());
+        let series = climbed(episode.parent().unwrap(), shared_poster_names);
+        assert!(own == series, "the slot climbed to the series poster");
+        // Which is what `resolve` filters on, so the block is absent.
+        assert!(series.filter(|s| Some(s) != own.as_ref()).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A film is not a series: nothing climbs, and nothing is named.
+    #[test]
+    fn a_film_has_no_series_block() {
+        let root = std::env::temp_dir().join("tp-series-film");
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join("Toy Story (1995)");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("poster.jpg"), b"poster").unwrap();
+        std::fs::write(folder.join("Toy Story.mkv"), b"video").unwrap();
+
+        // No season folder and no tvshow.nfo above, so the climb refuses -
+        // which is what stops every film in a library sharing one picture.
+        assert!(climbed(&folder, shared_poster_names).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod season_posters {
+    use super::*;
+
+    /// Kodi's layout: the season's poster in the *series* folder, named for
+    /// the season, beside the `Season NN` folder rather than inside it.
+    #[test]
+    fn a_kodi_season_poster_is_found_beside_the_folder() {
+        let root = std::env::temp_dir().join("tp-kodi-season");
+        let _ = std::fs::remove_dir_all(&root);
+        let series = root.join("Fallout");
+        let season = series.join("Season 02");
+        std::fs::create_dir_all(&season).unwrap();
+        std::fs::write(series.join("season02-poster.jpg"), b"season two").unwrap();
+
+        let found = season_poster(&season, 2);
+        assert!(matches!(found, Some(Art::Path(ref p)) if p.ends_with("season02-poster.jpg")));
+        // The season it is not, of course, is not found.
+        assert!(season_poster(&season, 3).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Scrapers have written the number both ways, and season zero is called
+    /// something else entirely.
+    #[test]
+    fn the_other_spellings_are_read_too() {
+        let root = std::env::temp_dir().join("tp-kodi-spellings");
+        let _ = std::fs::remove_dir_all(&root);
+        let season = root.join("Show").join("Season 5");
+        let specials = root.join("Show").join("Season 00");
+        std::fs::create_dir_all(&season).unwrap();
+        std::fs::create_dir_all(&specials).unwrap();
+        std::fs::write(root.join("Show").join("season5-poster.jpg"), b"five").unwrap();
+        std::fs::write(
+            root.join("Show").join("season-specials-poster.jpg"),
+            b"specials",
+        )
+        .unwrap();
+
+        assert!(season_poster(&season, 5).is_some(), "unpadded");
+        assert!(season_poster(&specials, 0).is_some(), "specials");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A folder that is not a season is not climbed out of, for the same
+    /// reason `climbed` refuses: every film in a flat library would otherwise
+    /// pick up whatever happened to sit above it.
+    #[test]
+    fn it_will_not_climb_out_of_an_ordinary_folder() {
+        let root = std::env::temp_dir().join("tp-kodi-notseason");
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join("Movies").join("Toy Story (1995)");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(root.join("Movies").join("season01-poster.jpg"), b"nope").unwrap();
+
+        assert!(season_poster(&folder, 1).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

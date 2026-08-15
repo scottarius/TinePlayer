@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
@@ -8,7 +7,7 @@ use gstreamer as gst;
 use crate::config::Config;
 use crate::devices::find_audio_output_device;
 use crate::source::Source;
-use crate::subtitles::SubtitleChoice;
+use crate::subtitles::SubtitleSource;
 
 /// Pango leaves the family unspecified by default, which resolves to a serif
 /// face. Bold with the renderer's black outline is what stays legible against
@@ -29,18 +28,204 @@ enum Target {
     /// A subtitle stream inside the file. Only one is ever selected, so
     /// unlike audio there is no index to route by.
     Subtitle,
-    /// Position among the file's audio streams, 0-based, the same counting
-    /// [`crate::probe::AudioTrack::index`] uses. `--list-tracks` prints these
-    /// one higher, since it offers 0 for "None".
-    Audio(u32),
+    /// An audio stream inside the file. Carries no track number, unlike every
+    /// earlier version of this: which output it feeds is not fixed and is the
+    /// routing's business, so recording one here would be a second answer to
+    /// the same question, free to disagree with the first.
+    Audio,
 }
 
 /// The head element of each branch, i.e. the thing a decoded pad links into.
 struct Targets {
     video: gst::Element,
-    audio: HashMap<u32, gst::Element>,
+    /// Where audio goes, which unlike the other two changes while playing.
+    audio: Arc<Mutex<AudioRouting>>,
     /// The overlay subtitles are drawn by, when there are any.
     subtitle: Option<gst::Element>,
+}
+
+/// What an output is playing, in the only terms that survive a switch.
+///
+/// A track is named by its position among the file's audio streams rather than
+/// by its GStreamer stream id, because the id is not known until the file has
+/// been opened while the choice has to be expressible before that. A file is
+/// named by its URI, which never had an id in the video's collection at all.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Playing {
+    /// A stream inside the video, by the index `--list-tracks` prints.
+    Track(u32),
+    /// A separate audio file, by URI.
+    File(String),
+}
+
+/// Which decoded stream feeds which output, and the plumbing between them.
+///
+/// The problem this solves is that the pairing is not fixed. Two outputs on
+/// one track share a single decoded stream and must be fed from a `tee`; move
+/// one of them to a track of its own and that `tee` has to give up a branch;
+/// move it back and two branches have to become one again. Building each of
+/// those separately would be three ways to get it wrong.
+///
+/// So nothing here is rebuilt. Each output's chain is made once and lives for
+/// the whole film. Each decoded stream gets a `tee` of its own the moment its
+/// pad appears. Changing a soundtrack is then only ever pointing an output's
+/// chain at a different `tee`, and [`AudioRouting::reconcile`] is the single
+/// operation that does it - splitting, merging and plain switching are all the
+/// same act of pointing something somewhere.
+///
+/// **Hubs are keyed by pad and not by track**, which is the one thing here
+/// that is not obvious and cost a rewrite. decodebin3 reuses the slot it
+/// already has when a selection changes, so the pad that was carrying track 1
+/// simply starts carrying track 2 with no pad event at all - measured
+/// 2026-08-14. A hub keyed by track would go on claiming to hold a track that
+/// had moved elsewhere. What each pad is carrying is therefore followed
+/// through the stream-start event, which does fire.
+///
+/// Locked rather than borrowed because it is reached from two directions:
+/// `pad-added` and the stream-start probe arrive on streaming threads, while a
+/// viewer choosing a soundtrack arrives on the main one.
+#[derive(Default)]
+pub struct AudioRouting {
+    /// The first element of each output's chain, by role. Built once.
+    chains: HashMap<String, gst::Element>,
+    /// The `tee` on each decoded stream, by the name of the pad feeding it.
+    hubs: HashMap<String, gst::Element>,
+    /// What each of those pads is currently carrying. Separate from `hubs`
+    /// because it changes without the hub changing.
+    carrying: HashMap<String, Playing>,
+    /// What each output is meant to be playing. The intent, recorded before
+    /// the pipeline is asked for anything, so that a stream arriving later can
+    /// be placed rather than guessed at - which is exactly what the subtitle
+    /// equivalent of this could not do.
+    wanted: HashMap<String, Playing>,
+    /// The `tee` pad each output's chain is fed by, so it can be released
+    /// again. Absent for an output connected to nothing.
+    links: HashMap<String, gst::Pad>,
+    /// The file's streams, needed to say which track a stream id is. Caught
+    /// from the bus, since an element will not hand it over on request.
+    collection: Option<gst::StreamCollection>,
+}
+
+impl AudioRouting {
+    /// Says what an output should be playing from now on. Takes effect at the
+    /// next [`Self::reconcile`].
+    pub fn want(&mut self, role: &str, playing: Option<Playing>) {
+        match playing {
+            Some(playing) => self.wanted.insert(role.into(), playing),
+            None => self.wanted.remove(role),
+        };
+    }
+
+    /// What an output is meant to be playing.
+    pub fn wanted_by(&self, role: &str) -> Option<&Playing> {
+        self.wanted.get(role)
+    }
+
+    /// The tracks inside the video that some output is waiting for, which is
+    /// what a stream selection has to ask the decoder for. External files are
+    /// not among them: they are decoded by a chain of their own that the
+    /// video's selection knows nothing about.
+    pub fn wanted_tracks(&self) -> Vec<u32> {
+        let mut tracks: Vec<u32> = self
+            .wanted
+            .values()
+            .filter_map(|playing| match playing {
+                Playing::Track(track) => Some(*track),
+                Playing::File(_) => None,
+            })
+            .collect();
+        tracks.sort_unstable();
+        tracks.dedup();
+        tracks
+    }
+
+    /// Keeps the collection, so a stream id arriving on a pad can be turned
+    /// into the track number the rest of the application speaks in.
+    pub fn set_collection(&mut self, collection: gst::StreamCollection) {
+        self.collection = Some(collection);
+    }
+
+    /// Notes what a pad is carrying now, and re-points anything affected.
+    fn now_carrying(&mut self, pad: &str, playing: Playing) {
+        if self.carrying.get(pad) == Some(&playing) {
+            return;
+        }
+        self.carrying.insert(pad.into(), playing);
+        self.reconcile();
+    }
+
+    /// The track a decoded pad is carrying, by the stream on its stream-start
+    /// event. `None` when the pad carries no stream yet, or one the collection
+    /// does not describe.
+    fn track_on(&self, pad: &gst::Pad) -> Option<Playing> {
+        let collection = self.collection.as_ref()?;
+        let id = pad.stream()?.stream_id()?;
+        ordinal(collection, &id, gst::StreamType::AUDIO).map(Playing::Track)
+    }
+
+    /// Points every output's chain at the `tee` carrying what it is meant to
+    /// be playing, and disconnects any output whose stream has not arrived, or
+    /// has gone away.
+    ///
+    /// Safe to call whenever anything might have changed, and called from
+    /// exactly that: a pad appearing, a pad going away, a pad changing what it
+    /// carries, and a viewer choosing. Doing nothing when nothing has moved is
+    /// what lets it be called freely, and what keeps those callers independent
+    /// of each other rather than a sequence that has to be got right.
+    fn reconcile(&mut self) {
+        let roles: Vec<String> = self.chains.keys().cloned().collect();
+        for role in roles {
+            let hub = self.wanted.get(&role).and_then(|wanted| {
+                self.carrying
+                    .iter()
+                    .find(|(_, playing)| *playing == wanted)
+                    .and_then(|(pad, _)| self.hubs.get(pad))
+                    .cloned()
+            });
+            self.point(&role, hub.as_ref());
+        }
+    }
+
+    /// Feeds one output's chain from `hub`, or from nothing when it is `None`.
+    ///
+    /// The `tee` pad is released rather than merely unlinked. A `tee` goes on
+    /// pushing to every pad it has been asked for, so one left behind would
+    /// have the element block waiting for a branch nobody is draining.
+    fn point(&mut self, role: &str, hub: Option<&gst::Element>) {
+        let Some(chain) = self.chains.get(role) else {
+            return;
+        };
+        let Some(sink) = chain.static_pad("sink") else {
+            return;
+        };
+
+        // Already fed by the right one, which is the ordinary case every time
+        // this is called for a reason that has nothing to do with this output.
+        if let (Some(current), Some(hub)) = (self.links.get(role), hub)
+            && current.parent().as_ref() == Some(hub.upcast_ref())
+        {
+            return;
+        }
+
+        if let Some(pad) = self.links.remove(role) {
+            let _ = pad.unlink(&sink);
+            if let Some(tee) = pad.parent_element() {
+                tee.release_request_pad(&pad);
+            }
+        }
+
+        let Some(hub) = hub else { return };
+        let Some(src) = hub.request_pad_simple("src_%u") else {
+            eprintln!("Failed to get a tee pad for the {role} output");
+            return;
+        };
+        if let Err(e) = src.link(&sink) {
+            eprintln!("Failed to feed the {role} output: {e}");
+            hub.release_request_pad(&src);
+            return;
+        }
+        self.links.insert(role.into(), src);
+    }
 }
 
 /// What each external audio file's decoder is called in the pipeline, with its
@@ -53,6 +238,19 @@ struct Targets {
 /// Sending one to `urisourcebin` instead reaches `filesrc`, which cannot
 /// answer it, and the seek is simply refused.
 pub const EXTERNAL_AUDIO_DECODER: &str = "extaudio_dec_";
+
+/// The video's own decoder, named so a stream selection can be sent to it
+/// rather than to the pipeline. See where it is set for why that matters.
+pub const VIDEO_DECODER: &str = "video_dec";
+
+/// The subtitle chain's own source, named so a seek can be delivered to it by
+/// hand. There is only ever one, so it needs no number after it.
+pub const EXTERNAL_SUBTITLE_SOURCE: &str = "extsub_src";
+
+/// The parser on the same chain. Named for the same reason: switching to a
+/// different subtitle takes the whole branch out, and both halves have to be
+/// found to be removed.
+pub const EXTERNAL_SUBTITLE_PARSER: &str = "extsub_parse";
 
 /// Where one output's audio comes from.
 ///
@@ -107,9 +305,14 @@ pub fn build_pipeline(
     source: &Source,
     primary_audio: Option<&AudioSource>,
     secondary_audio: Option<&AudioSource>,
-    subtitle: Option<&SubtitleChoice>,
+    subtitle: Option<&SubtitleSource>,
+    // Whether the video offers any subtitle at all, chosen or not. Distinct
+    // from `subtitle` being set, and the distinction is the whole point: the
+    // overlay has to exist before anybody can switch subtitles on, and a film
+    // started with them off would otherwise have nothing to switch into.
+    offers_subtitles: bool,
     config: &Config,
-) -> Result<gst::Pipeline, String> {
+) -> Result<(gst::Pipeline, Arc<Mutex<AudioRouting>>), String> {
     let pipeline = gst::Pipeline::new();
 
     // urisourcebin rather than filesrc so that anything GStreamer can open
@@ -123,6 +326,15 @@ pub fn build_pipeline(
     let src = make("urisourcebin")?;
     src.set_property("uri", source.uri());
     let decode = make("decodebin3")?;
+    // Named so a stream selection can be delivered straight here.
+    //
+    // Sending one to the pipeline instead makes it every sink's business, and
+    // a sink that cannot pass it upstream drags the whole answer down: an
+    // output sitting on None has an unlinked chain, and with it in the
+    // pipeline every `SelectStreams` came back refused - which reads as the
+    // decoder rejecting the choice rather than as an idle branch that was
+    // never asked. This is the one element that decides the question anyway.
+    decode.set_property("name", VIDEO_DECODER);
     pipeline
         .add_many([&src, &decode])
         .map_err(|e| e.to_string())?;
@@ -152,82 +364,108 @@ pub fn build_pipeline(
             .unwrap_or(DEFAULT_SUBTITLE_FONT),
         config.subtitle_size.unwrap_or(DEFAULT_SUBTITLE_SIZE)
     );
-    let (video_head, overlay) = build_video_branch(&pipeline, subtitle.is_some(), &font)?;
+    let (video_head, overlay) = build_video_branch(&pipeline, offers_subtitles, &font)?;
 
-    // A subtitle file beside the video is its own small source chain, fed
-    // into the same overlay an embedded stream would use.
-    // Stored as a name, so the folder comes from the video itself. A source
-    // with no folder - anything opened by URL - has no subtitle files beside
-    // it to have chosen in the first place.
-    if let Some(overlay) = overlay.as_ref() {
-        let file = match subtitle {
-            // A name, which means the folder the video is in. A source with no
-            // folder - anything opened by URL - has no subtitle files beside
-            // it to have chosen in the first place.
-            Some(SubtitleChoice::External(name)) => Some(
-                source
-                    .local()
-                    .and_then(|video| video.parent())
-                    .map(|folder| folder.join(name))
-                    .ok_or_else(|| format!("Can't find {name}: it sits beside a local video"))?,
-            ),
-            // A path, which means itself. Chosen by hand from somewhere else
-            // on disk, or named on the command line, and so not tied to where
-            // the video happens to live.
-            Some(SubtitleChoice::File(path)) => Some(path.clone()),
-            _ => None,
-        };
-        if let Some(file) = file {
-            attach_external_subtitle(&pipeline, overlay, &file)?;
-        }
+    // A subtitle that is not inside the video is its own small source chain,
+    // fed into the same overlay an embedded stream would use.
+    if let Some(overlay) = overlay.as_ref()
+        && let Some(SubtitleSource::Uri(uri)) = subtitle
+    {
+        attach_external_subtitle(&pipeline, overlay, uri)?;
     }
 
-    // Grouped by where the audio comes from, so that one decoded stream can
-    // feed two outputs instead of being decoded twice. Tracks are keyed by
-    // index and files by URI, which is what makes "both outputs on the same
-    // external file" cost one decode as well.
-    let mut roles_by_track: HashMap<u32, Vec<&str>> = HashMap::new();
-    let mut roles_by_file: HashMap<String, Vec<&str>> = HashMap::new();
-    for (role, audio) in [("primary", primary_audio), ("secondary", secondary_audio)] {
-        match audio {
-            Some(AudioSource::Track(track)) => roles_by_track.entry(*track).or_default().push(role),
-            Some(AudioSource::File(file)) => {
-                roles_by_file.entry(file.uri()).or_default().push(role)
+    // Nothing selected, so the overlay is there to be switched on rather than
+    // to draw anything yet. `silent` means not drawn, despite the name.
+    if let Some(overlay) = overlay.as_ref()
+        && subtitle.is_none()
+    {
+        overlay.set_property("silent", true);
+    }
+
+    // One chain per output, built once and kept for the whole film. Which
+    // decoded stream feeds each of them is the routing's business and changes
+    // as the viewer changes it; the chain itself, and every setting hanging
+    // off it, does not.
+    let routing = Arc::new(Mutex::new(AudioRouting::default()));
+    {
+        let mut routing = routing.lock().unwrap();
+        for (role, audio) in [("primary", primary_audio), ("secondary", secondary_audio)] {
+            // A chain for every output the configuration names a device for,
+            // whether or not it starts with anything to play. An output set to
+            // None still has a device and still has a menu to be switched on
+            // from, and building its chain up front is what lets that happen
+            // without rebuilding anything mid-film.
+            let named = match role {
+                "primary" => config.primary_sink.is_some(),
+                _ => config.secondary_sink.is_some(),
+            };
+            if !named {
+                continue;
             }
-            None => {}
+            routing.chains.insert(
+                role.into(),
+                build_output_chain(&pipeline, role, config, audio.is_none())?,
+            );
+            let Some(audio) = audio else { continue };
+            routing.want(
+                role,
+                Some(match audio {
+                    AudioSource::Track(track) => Playing::Track(*track),
+                    AudioSource::File(file) => Playing::File(file.uri()),
+                }),
+            );
         }
-    }
-
-    let mut audio_heads = HashMap::new();
-    for (track, roles) in &roles_by_track {
-        audio_heads.insert(*track, build_audio_branch(&pipeline, roles, config)?);
     }
 
     // A separate audio file is its own source chain feeding the same kind of
-    // branch an embedded track gets, inside the one pipeline - so both run off
+    // hub an embedded track gets, inside the one pipeline - so both run off
     // the same clock and stay in step by construction rather than by being
-    // nudged back into line.
-    for (index, (uri, roles)) in roles_by_file.iter().enumerate() {
-        let head = build_audio_branch(&pipeline, roles, config)?;
-        attach_external_audio(&pipeline, &head, uri, index)?;
+    // nudged back into line. Grouped by URI, so two outputs on one file cost
+    // one decode exactly as two outputs on one track do.
+    let mut files: Vec<String> = [primary_audio, secondary_audio]
+        .into_iter()
+        .flatten()
+        .filter_map(|audio| match audio {
+            AudioSource::File(file) => Some(file.uri()),
+            AudioSource::Track(_) => None,
+        })
+        .collect();
+    files.sort();
+    files.dedup();
+    for (index, uri) in files.iter().enumerate() {
+        attach_external_audio(&pipeline, &routing, uri, index)?;
     }
 
-    let wanted: Vec<u32> = roles_by_track.keys().copied().collect();
+    let wanted: Vec<u32> = [primary_audio, secondary_audio]
+        .into_iter()
+        .flatten()
+        .filter_map(|audio| match audio {
+            AudioSource::Track(track) => Some(*track),
+            AudioSource::File(_) => None,
+        })
+        .collect();
     let wanted_subtitle = match subtitle {
-        Some(SubtitleChoice::Embedded(index)) => Some(*index),
+        Some(SubtitleSource::Embedded(index)) => Some(*index),
         _ => None,
     };
     let targets = Arc::new(Targets {
         video: video_head,
-        audio: audio_heads,
+        audio: routing.clone(),
         subtitle: overlay,
     });
     // Written by select-stream on a streaming thread and read by pad-added on
     // another, hence Mutex rather than RefCell.
     let selected: Arc<Mutex<HashMap<String, Target>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    connect_stream_selection(&decode, wanted, wanted_subtitle, selected.clone());
-    connect_pad_added(&decode, targets, selected);
+    connect_stream_selection(
+        &decode,
+        wanted,
+        wanted_subtitle,
+        selected.clone(),
+        routing.clone(),
+    );
+    connect_pad_added(&pipeline, &decode, targets, selected);
+    connect_pad_removed(&pipeline, &decode, routing.clone());
 
     // With two audio sinks, GStreamer's default clock election would pick one
     // of them (whichever it finds last, sink to source) as the master clock
@@ -247,7 +485,7 @@ pub fn build_pipeline(
         pipeline.use_clock(Some(&gst::SystemClock::obtain()));
     }
 
-    Ok(pipeline)
+    Ok((pipeline, routing))
 }
 
 fn make(factory: &str) -> Result<gst::Element, String> {
@@ -318,7 +556,7 @@ fn build_video_branch(
 /// appear as the file is opened, the decoder's once it has been parsed.
 fn attach_external_audio(
     pipeline: &gst::Pipeline,
-    head: &gst::Element,
+    routing: &Arc<Mutex<AudioRouting>>,
     uri: &str,
     index: usize,
 ) -> Result<(), String> {
@@ -350,7 +588,9 @@ fn attach_external_audio(
     }
 
     {
-        let head = head.clone();
+        let routing = routing.clone();
+        let pipeline = pipeline.clone();
+        let uri = uri.to_string();
         decode.connect_pad_added(move |_, pad| {
             // `pad-added` fires for request sink pads as well, so the direction
             // has to be checked before anything is linked to them.
@@ -375,34 +615,62 @@ fn attach_external_audio(
             if media.starts_with("video/") || media.starts_with("image/") {
                 return;
             }
-            let Some(sink) = head.static_pad("sink") else {
+            // Only the first audio pad of the file. A hub already standing for
+            // this URI means the file offered a second stream, which nothing
+            // can currently choose between - see the plan's note about picking
+            // a track *within* an external file.
+            if routing
+                .lock()
+                .unwrap()
+                .carrying
+                .values()
+                .any(|playing| *playing == Playing::File(uri.clone()))
+            {
+                return;
+            }
+            add_audio_hub(&pipeline, &routing, pad, Playing::File(uri.clone()));
+        });
+    }
+    Ok(())
+}
+
+pub fn attach_external_subtitle(
+    pipeline: &gst::Pipeline,
+    overlay: &gst::Element,
+    uri: &str,
+) -> Result<(), String> {
+    // `urisourcebin` rather than `filesrc`, so a subtitle held by a media
+    // server opens by exactly the same route as one on disk. It streams the
+    // file rather than saving it anywhere: a subtitle is tens of kilobytes,
+    // so there is nothing a cache would buy that a second request would not.
+    let src = make("urisourcebin")?;
+    src.set_property("uri", uri);
+    // Named so a seek can be delivered here by hand, for the same reason the
+    // external audio source is - this chain has a source of its own and does
+    // not reliably hear a seek sent through the video's. See `run_seek`.
+    src.set_property("name", EXTERNAL_SUBTITLE_SOURCE);
+    let parse = make("subparse")?;
+    parse.set_property("name", EXTERNAL_SUBTITLE_PARSER);
+
+    pipeline
+        .add_many([&src, &parse])
+        .map_err(|e| e.to_string())?;
+    // `urisourcebin` has no pads until it has opened what it was given, so the
+    // link waits for one to arrive rather than being made now.
+    {
+        let parse = parse.clone();
+        src.connect_pad_added(move |_, pad| {
+            let Some(sink) = parse.static_pad("sink") else {
                 return;
             };
             if sink.is_linked() {
                 return;
             }
             if let Err(e) = pad.link(&sink) {
-                eprintln!("Failed to link the audio file to its output: {e}");
+                eprintln!("Failed to link the subtitle source: {e}");
             }
         });
     }
-    Ok(())
-}
-
-fn attach_external_subtitle(
-    pipeline: &gst::Pipeline,
-    overlay: &gst::Element,
-    file: &Path,
-) -> Result<(), String> {
-    let src = make("filesrc")?;
-    src.set_property("location", file.to_string_lossy().to_string());
-    let parse = make("subparse")?;
-
-    pipeline
-        .add_many([&src, &parse])
-        .map_err(|e| e.to_string())?;
-    src.link(&parse)
-        .map_err(|_| "Failed to link subtitle file".to_string())?;
 
     let sink_pad = overlay
         .static_pad("subtitle_sink")
@@ -415,52 +683,173 @@ fn attach_external_subtitle(
     Ok(())
 }
 
-/// Builds the output chain(s) fed by one audio stream and returns the element
-/// its decoded pad should link into.
+/// Builds one output's chain, from the queue that is fed to the device that
+/// plays it, and returns its head.
 ///
-/// With two roles on one track the head is a `tee`, and each branch off it
-/// needs its own `queue`: a tee without queues on its branches deadlocks as
-/// soon as the two sinks consume at even slightly different rates, which two
+/// Built once per output and never rebuilt. What changes while a film plays is
+/// only which `tee` this queue is fed from - see [`AudioRouting`] - so
+/// everything carrying a setting for the output, the volume element above all,
+/// survives every soundtrack change without being re-created or re-read.
+///
+/// The queue is not optional. A `tee` without one on each branch deadlocks the
+/// moment the two sinks consume at even slightly different rates, which two
 /// independent audio devices always do.
-fn build_audio_branch(
+fn build_output_chain(
     pipeline: &gst::Pipeline,
-    roles: &[&str],
+    role: &str,
     config: &Config,
+    // Whether this output starts with nothing to play, which decides whether
+    // its sink is allowed to hold up the pipeline waiting to preroll.
+    idle: bool,
 ) -> Result<gst::Element, String> {
-    let head = if roles.len() > 1 {
-        make("tee")?
-    } else {
-        make("queue")?
-    };
-    pipeline.add(&head).map_err(|e| e.to_string())?;
+    let queue = make("queue")?;
+    let convert = make("audioconvert")?;
+    let resample = make("audioresample")?;
+    // Level and mute for this output alone, which is the point: two people
+    // on two devices need two settings. In the pipeline rather than on the
+    // sink, so it only ever affects this application - turning a film down
+    // must not turn the whole machine down.
+    let volume = gst::ElementFactory::make("volume")
+        .name(format!("{role}_volume"))
+        .build()
+        .map_err(|_| "Missing GStreamer element \"volume\". Check the install.".to_string())?;
+    volume.set_property("volume", config.volume(role));
+    volume.set_property("mute", config.muted(role));
+    let sink = build_device_sink(role, config)?;
 
-    for role in roles {
-        let queue = make("queue")?;
-        let convert = make("audioconvert")?;
-        let resample = make("audioresample")?;
-        // Level and mute for this output alone, which is the point: two people
-        // on two devices need two settings. In the pipeline rather than on the
-        // sink, so it only ever affects this application - turning a film down
-        // must not turn the whole machine down.
-        let volume = gst::ElementFactory::make("volume")
-            .name(format!("{role}_volume"))
-            .build()
-            .map_err(|_| "Missing GStreamer element \"volume\". Check the install.".to_string())?;
-        volume.set_property("volume", config.volume(role));
-        volume.set_property("mute", config.muted(role));
-        let sink = build_device_sink(role, config)?;
-
-        pipeline
-            .add_many([&queue, &convert, &resample, &volume, &sink])
-            .map_err(|e| e.to_string())?;
-        gst::Element::link_many([&queue, &convert, &resample, &volume, &sink])
-            .map_err(|_| format!("Failed to link {role} audio branch"))?;
-        // Requests a src pad from the tee, or uses the queue's static one.
-        head.link(&queue)
-            .map_err(|_| format!("Failed to link {role} output"))?;
+    // An output that starts on None has a chain with nothing feeding it. A
+    // sink gates the pipeline's state change until it has prerolled, and one
+    // that is never sent a buffer never will - so the whole pipeline would sit
+    // ASYNC and the film would not start at all. Letting this one sink out of
+    // that is what makes an empty output cost nothing until it is switched on.
+    //
+    // The same property Linux sets on every sink, for a different reason - see
+    // `build_device_sink` - and with the same consequence, which is that the
+    // sink still honors `sync` and so stays in step once it does get audio.
+    if idle && sink.find_property("async").is_some() {
+        sink.set_property("async", false);
     }
 
-    Ok(head)
+    pipeline
+        .add_many([&queue, &convert, &resample, &volume, &sink])
+        .map_err(|e| e.to_string())?;
+    gst::Element::link_many([&queue, &convert, &resample, &volume, &sink])
+        .map_err(|_| format!("Failed to link {role} audio branch"))?;
+
+    Ok(queue)
+}
+
+/// Puts a `tee` on a decoded audio stream and hands it to the routing, which
+/// connects whichever outputs are waiting for that stream.
+///
+/// Always a `tee`, even for a stream only one output wants. It costs nothing
+/// on a single branch, and it means a second output arriving later is a pad
+/// request rather than a rebuild - which is the whole reason changing a
+/// soundtrack does not interrupt the film.
+fn add_audio_hub(
+    pipeline: &gst::Pipeline,
+    routing: &Arc<Mutex<AudioRouting>>,
+    pad: &gst::Pad,
+    playing: Playing,
+) {
+    let name = pad.name().to_string();
+    let Ok(tee) = gst::ElementFactory::make("tee").build() else {
+        eprintln!("Missing GStreamer element \"tee\". Check the install.");
+        return;
+    };
+    // A hub often exists for a moment with nothing drawing from it - between a
+    // stream arriving and the output that asked for it being pointed at it -
+    // and a tee with no branches is an error rather than a pause by default.
+    tee.set_property("allow-not-linked", true);
+    if let Err(e) = pipeline.add(&tee) {
+        eprintln!("Failed to add the tee for {name}: {e}");
+        return;
+    }
+    // Added to a pipeline that may already be running, so it starts itself
+    // rather than waiting for a state change that has already happened.
+    if tee.sync_state_with_parent().is_err() {
+        eprintln!("Failed to start the tee for {name}");
+        return;
+    }
+    let Some(sink) = tee.static_pad("sink") else {
+        return;
+    };
+    if let Err(e) = pad.link(&sink) {
+        eprintln!("Failed to connect decoded audio on {name}: {e}");
+        return;
+    }
+
+    {
+        let mut routing = routing.lock().unwrap();
+        routing.hubs.insert(name.clone(), tee);
+        routing.carrying.insert(name, playing);
+        routing.reconcile();
+    }
+    follow_stream_changes(routing, pad);
+}
+
+/// Follows what a decoded pad is carrying for as long as it exists.
+///
+/// The reason this is needed at all is that decodebin3 reuses a slot rather
+/// than making a new one: asked for a different track, it pushes a fresh
+/// stream-start down the pad it already has and no pad event fires anywhere.
+/// So the pad's identity is stable and its contents are not, and this is what
+/// notices the difference.
+///
+/// External audio never comes through here. Its chain decodes one file and
+/// carries the same thing for the life of the pipeline.
+fn follow_stream_changes(routing: &Arc<Mutex<AudioRouting>>, pad: &gst::Pad) {
+    let routing = routing.clone();
+    pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |pad, info| {
+        let Some(event) = info.event() else {
+            return gst::PadProbeReturn::Ok;
+        };
+        if event.type_() != gst::EventType::StreamStart {
+            return gst::PadProbeReturn::Ok;
+        }
+        let mut routing = routing.lock().unwrap();
+        if let Some(playing) = routing.track_on(pad) {
+            let name = pad.name().to_string();
+            routing.now_carrying(&name, playing);
+        }
+        gst::PadProbeReturn::Ok
+    });
+}
+
+/// Takes away the hub on a pad that has gone, once whatever was drawing from
+/// it has been let go.
+fn remove_audio_hub(pipeline: &gst::Pipeline, routing: &Arc<Mutex<AudioRouting>>, pad: &gst::Pad) {
+    let name = pad.name().to_string();
+    let tee = {
+        let mut routing = routing.lock().unwrap();
+        routing.carrying.remove(&name);
+        let Some(tee) = routing.hubs.remove(&name) else {
+            return;
+        };
+        // Before the element goes, so no output is left holding a pad on it.
+        routing.reconcile();
+        tee
+    };
+    let _ = tee.set_state(gst::State::Null);
+    let _ = pipeline.remove(&tee);
+}
+
+/// Notices a decoded audio pad going away, which is what happens when two
+/// outputs that were on different tracks are put onto the same one: the
+/// selection drops from two audio streams to one and decodebin3 retires the
+/// slot it no longer needs.
+fn connect_pad_removed(
+    pipeline: &gst::Pipeline,
+    decode: &gst::Element,
+    routing: Arc<Mutex<AudioRouting>>,
+) {
+    let pipeline = pipeline.clone();
+    decode.connect_pad_removed(move |_, pad| {
+        if pad.direction() != gst::PadDirection::Src {
+            return;
+        }
+        remove_audio_hub(&pipeline, &routing, pad);
+    });
 }
 
 /// Holds a sink back by `ms` milliseconds.
@@ -531,6 +920,7 @@ fn connect_stream_selection(
     wanted: Vec<u32>,
     wanted_subtitle: Option<u32>,
     selected: Arc<Mutex<HashMap<String, Target>>>,
+    routing: Arc<Mutex<AudioRouting>>,
 ) {
     decode.connect("select-stream", false, move |values| {
         let collection = values[1].get::<gst::StreamCollection>().ok();
@@ -543,6 +933,15 @@ fn connect_stream_selection(
         let Some(id) = stream.stream_id() else {
             return Some((-1i32).to_value());
         };
+
+        // Taken here rather than off the bus, which is where everything else
+        // gets it. The bus is drained by the main loop, and the main loop is
+        // not running during the preroll that opens the file - so a pad can
+        // and does arrive before the bus has delivered anything, and the
+        // routing would have no way to say which track it was looking at.
+        // This signal is answered on the spot, once per stream, before any
+        // pad exists.
+        routing.lock().unwrap().set_collection(collection.clone());
 
         let kind = stream.stream_type();
         let decision = if kind.contains(gst::StreamType::VIDEO) {
@@ -562,7 +961,7 @@ fn connect_stream_selection(
                     selected
                         .lock()
                         .unwrap()
-                        .insert(id.to_string(), Target::Audio(track));
+                        .insert(id.to_string(), Target::Audio);
                     1
                 }
                 _ => 0,
@@ -587,10 +986,12 @@ fn connect_stream_selection(
 }
 
 fn connect_pad_added(
+    pipeline: &gst::Pipeline,
     decode: &gst::Element,
     targets: Arc<Targets>,
     selected: Arc<Mutex<HashMap<String, Target>>>,
 ) {
+    let pipeline = pipeline.clone();
     decode.connect_pad_added(move |_, pad| {
         // `pad-added` fires for every pad an element gains, in either
         // direction - including the sink pad requested to link the source in.
@@ -608,16 +1009,57 @@ fn connect_pad_added(
             return;
         };
         let target = selected.lock().unwrap().get(id.as_str()).copied();
-        let Some(target) = target else {
-            // A stream decodebin3 exposed without being asked to. Leaving it
-            // unlinked is correct; it just plays no part.
-            return;
+        let target = match target {
+            Some(target) => target,
+            // A subtitle switched on part way through a film that began with
+            // none.
+            //
+            // This map is filled by `select-stream` while the file is being
+            // opened, and an explicit `select-streams` event does not go back
+            // through that signal - decodebin3 takes the application's word
+            // for it - so a stream chosen later was never recorded here.
+            //
+            // It only shows up in this one case. Switching *between* embedded
+            // subtitles reuses decodebin3's existing text slot and its pad,
+            // and so never reaches `pad-added` at all; with nothing selected
+            // at the start there is no slot to reuse, and the one it makes
+            // arrives here naming a stream nothing knows about.
+            //
+            // Safe to take at face value: only ever one subtitle is asked for
+            // at a time, and the overlay accepts one at a time.
+            None if carries_text(pad) => Target::Subtitle,
+            // An audio track switched on for an output that had none, which
+            // makes a slot rather than reusing one. Unlike the subtitle case
+            // this needs no guessing: the routing was told what each output
+            // wants before the selection was sent, so the stream can be placed
+            // by asking it rather than by inferring from the pad.
+            None if carries_audio(pad) => Target::Audio,
+            // Anything else decodebin3 exposed without being asked to.
+            // Leaving it unlinked is correct; it just plays no part.
+            None => return,
         };
 
-        let (head, pad_name) = match target {
-            Target::Video => (Some(&targets.video), "sink"),
-            Target::Audio(track) => (targets.audio.get(&track), "sink"),
-            Target::Subtitle => (targets.subtitle.as_ref(), "subtitle_sink"),
+        // Audio does not link to a fixed head the way the other two do. Which
+        // output a stream feeds changes while the film plays, and may be both
+        // of them or neither, so it goes to a `tee` the routing then draws
+        // from. See `AudioRouting`.
+        if let Target::Audio = target {
+            let playing = targets.audio.lock().unwrap().track_on(pad);
+            let Some(playing) = playing else {
+                eprintln!("Decoded audio on {} names no track we know", pad.name());
+                return;
+            };
+            add_audio_hub(&pipeline, &targets.audio, pad, playing);
+            return;
+        }
+
+        let head = match target {
+            Target::Video => Some(&targets.video),
+            _ => targets.subtitle.as_ref(),
+        };
+        let pad_name = match target {
+            Target::Video => "sink",
+            _ => "subtitle_sink",
         };
         let Some(head) = head else { return };
         let Some(sink_pad) = head.static_pad(pad_name) else {
@@ -627,6 +1069,45 @@ fn connect_pad_added(
             eprintln!("Failed to connect decoded stream {id}: {e}");
         }
     });
+}
+
+/// Whether a decoded pad carries audio, asked the same two ways
+/// [`carries_text`] asks its question and for the same reasons.
+fn carries_audio(pad: &gst::Pad) -> bool {
+    if let Some(stream) = pad.stream() {
+        return stream.stream_type().contains(gst::StreamType::AUDIO);
+    }
+    pad.current_caps()
+        .unwrap_or_else(|| pad.query_caps(None))
+        .structure(0)
+        .is_some_and(|structure| structure.name().starts_with("audio/"))
+}
+
+/// Whether a decoded pad carries subtitles.
+///
+/// Asked of the stream the pad was opened with first, and of its caps only if
+/// there is no stream to ask. Both, because neither is certain on its own: the
+/// stream is there only if decodebin3 attached one to the stream-start event,
+/// and a pad often has no negotiated caps when it appears - which is the same
+/// trap `attach_external_audio` documents at greater length.
+///
+/// Three caps families, because a subtitle is text in some containers and a
+/// picture in others: `text/` covers SRT and ASS once parsed,
+/// `application/x-subtitle` the unparsed forms, and `subpicture/` the bitmap
+/// subtitles DVDs and Blu-rays carry.
+fn carries_text(pad: &gst::Pad) -> bool {
+    if let Some(stream) = pad.stream() {
+        return stream.stream_type().contains(gst::StreamType::TEXT);
+    }
+    let media = pad
+        .current_caps()
+        .unwrap_or_else(|| pad.query_caps(None))
+        .structure(0)
+        .map(|structure| structure.name().to_string())
+        .unwrap_or_default();
+    media.starts_with("text/")
+        || media.starts_with("subpicture/")
+        || media.starts_with("application/x-subtitle")
 }
 
 /// Position of `id` among the collection's streams of the given type, which

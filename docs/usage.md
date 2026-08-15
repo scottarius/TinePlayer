@@ -163,7 +163,12 @@ is blind or has low vision, a dub in another language, a commentary track, or
 restored audio for an old film.
 
 To choose one, open **Primary Audio Track** or **Secondary Audio Track** and
-pick **Audio File...** below the tracks.
+pick **Browse...** below the tracks.
+
+The file has to be one this machine can open: on a local disk, or on a share
+already mounted. A video [cast from Jellyfin](integrations.md#native) cannot
+use an audio file held beside it in the library, because the server offers no
+way to send one on its own - see the note there.
 
 ### Auto-align Audio
 

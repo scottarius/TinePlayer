@@ -12,6 +12,7 @@ use crate::appearance;
 use crate::config::Config;
 use crate::controls::Controls;
 use crate::devices::list_audio_output_devices;
+use crate::pipeline::Playing;
 use crate::player::Playback;
 use crate::probe::AudioTrack;
 use crate::sound::Sounds;
@@ -324,6 +325,16 @@ enum Screen {
     KodiConfirm,
     KodiPermission,
     KodiError,
+    /// The Quick Connect code, while it waits to be approved. Its own screen
+    /// rather than one of the panels below, because something is running
+    /// behind it: the polling stops when this stops being what is on screen.
+    JellyfinConnect,
+    /// Everything else the Jellyfin pane opens over itself - the server
+    /// address, the question asked before disconnecting, and anything that
+    /// went wrong. One variant rather than three, since what they have in
+    /// common is the whole of what is asked of them: Escape returns to the
+    /// pane, exactly as pressing Cancel does.
+    JellyfinPanel,
     ConfirmQuit,
     Error,
     Playing,
@@ -428,6 +439,12 @@ enum Item {
     /// is empty rather than only offering to add something.
     KodiNone,
     KodiAdd,
+    /// The one row the Jellyfin pane has, in whichever of its two states it
+    /// is in. Never both: a Connect that is really a Disconnect, or a
+    /// Disconnect on a pane with nothing to disconnect from, would each be a
+    /// row that means the opposite of what it says.
+    JellyfinConnect,
+    JellyfinDisconnect,
     Notices,
 }
 
@@ -485,6 +502,31 @@ impl Item {
 /// A descriptor rather than the `Setup` itself, so `Category::items` stays a
 /// plain function of its inputs: a test can ask what the pane holds for three
 /// imagined installations without a disk to find any of them on.
+/// Where the connection flow was started from, and so where it goes back to.
+///
+/// It is reachable from two screens that have nothing to do with each other -
+/// the settings pane, and the page shown when no video is loaded - and a flow
+/// that always returned to Settings would strand somebody who never opened it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ConnectFrom {
+    Settings,
+    Menu,
+}
+
+/// How far the pairing with a Jellyfin server has got, which is all the pane
+/// needs to know to say what is on it.
+///
+/// Two states rather than three. A server that has been named but never
+/// approved reads exactly like one that has not been named at all - there is
+/// an address to set and a code to ask for - and the difference between them
+/// is whether Connect can be pressed, which is a fact about one row rather
+/// than about the pane.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum JellyfinPane {
+    NotConnected,
+    Connected,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct KodiPane {
     /// The group heading, which is the installation's name: "KODI 21.1
@@ -500,20 +542,27 @@ enum Category {
     General,
     Outputs,
     Subtitles,
+    /// The server TinePlayer can be cast from. Named for the one thing in it,
+    /// on the rule the Kodi category set below.
+    Jellyfin,
     /// Named for the one thing in it rather than for the kind of thing it is.
     /// It was "Integrations", which reads as a place to put the next one - and
     /// everything in here is a group per Kodi installation, so a second kind
     /// of integration would land among them with nothing to say where Kodi
-    /// ends and it begins. Whatever comes next gets a category of its own.
+    /// ends and it begins. Whatever comes next gets a category of its own,
+    /// which is what Jellyfin above is.
     Kodi,
     About,
 }
 
 impl Category {
-    const ALL: [Category; 5] = [
+    /// The order the column shows them in, which is the only thing the order
+    /// of these decides.
+    const ALL: [Category; 6] = [
         Category::General,
         Category::Outputs,
         Category::Subtitles,
+        Category::Jellyfin,
         Category::Kodi,
         Category::About,
     ];
@@ -523,6 +572,7 @@ impl Category {
             Category::General => "General",
             Category::Outputs => "Outputs",
             Category::Subtitles => "Subtitles",
+            Category::Jellyfin => "Jellyfin",
             Category::Kodi => "Kodi",
             Category::About => "About",
         }
@@ -530,16 +580,21 @@ impl Category {
 
     /// What the right-hand pane shows, and the heading each group opens with.
     ///
-    /// `kodis` is every Kodi installation found, which only the Kodi category uses.
-    /// Passed in rather than looked up here so this stays a plain function of
-    /// its inputs, and so a test can ask what a category holds without an
-    /// application to ask it of.
+    /// `kodis` is every Kodi installation found, and `jellyfin` how far the
+    /// pairing with a server has got. Both are passed in rather than looked up
+    /// here so this stays a plain function of its inputs, and so a test can ask
+    /// what a category holds without an application to ask it of - one walks
+    /// the disk and the other reads a credentials file.
     ///
     /// The headings are what make Outputs readable: it holds two rows called
     /// Volume and two called Audio Sync, and until now they were told apart
     /// only by which half of the list they were in. The Kodi category now works the
     /// same way, one heading per installation.
-    fn items(self, kodis: &[KodiPane]) -> Vec<(Option<Cow<'static, str>>, Item)> {
+    fn items(
+        self,
+        kodis: &[KodiPane],
+        jellyfin: JellyfinPane,
+    ) -> Vec<(Option<Cow<'static, str>>, Item)> {
         match self {
             Category::General => vec![
                 (Some("INTERFACE".into()), Item::InterfaceScale),
@@ -601,6 +656,20 @@ impl Category {
                 rows.push((Some("OTHER".into()), Item::KodiAdd));
                 rows
             }
+            // One heading over the lot. Unlike Kodi there is only ever one
+            // server, so a group per anything would be a group of one.
+            // One row, which is the whole of what there is to do: connect,
+            // or stop being connected. The server and the account are facts
+            // rather than settings, so they are stated in the note under the
+            // heading instead of taking a row each and inviting a press.
+            Category::Jellyfin => match jellyfin {
+                JellyfinPane::NotConnected => {
+                    vec![(Some("JELLYFIN".into()), Item::JellyfinConnect)]
+                }
+                JellyfinPane::Connected => {
+                    vec![(Some("JELLYFIN".into()), Item::JellyfinDisconnect)]
+                }
+            },
             // The text itself is not a row - see `about_body`, which the
             // pane draws above these.
             Category::About => vec![(None, Item::Notices)],
@@ -638,6 +707,27 @@ enum Step {
     /// How many of the three windows have finished.
     Window(usize),
     Done(crate::align::Verdict),
+}
+
+/// How far the Quick Connect thread has got, on its way back to the main
+/// thread.
+///
+/// One channel for the whole pairing rather than one per stage: asking for a
+/// code and waiting for it to be approved are two halves of one errand, and
+/// the panel shows them in the same place.
+enum QuickConnect {
+    /// What the server calls itself, asked before anything else because it is
+    /// unauthenticated and cheap, and because a panel that can say which
+    /// server it is talking to should say so before asking for a code.
+    Named(String),
+    /// The six characters to show, once the server has issued them.
+    Code(String),
+    /// Approved, with the account it granted. Boxed because it is much the
+    /// largest of the three, and every message would otherwise be its size.
+    Done(Box<crate::jellyfin::Account>),
+    /// Refused, expired, or a server that could not be reached. All of them
+    /// end the same way: say so, and let another code be asked for.
+    Failed(String),
 }
 
 /// Choices given on the command line, which skip the menu entirely.
@@ -703,8 +793,33 @@ pub struct App {
     /// Held so that returning from a chooser redraws the page instantly. The
     /// menu is rebuilt on every trip in and out of one, and re-reading a
     /// backdrop from a network share each time is both slow and visible.
+    /// Whether the page being built already has artwork that has only just
+    /// arrived, and so should fade rather than appear.
+    ///
+    /// A page opened with its pictures already in hand draws them; it does not
+    /// perform.
+    fade_art: Cell<bool>,
+    /// The two places artwork is drawn, kept so that a picture arriving late
+    /// can be put into the page that is already on screen.
+    ///
+    /// Rebuilding the page instead would be simpler and is what this used to
+    /// do. It is wrong: artwork can take seconds - a backdrop over a network
+    /// especially - and by then somebody may be part-way down the track lists
+    /// choosing what to watch. Rebuilding under them moves their focus and
+    /// undoes what they were doing, to deliver a picture they did not ask for
+    /// yet.
+    backdrop_widget: RefCell<Option<crate::artwork::Artwork>>,
+    poster_frame: RefCell<Option<gtk::Box>>,
+    /// The small frame under the file details that holds the series' poster,
+    /// kept for the same reason `poster_frame` is: the picture is fetched on a
+    /// thread and arrives after the page it belongs on.
+    series_frame: RefCell<Option<gtk::Box>>,
     poster_art: RefCell<Option<gdk::Texture>>,
     backdrop_art: RefCell<Option<gdk::Texture>>,
+    /// The series' poster, for an episode. Kept apart from `poster_art`
+    /// because they are two different pictures of two different things: that
+    /// one is a still from this episode, this one is the show.
+    series_art: RefCell<Option<gdk::Texture>>,
     /// Bumped whenever a different file is loaded, so artwork still arriving
     /// from a thread for the previous one is dropped rather than drawn.
     art_generation: Cell<u64>,
@@ -851,6 +966,13 @@ pub struct App {
     /// play and settings row. Up from the first row reaches them, the way Down
     /// reaches the footer.
     nav_header: RefCell<Vec<gtk::Button>>,
+    /// A row of buttons between the header and the footer, for the one screen
+    /// that has three: the empty page, where choosing a video and connecting a
+    /// server are not the same errand and do not sit on the same line.
+    ///
+    /// Set after `set_nav`, which clears it, so it belongs to one screen only -
+    /// the same way `nav_header_entry` does.
+    nav_middle: RefCell<Vec<gtk::Button>>,
     /// Which header button Up from the list should land on, where the last
     /// one is not the right answer.
     ///
@@ -898,6 +1020,41 @@ pub struct App {
     /// because it cannot change while we are the player. `None` when Kodi was
     /// not involved or did not answer, which is not an error.
     kodi_item: RefCell<Option<crate::kodi::Item>>,
+    /// The server this installation is paired with, once it has been reached.
+    ///
+    /// Absent when Jellyfin was never set up, when the pairing was revoked,
+    /// and while the server is unreachable - all of which are ordinary, and
+    /// none of which stop anything else working.
+    jellyfin: RefCell<Option<crate::jellyfin::Client>>,
+    /// What the pairing file says, as the settings pane last read it.
+    ///
+    /// Held rather than read per row, for the same reason the Kodi
+    /// installations are: every label, value and enabled state on that pane
+    /// comes out of this, and a file read apiece would be a dozen for one
+    /// screen. Re-read whenever the pane is built, so a token revoked from
+    /// elsewhere shows up on the next visit.
+    jellyfin_pairing: RefCell<Option<crate::jellyfin::Pairing>>,
+    /// Bumped whenever a Quick Connect is started or abandoned, so the polling
+    /// left over from one attempt cannot outlive it and approve another.
+    jellyfin_attempt: Cell<u64>,
+    /// Which screen the connection flow was opened from, and so where
+    /// finishing or cancelling it returns to.
+    connect_from: Cell<ConnectFrom>,
+    /// What Jellyfin knows about the video on screen, when it was cast from
+    /// there. The counterpart to `kodi_item`, and read by the same three
+    /// accessors: a launcher's library knows the title and where the viewer
+    /// stopped better than the file does.
+    jellyfin_item: RefCell<Option<crate::jellyfin::Item>>,
+    /// The open connection. Dropping it closes the socket, which is how
+    /// disconnecting works - and while it is closed TinePlayer is not on
+    /// anybody's phone, so it is held for the life of the application.
+    jellyfin_session: RefCell<Option<crate::jellyfin::Session>>,
+    /// Ticks since Jellyfin was last told where playback had reached.
+    jellyfin_reported: Cell<u32>,
+    /// What Jellyfin calls this viewing. One string for the whole of it, from
+    /// started to stopped, because that is how the server ties the reports
+    /// together into a single session rather than three unrelated events.
+    jellyfin_play_session: RefCell<String>,
     /// Where playback had reached when it was last left, and the video it
     /// belongs to. Offered as a resume point regardless of how far in it was,
     /// unlike a position read back from disk.
@@ -917,6 +1074,16 @@ pub struct App {
     /// produces a change per pixel, and each one would otherwise be a write to
     /// disk.
     volume_save_pending: Cell<bool>,
+    /// Whether everything is silenced at once. Held here rather than in the
+    /// configuration, and separately from each output's own mute, because it is
+    /// a layer over them: the outputs go on being set to whatever they were set
+    /// to underneath it, and a film that started silent because of a door
+    /// knocked on last week would be a bug rather than a memory.
+    hushed: Cell<bool>,
+    /// Whether a report of what the sound is doing is already on its way to
+    /// Jellyfin. Dragging a bar produces a change per pixel, and each one would
+    /// otherwise be a request across the house.
+    sound_report_pending: Cell<bool>,
     /// The state of a hold on the gamepad's left face button, which silences
     /// everything rather than changing the subtitles. The same button for
     /// both because they are the same question - whether you are being given
@@ -997,8 +1164,13 @@ impl App {
             file: RefCell::new(None),
             details: RefCell::new(Default::default()),
             now_playing_queued: Cell::new(false),
+            fade_art: Cell::new(false),
+            backdrop_widget: RefCell::new(None),
+            poster_frame: RefCell::new(None),
+            series_frame: RefCell::new(None),
             poster_art: RefCell::new(None),
             backdrop_art: RefCell::new(None),
+            series_art: RefCell::new(None),
             art_generation: Cell::new(0),
             device_names: RefCell::new(Vec::new()),
             device_scan: Cell::new(false),
@@ -1045,6 +1217,7 @@ impl App {
             wanted_scale: Cell::new(None),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
+            nav_middle: RefCell::new(Vec::new()),
             nav_header_entry: RefCell::new(None),
             controls: RefCell::new(None),
             styles: styles.clone(),
@@ -1056,9 +1229,19 @@ impl App {
             locked_fullscreen,
             error_is_fatal: Cell::new(false),
             kodi_item: RefCell::new(None),
+            jellyfin: RefCell::new(None),
+            jellyfin_pairing: RefCell::new(crate::jellyfin::load()),
+            jellyfin_attempt: Cell::new(0),
+            connect_from: Cell::new(ConnectFrom::Settings),
+            jellyfin_item: RefCell::new(None),
+            jellyfin_session: RefCell::new(None),
+            jellyfin_reported: Cell::new(0),
+            jellyfin_play_session: RefCell::new(String::new()),
             session_resume: RefCell::new(None),
             subtitles_hidden: Cell::new(false),
             volume_save_pending: Cell::new(false),
+            hushed: Cell::new(false),
+            sound_report_pending: Cell::new(false),
             subtitles_hold: Cell::new(0),
             subtitles_holding: Cell::new(false),
             subtitles_held: Cell::new(false),
@@ -1335,6 +1518,11 @@ impl App {
                 weak.upgrade().is_some_and(|app| app.handle_media(command))
             });
         }
+
+        // Reaches the paired Jellyfin server, if there is one. Everything it
+        // does is allowed to fail quietly: a server that is off is not a
+        // reason for a video player to say anything on the way up.
+        app.start_jellyfin();
     }
 
     /// The commands that belong to the application rather than to a screen,
@@ -1517,12 +1705,18 @@ impl App {
                 // spending Escape on it as well made leaving a film two
                 // presses when it reads as one.
                 //
-                // The gamepad's B still steps out of the strip first, which is
-                // not an inconsistency: it has no second button to spare for
-                // it, and that is what its own comment above Action::Back is
-                // about.
+                // With one exception, added because the menus made it one: an
+                // open chooser is closed first, exactly as the gamepad's B
+                // does. A list of soundtracks laid over the film is something
+                // you are inside of, and Escape is the key for getting out of
+                // what you are inside of - leaving the film outright from
+                // there is a much bigger step than the press suggests.
+                //
+                // Only for an open chooser. With nothing open, Escape still
+                // goes straight out rather than putting the strip away, which
+                // is what Down is for on a keyboard.
                 gdk::Key::Escape => {
-                    app.go_back();
+                    app.close_chooser_or_go_back();
                     glib::Propagation::Stop
                 }
                 // Ours rather than GTK's, which cannot see the lists at all.
@@ -1606,6 +1800,17 @@ impl App {
                 }
                 gdk::Key::t | gdk::Key::T if playing => {
                     app.toggle_time_readout();
+                    glib::Propagation::Stop
+                }
+                // Steps each output through the file's audio tracks while it
+                // plays. A shortcut ahead of the real thing, which is a chooser
+                // per output on the control strip.
+                gdk::Key::a | gdk::Key::A if playing => {
+                    app.cycle_audio("primary");
+                    glib::Propagation::Stop
+                }
+                gdk::Key::s | gdk::Key::S if playing => {
+                    app.cycle_audio("secondary");
                     glib::Propagation::Stop
                 }
                 // The shortcut GTK's own file chooser and every web browser use
@@ -1815,6 +2020,640 @@ impl App {
         }));
     }
 
+    // --- Jellyfin ------------------------------------------------------
+
+    /// Puts artwork into the page that is already on screen.
+    ///
+    /// Only the two widgets it belongs in are touched, so focus, the row
+    /// somebody is on, and anything they have open all stay exactly as they
+    /// were. This is what a picture arriving three seconds after the page did
+    /// should cost: a picture appearing, and nothing else moving.
+    fn show_late_art(self: &Rc<Self>) {
+        if let Some(backdrop) = self.backdrop_widget.borrow().as_ref()
+            && let Some(texture) = self.backdrop_art.borrow().clone()
+        {
+            backdrop.set_texture(Some(texture));
+            fade_in(backdrop);
+        }
+
+        // The poster is a picture where the placeholder was, so the frame's
+        // child is replaced rather than a texture set: with no artwork the
+        // frame holds a mark rather than an empty picture.
+        let (Some(frame), Some(texture)) = (
+            self.poster_frame.borrow().clone(),
+            self.poster_art.borrow().clone(),
+        ) else {
+            return;
+        };
+        while let Some(child) = frame.first_child() {
+            frame.remove(&child);
+        }
+        // **The frame was sized before there was a picture to measure**, so a
+        // wide one - an episode still - would still be cropped into a slot
+        // shaped for a poster, which is why fixing this at build time alone
+        // changed nothing: the artwork arrives on a thread, after the page.
+        // Sized again now its shape is known, by the same rule.
+        let scale = self.scale.get();
+        let height = self.poster_height(scale);
+        let width = height * 2.0 / 3.0;
+        frame.set_size_request(
+            width.round() as i32,
+            poster_frame_height(Some(&texture), width, height).round() as i32,
+        );
+        let picture = crate::artwork::Artwork::poster();
+        picture.set_texture(Some(texture));
+        picture.set_hexpand(true);
+        picture.set_vexpand(true);
+        fade_in(&picture);
+        frame.append(&picture);
+    }
+
+    /// The same for the series' poster under the file details, which arrives by
+    /// the same route and just as late.
+    fn show_late_series_art(self: &Rc<Self>) {
+        let (Some(frame), Some(texture)) = (
+            self.series_frame.borrow().clone(),
+            self.series_art.borrow().clone(),
+        ) else {
+            return;
+        };
+        // Already hung, which is what a page rebuilt after the picture landed
+        // looks like - every trip in and out of a chooser does that.
+        if frame.first_child().is_some() {
+            return;
+        }
+        // Sized again now the picture's shape is known. Until it arrived the
+        // frame stood at two by three, and anything else would have been
+        // cropped to fit it.
+        let width = f64::from(frame.width_request().max(1));
+        frame.set_size_request(
+            width.round() as i32,
+            series_frame_height(Some(&texture), width).round() as i32,
+        );
+        let picture = series_picture(texture);
+        fade_in(&picture);
+        frame.append(&picture);
+    }
+
+    /// Fills the page in from the library, for a video that came from one.
+    ///
+    /// Only the fields Jellyfin actually answered: an empty overview or a
+    /// missing year leaves whatever the container had, on the grounds that
+    /// something is better than nothing and the library is not always fuller
+    /// than the file. The title is not among them - that already comes through
+    /// `launcher_title` at the head of the same chain everything else uses.
+    fn overlay_jellyfin_details(self: &Rc<Self>) {
+        let Some(item) = self.jellyfin_item.borrow().clone() else {
+            return;
+        };
+        {
+            let mut details = self.details.borrow_mut();
+            if !item.plot.is_empty() {
+                details.plot = item.plot.clone();
+            }
+            if item.year.is_some() {
+                details.year = item.year;
+            }
+            if !item.certificate.is_empty() {
+                details.certificate = item.certificate.clone();
+            }
+            if item.rating.is_some() {
+                details.rating = item.rating;
+            }
+            if !item.genres.is_empty() {
+                details.genres = item.genres.clone();
+            }
+            if item.episode.is_some() {
+                details.episode = item.episode;
+            }
+            if !item.aired.is_empty() {
+                details.aired = item.aired.clone();
+            }
+            // What a local episode reads out of `<showtitle>`, arriving from
+            // the library instead. Both end up in the same field, so the page
+            // draws one thing and does not care which source answered.
+            if !item.series_name.is_empty() {
+                details.series_title = item.series_name.clone();
+            }
+            if !item.season_name.is_empty() {
+                details.season_name = item.season_name.clone();
+            }
+            // The stream measures itself, so a runtime is only worth taking
+            // where the container could not say.
+            if details.duration_s <= 0.0
+                && let Some(runtime) = item.runtime_ns
+            {
+                details.duration_s = runtime as f64 / 1e9;
+            }
+        }
+        self.load_jellyfin_art(&item);
+    }
+
+    /// Fetches the poster and backdrop, and redraws when they land.
+    ///
+    /// Separately from the details, and after the page is already up, because
+    /// these are the slow part - a backdrop is a picture from across the
+    /// house. The page is perfectly good without them until they arrive, which
+    /// is the same bargain artwork beside a file already makes.
+    fn load_jellyfin_art(self: &Rc<Self>, item: &crate::jellyfin::Item) {
+        let Some(client) = self.jellyfin.borrow().clone() else {
+            return;
+        };
+        if item.poster_tag.is_none()
+            && item.backdrop_tag.is_none()
+            && item.series_poster_tag.is_none()
+            && item.season_id.is_empty()
+        {
+            return;
+        }
+
+        let id = item.id.clone();
+        let poster_tag = item.poster_tag.clone();
+        // The picture that says which programme - and which run of it - this
+        // episode belongs to. A different thing from the episode's own Primary
+        // image, which is a still from the episode.
+        //
+        // The season is asked for first and without a tag, because the episode
+        // does not carry one: the season is an item of its own and only it
+        // knows. Answering without a tag hands back whatever is current, which
+        // is what a caller that never saw one wants, and saves fetching the
+        // season item merely to learn a cache key. Not every season has a
+        // picture - "Specials" often has none - so the series' is the fallback,
+        // and that tag the episode does carry.
+        let season_id = Some(item.season_id.clone()).filter(|id| !id.is_empty());
+        let series = item
+            .series_poster_tag
+            .clone()
+            .filter(|_| !item.series_id.is_empty())
+            .map(|tag| (item.series_id.clone(), tag));
+        let backdrop_tag = item.backdrop_tag.clone();
+        // Not always the same item: an episode's backdrop belongs to its
+        // series, and a tag is only good against the item it came from.
+        let backdrop_id = item.backdrop_item.clone();
+        // The film these belong to, so a viewer who casts one and immediately
+        // casts another does not get the first one's backdrop.
+        let generation = self.art_generation.get();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // Asked for at the size they are drawn rather than whole: a
+            // library backdrop can be several megabytes untouched.
+            let poster = poster_tag
+                .and_then(|tag| client.image(&id, "Primary", &tag, 600).ok())
+                .map(crate::metadata::Art::Embedded);
+            let backdrop = backdrop_tag
+                .and_then(|tag| client.image(&backdrop_id, "Backdrop/0", &tag, 1920).ok())
+                .map(crate::metadata::Art::Embedded);
+            // Small on the page, so asked for small: this one is drawn under
+            // the file details rather than in the poster slot.
+            let series = season_id
+                .and_then(|id| client.image(&id, "Primary", "", 300).ok())
+                .or_else(|| {
+                    series.and_then(|(id, tag)| client.image(&id, "Primary", &tag, 300).ok())
+                })
+                .map(crate::metadata::Art::Embedded);
+            let _ = sender.send((poster, backdrop, series));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            let (poster, backdrop, series) = match receiver.try_recv() {
+                Ok(art) => art,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            // Another video was opened while these were coming down.
+            if app.art_generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+            {
+                let mut details = app.details.borrow_mut();
+                if poster.is_some() {
+                    details.poster = poster;
+                }
+                if backdrop.is_some() {
+                    details.backdrop = backdrop;
+                }
+                if series.is_some() {
+                    details.series_poster = series;
+                }
+            }
+            app.start_art_load();
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Reaches the paired server, if there is one, and stays reachable.
+    ///
+    /// Everything here is allowed to fail quietly. A server that is off, a
+    /// network that is out, a pairing that was revoked - none of them are
+    /// reasons for a video player to complain on startup, and all of them are
+    /// answered the same way: no cast target until it comes back.
+    fn start_jellyfin(self: &Rc<Self>) {
+        let Some(pairing) = crate::jellyfin::load() else {
+            return;
+        };
+        // What the settings pane reads. Set here as well as when that pane is
+        // built, so the rows are right the first time it is opened.
+        *self.jellyfin_pairing.borrow_mut() = Some(pairing.clone());
+        let Some(client) = crate::jellyfin::Client::new(&pairing) else {
+            // Paired with a server but signed out of it, which is where a 401
+            // leaves things. The settings screen offers a new code.
+            return;
+        };
+
+        // Off the main thread: this talks to a server that may be asleep, and
+        // the interface has a menu to draw.
+        //
+        // **Its answer is acted on, not merely printed.** This is the first
+        // call made with a stored token, so it is the first thing to know that
+        // a pairing has been revoked - and until 2026-08-15 it logged
+        // "Jellyfin no longer accepts this connection" and carried on, leaving
+        // the settings screen claiming to be connected to a server that had
+        // deleted this device. Reported by Scott, who had done exactly that.
+        let announcing = client.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(announcing.announce());
+        });
+        {
+            let app = self.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+                match receiver.try_recv() {
+                    Ok(Ok(())) => {}
+                    // The pairing is gone. Everything else about this server is
+                    // now wrong, including the socket that is being opened
+                    // below, which signing out puts down.
+                    Ok(Err(crate::jellyfin::Error::Unauthorized)) => app.jellyfin_signed_out(),
+                    // A server that is off or asleep, which is ordinary and
+                    // not a reason to throw the pairing away.
+                    Ok(Err(e)) => eprintln!("Jellyfin would not take our capabilities: {e}"),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        return glib::ControlFlow::Continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
+                glib::ControlFlow::Break
+            });
+        }
+        *self.jellyfin.borrow_mut() = Some(client);
+
+        let app = self.clone();
+        let session = crate::jellyfin::connect(&pairing, move |command| {
+            app.handle_jellyfin(command);
+        });
+        *self.jellyfin_session.borrow_mut() = session;
+    }
+
+    /// What a phone asked for.
+    ///
+    /// Playstate commands are the ones TinePlayer already has actions for, so
+    /// they go straight to the same places the remote and the media keys use -
+    /// there is no second way to pause.
+    fn handle_jellyfin(self: &Rc<Self>, command: crate::jellyfin::Command) {
+        use crate::jellyfin::Command;
+        match command {
+            Command::Play {
+                item_id,
+                position_ns,
+            } => self.play_jellyfin(&item_id, position_ns),
+            Command::Pause => {
+                if self.is_playing() {
+                    self.toggle_pause();
+                    self.wake_controls();
+                }
+            }
+            Command::Unpause => {
+                if self.playback.borrow().is_some() && !self.is_playing() {
+                    self.toggle_pause();
+                    self.wake_controls();
+                }
+            }
+            Command::PlayPause => {
+                if self.playback.borrow().is_some() {
+                    self.toggle_pause();
+                    self.wake_controls();
+                }
+            }
+            Command::Stop => {
+                if self.playback.borrow().is_some() {
+                    self.go_back();
+                }
+            }
+            Command::Seek(position_ns) => {
+                if let Some(playback) = self.playback.borrow().as_ref() {
+                    playback.aim_at(gstreamer::ClockTime::from_nseconds(position_ns));
+                    playback.commit_seek();
+                }
+                self.publish_now_playing();
+            }
+            // Everything below drives the controls rather than the pipeline,
+            // which is what keeps one answer to each of these questions: the
+            // remote moves the same master and picks from the same lists the
+            // person in the room does, and the strip is woken so what it did is
+            // visible rather than mysterious.
+            Command::SetVolume(level) => {
+                if let Some(controls) = self.controls.borrow().clone() {
+                    controls.master_to(level);
+                }
+                self.wake_controls();
+            }
+            Command::Mute | Command::Unmute | Command::ToggleMute => {
+                if let Some(controls) = self.controls.borrow().clone() {
+                    match command {
+                        Command::Mute => controls.set_hushed(true),
+                        Command::Unmute => controls.set_hushed(false),
+                        _ => controls.toggle_hush(),
+                    }
+                }
+                self.wake_controls();
+            }
+            Command::SetAudioStream(index) => {
+                if let Some(row) = self.library_audio_row(index) {
+                    self.choose_audio(Role::Primary.key(), row);
+                    self.wake_controls();
+                }
+            }
+            Command::SetSubtitleStream(index) => {
+                if let Some(row) = self.library_subtitle_row(index) {
+                    self.choose_subtitle(row);
+                    self.wake_controls();
+                }
+            }
+            // The pairing was revoked while we held it. Everything about this
+            // server is now wrong, so it is put down rather than retried.
+            Command::SignedOut => self.jellyfin_signed_out(),
+        }
+    }
+
+    /// What a controller should show: the master, the blanket silence, and what
+    /// the first output and the subtitles are playing, in Jellyfin's numbering.
+    ///
+    /// Worked out here rather than remembered as it changes, because every
+    /// answer already lives somewhere - and a second copy kept in step by hand
+    /// is how a remote comes to show something the player is not doing.
+    fn reported_sound(&self) -> crate::jellyfin::Sound {
+        use crate::subtitles::SubtitleChoice;
+        let item = self.jellyfin_item.borrow();
+        let streams = item.as_ref().map(|item| &item.streams);
+
+        let audio = match (
+            streams,
+            self.playback
+                .borrow()
+                .as_ref()
+                .and_then(|playback| playback.playing_on(Role::Primary.key())),
+        ) {
+            (Some(streams), Some(crate::pipeline::Playing::Track(position))) => {
+                streams.audio_index(position)
+            }
+            // A separate audio file, which the library has no number for.
+            _ => None,
+        };
+
+        let subtitle = match self.subtitle.borrow().as_ref() {
+            // Off is an answer, and the one a controller most needs told: it is
+            // what its selector falls back to showing when it is told nothing.
+            None => Some(-1),
+            // A file on the server, which already carries Jellyfin's own number.
+            Some(SubtitleChoice::Library(index)) => Some(*index as i32),
+            Some(SubtitleChoice::Embedded(position)) => streams
+                .and_then(|streams| streams.subtitle_index(*position))
+                .map(|index| index as i32),
+            // A file on this machine, which a cast video does not have.
+            Some(_) => None,
+        };
+
+        crate::jellyfin::Sound {
+            level: self.config.borrow().master_volume(),
+            muted: self.hushed.get(),
+            audio,
+            subtitle,
+        }
+    }
+
+    /// Which row of the first output's soundtrack list one of Jellyfin's stream
+    /// numbers is.
+    ///
+    /// That list is the film's own tracks in order and nothing else - the first
+    /// output has no "None" row - so a position among the embedded tracks is
+    /// the row. `None` for a stream that is external or is not audio, which is
+    /// a remote asking for something this list cannot offer rather than an
+    /// error worth reporting.
+    fn library_audio_row(&self, index: u32) -> Option<usize> {
+        let item = self.jellyfin_item.borrow();
+        let position = item.as_ref()?.streams.audio_position(index)?;
+        Some(position as usize)
+    }
+
+    /// The same for the subtitle chooser, whose first row is Off and whose rest
+    /// follow `subtitle_options` in order.
+    ///
+    /// Matched against the options themselves rather than counted, because that
+    /// list holds two kinds of thing at once: streams inside the container,
+    /// which Jellyfin numbers among everything else, and files beside it on the
+    /// server, which carry Jellyfin's own number already. Counting would put
+    /// one kind out of step with the other.
+    fn library_subtitle_row(&self, index: Option<u32>) -> Option<usize> {
+        use crate::subtitles::Subtitle;
+        // Off is a row like any other, and the one a remote can always reach.
+        let Some(index) = index else { return Some(0) };
+        let embedded = self
+            .jellyfin_item
+            .borrow()
+            .as_ref()
+            .and_then(|item| item.streams.subtitle_position(index));
+        let options = self.subtitle_options.borrow();
+        let at = options.iter().position(|option| match option {
+            Subtitle::Library { index: at, .. } => *at == index,
+            Subtitle::Embedded { index: at, .. } => Some(*at) == embedded,
+            _ => false,
+        })?;
+        Some(at + 1)
+    }
+
+    fn is_playing(&self) -> bool {
+        self.playback
+            .borrow()
+            .as_ref()
+            .is_some_and(|playback| playback.is_playing())
+    }
+
+    /// Resolves what was cast and opens it.
+    ///
+    /// The command carries an item id and nothing else - no address and,
+    /// usually, no position - so the item is asked about before anything can
+    /// be played. That happens on a worker thread, because it is a request to
+    /// a server that may be across a house.
+    fn play_jellyfin(self: &Rc<Self>, item_id: &str, position_ns: Option<u64>) {
+        let Some(client) = self.jellyfin.borrow().clone() else {
+            return;
+        };
+        let id = item_id.to_string();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(client.item(&id));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            match result {
+                Ok(mut item) => {
+                    // A controller saying "play from here" outranks the
+                    // library's own idea of where this viewer stopped.
+                    if let Some(position) = position_ns {
+                        item.resume_ns = Some(position).filter(|position| *position > 0);
+                    }
+                    app.open_jellyfin(item);
+                }
+                Err(crate::jellyfin::Error::Unauthorized) => app.jellyfin_signed_out(),
+                Err(e) => eprintln!("Jellyfin would not describe that video: {e}"),
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Takes a resolved item and plays it.
+    fn open_jellyfin(self: &Rc<Self>, item: crate::jellyfin::Item) {
+        let Some(client) = self.jellyfin.borrow().clone() else {
+            return;
+        };
+        let source = Source::parse(&client.stream_url(&item));
+        // Set before the source is opened, because everything that reads a
+        // title or a resume position during opening looks here for it. Kodi's
+        // is cleared for the same reason: two launchers claiming the same
+        // video would be one of them wrong.
+        *self.kodi_item.borrow_mut() = None;
+
+        // What the tracks are, from the library rather than by reading the
+        // file. The server has already analysed it, and asking again over HTTP
+        // is redundant work that sometimes cannot finish: a QuickTime file
+        // with its index at the end has to be read from the front to be
+        // probed, which for a four-gigabyte film is minutes. Playback itself
+        // is unaffected - it seeks straight to the index - so the probe was
+        // the only thing that could not cope.
+        //
+        // Verified on 2026-08-14 that the library's stream order matches the
+        // probe's exactly, which is what makes this safe: tracks are chosen by
+        // position, and a different order would silently play the wrong one.
+        let media = item.streams.as_media(item.runtime_ns.unwrap_or_default());
+        *self.jellyfin_item.borrow_mut() = Some(item);
+
+        // Straight in, with no spinner: there is nothing to wait for now that
+        // the tracks are already known.
+        match self.apply_media(&source, media) {
+            Ok(()) => self.show_menu(),
+            Err(e) => {
+                eprintln!("Couldn't open {}: {e}", source.uri());
+                self.show_source_error(&source, &e, false);
+            }
+        }
+    }
+
+    /// Puts down a pairing the server no longer honours.
+    ///
+    /// The token goes and the device identity stays, so connecting again
+    /// replaces the existing device rather than leaving a trail of them. Said
+    /// out loud, because a cast target that has quietly stopped being one is
+    /// the failure nobody can diagnose from the sofa.
+    fn jellyfin_signed_out(self: &Rc<Self>) {
+        // Both halves of the connection find this out for themselves - the
+        // capabilities call by its 401, the socket by its 403 - and either
+        // alone has to be enough, since a server may refuse one and not the
+        // other. So the second one to arrive says nothing and writes nothing
+        // rather than repeating the message and the file write.
+        if self.jellyfin.borrow().is_none() && self.jellyfin_session.borrow().is_none() {
+            return;
+        }
+        *self.jellyfin.borrow_mut() = None;
+        *self.jellyfin_session.borrow_mut() = None;
+        if let Some(mut pairing) = crate::jellyfin::load() {
+            pairing.sign_out();
+            if let Err(e) = crate::jellyfin::save(&pairing) {
+                eprintln!("Couldn't forget the Jellyfin token: {e}");
+            }
+            *self.jellyfin_pairing.borrow_mut() = Some(pairing);
+        }
+        eprintln!("Jellyfin no longer accepts this connection. Connect to it again to cast.");
+        // Redrawn only where it is being looked at. A pairing can be revoked
+        // at any moment, and rebuilding a screen under somebody who is part
+        // way through choosing a soundtrack would be a worse interruption than
+        // the one being reported.
+        if self.showing_jellyfin_pane() {
+            self.show_settings();
+        }
+        // And the page shown when nothing is loaded, which offers a Connect
+        // button only while there is nothing to disconnect from - so a token
+        // revoked between that page being drawn and the server saying so left
+        // it with no way to connect until something else redrew it. Safe to
+        // rebuild only here: with no video there is nothing in hand to
+        // interrupt, which is not true of the media page.
+        if *self.screen.borrow() == Screen::Menu && self.file.borrow().is_none() {
+            self.show_menu();
+        }
+    }
+
+    /// Tells Jellyfin where playback has reached.
+    ///
+    /// Only for a video that came from there: a film opened from disk is
+    /// nothing to do with the library, and reporting it would put a position
+    /// against an item nobody watched.
+    fn report_to_jellyfin(&self, moment: JellyfinMoment) {
+        let (Some(client), Some(id)) = (
+            self.jellyfin.borrow().clone(),
+            self.jellyfin_item
+                .borrow()
+                .as_ref()
+                .map(|item| item.id.clone()),
+        ) else {
+            return;
+        };
+        let position = self
+            .playback
+            .borrow()
+            .as_ref()
+            .and_then(|playback| playback.position())
+            .map(|position| position.nseconds())
+            .unwrap_or(0);
+        let paused = !self.is_playing();
+        let sound = self.reported_sound();
+
+        // A new name for the viewing when it starts, and the same one after.
+        if moment == JellyfinMoment::Started {
+            *self.jellyfin_play_session.borrow_mut() = crate::jellyfin::Client::new_play_session();
+        }
+        let play_session = self.jellyfin_play_session.borrow().clone();
+        if play_session.is_empty() {
+            // Nothing was ever started, so there is no viewing to report on.
+            return;
+        }
+
+        // On a thread, because the server may be slow and this happens while a
+        // film is playing. Nothing waits on the answer.
+        std::thread::spawn(move || {
+            let result = match moment {
+                JellyfinMoment::Started => client.started(&id, &play_session, position, sound),
+                JellyfinMoment::Progress => {
+                    client.progress(&id, &play_session, position, paused, sound)
+                }
+                JellyfinMoment::Stopped => client.stopped(&id, &play_session, position),
+            };
+            if let Err(e) = result {
+                eprintln!("Jellyfin would not take the position: {e}");
+            }
+        });
+    }
+
     /// What a media key means, wherever the platform reported it from: a
     /// keysym on Linux, a `WM_APPCOMMAND` on Windows. Says whether it was
     /// used, which Windows needs in order to decide whether to pass the key
@@ -1895,6 +2734,11 @@ impl App {
             | Screen::KodiFolder
             | Screen::KodiPermission
             | Screen::KodiError => self.return_to_kodi_settings(),
+            // The same, for the pane beside it. Backing out of a waiting code
+            // abandons the pairing rather than pausing it: the polling stops
+            // because this screen is no longer showing, and the code the
+            // server issued is left to expire on its own.
+            Screen::JellyfinConnect | Screen::JellyfinPanel => self.leave_jellyfin_connect(),
             // Nothing to go back to when the video we were started for could
             // not be opened.
             Screen::Error if self.error_is_fatal.get() => self.window.close(),
@@ -1968,6 +2812,17 @@ impl App {
                         since_report = 0;
                         playback.report_to_kodi();
                     }
+
+                    // Jellyfin more often, because a phone watching this
+                    // session shows the position as it moves rather than only
+                    // after the fact. Ten seconds is what its own clients
+                    // send, and it is one small request.
+                    let told = app.jellyfin_reported.get() + 1;
+                    app.jellyfin_reported.set(told);
+                    if told >= 100 {
+                        app.jellyfin_reported.set(0);
+                        app.report_to_jellyfin(JellyfinMoment::Progress);
+                    }
                     glib::ControlFlow::Continue
                 }
                 _ => glib::ControlFlow::Break,
@@ -2014,9 +2869,35 @@ impl App {
             Row::None => controls.set_row(Row::Buttons),
             Row::Buttons => controls.set_row(Row::Timeline),
             Row::Timeline => {}
-            // The panel opens upward out of its button, so up climbs the list
-            // of outputs and stops at the top of it.
+            // The menu opens upward out of its button, so up climbs its rows
+            // and stops at the top of them.
             Row::Volume => controls.move_output(-1),
+            // A chooser opens the same way, so up climbs it likewise.
+            Row::Audio => controls.move_audio(-1),
+            Row::Subtitles => controls.move_subtitle(-1),
+        }
+    }
+
+    /// Escape: shuts an open chooser, or leaves whatever is on screen.
+    ///
+    /// Back to the buttons rather than off the strip entirely, so the icon the
+    /// chooser came out of is highlighted and can be seen to have changed -
+    /// the same landing choosing a row gives, and the same the gamepad's B
+    /// gives.
+    fn close_chooser_or_go_back(self: &Rc<Self>) {
+        use crate::controls::Row;
+        // Cloned out rather than acted on through the borrow, the way every
+        // other caller here does it: `set_row` runs the strip's own handlers,
+        // and holding the cell open across them is how a re-entrant borrow
+        // panic gets written.
+        let controls = self.controls.borrow().clone();
+        match controls {
+            Some(controls)
+                if matches!(controls.row(), Row::Volume | Row::Audio | Row::Subtitles) =>
+            {
+                controls.set_row(Row::Buttons);
+            }
+            _ => self.go_back(),
         }
     }
 
@@ -2029,13 +2910,31 @@ impl App {
         match controls.row() {
             Row::Timeline => controls.set_row(Row::Buttons),
             Row::Buttons => controls.set_row(Row::None),
-            // Down the list of outputs, and off the bottom of it back to the
-            // button the panel came out of.
+            // Down the rows of the menu, and off the bottom of it back to the
+            // speaker the menu came out of.
             Row::Volume => {
                 if controls.at_last_output() {
                     controls.set_row(Row::Buttons);
                 } else {
                     controls.move_output(1);
+                }
+            }
+            // Down the soundtracks, and off the bottom back to the icon the
+            // chooser came out of.
+            Row::Audio => {
+                if controls.at_last_audio() {
+                    controls.set_row(Row::Buttons);
+                } else {
+                    controls.move_audio(1);
+                }
+            }
+            // Down the list of subtitles, and off the bottom of it back to
+            // the icon the chooser came out of.
+            Row::Subtitles => {
+                if controls.at_last_subtitle() {
+                    controls.set_row(Row::Buttons);
+                } else {
+                    controls.move_subtitle(1);
                 }
             }
             // Nothing is held, so there is nothing to put down - but the strip
@@ -2086,11 +2985,10 @@ impl App {
         // the panel this way put the highlight back on the button, so the
         // release read as a fresh press on it and opened the panel again.
         let holds = controls.holds_press();
-        self.hold_started.set(holds);
-        if holds {
-            controls.press_volume();
-        } else {
-            controls.activate_focused();
+        self.hold_started.set(holds.is_some());
+        match holds {
+            Some(hold) => controls.press_hold(hold),
+            None => controls.activate_focused(),
         }
     }
 
@@ -2121,7 +3019,7 @@ impl App {
         let Some(controls) = controls else { return };
         // Only a press that started a hold has anything left to do here.
         // Everything else acted on the way down.
-        if self.hold_started.replace(false) && controls.release_volume() {
+        if self.hold_started.replace(false) && controls.release_hold() {
             controls.activate_focused();
         }
     }
@@ -2129,6 +3027,32 @@ impl App {
     /// Writes the configuration out a second after the last volume change,
     /// rather than on each one. The level itself takes effect immediately;
     /// this is only about remembering it.
+    /// Tells a controller what the sound is doing now, rather than leaving it
+    /// to the next scheduled report.
+    ///
+    /// Those go every ten seconds, which is right for a position that a phone
+    /// can interpolate between and wrong for a level: moving the master in the
+    /// room left the slider on somebody's phone showing the old value for most
+    /// of a minute, which reads as a remote that has lost the player rather
+    /// than one that is a moment behind. Reported by Scott, 2026-08-14.
+    ///
+    /// The same debounce the configuration write uses, and for the same reason,
+    /// with a shorter wait because this one is about what somebody is watching
+    /// happen on a second screen.
+    fn report_sound_soon(self: &Rc<Self>) {
+        if self.sound_report_pending.replace(true) {
+            return;
+        }
+        let app = self.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            app.sound_report_pending.set(false);
+            // The scheduled report starts its ten seconds again from here, so a
+            // drag does not leave one following a moment behind it.
+            app.jellyfin_reported.set(0);
+            app.report_to_jellyfin(JellyfinMoment::Progress);
+        });
+    }
+
     fn save_volume_soon(self: &Rc<Self>) {
         if self.volume_save_pending.replace(true) {
             return;
@@ -2152,6 +3076,12 @@ impl App {
             .as_ref()
             .map(|controls| controls.row())
             .unwrap_or(Row::None);
+        // Swallowed rather than passed on: there is nowhere sideways to go in
+        // a list, and seeking the film out from under an open chooser would be
+        // worse than doing nothing.
+        if matches!(row, Row::Subtitles | Row::Audio) {
+            return;
+        }
         if row == Row::Buttons || row == Row::Volume {
             if let Some(controls) = self.controls.borrow().as_ref() {
                 if row == Row::Volume {
@@ -2310,6 +3240,7 @@ impl App {
         // Cleared here so it belongs to one screen only: a page that wants Up
         // to land somewhere particular says so after wiring its navigation.
         *self.nav_header_entry.borrow_mut() = None;
+        *self.nav_middle.borrow_mut() = Vec::new();
         *self.nav_footer.borrow_mut() = footer.to_vec();
 
         let mut stops: Vec<gtk::Widget> = header.iter().map(|b| b.clone().upcast()).collect();
@@ -2451,15 +3382,21 @@ impl App {
         let list = self.nav_list.borrow().clone();
         let footer = self.nav_footer.borrow().clone();
         let header = self.nav_header.borrow().clone();
+        let middle = self.nav_middle.borrow().clone();
 
         let Some(list) = list else {
             // A screen of buttons and no rows. Between the two rows by name,
             // since a directional search cannot reliably get from one to the
             // other when they are not above one another on the page.
             let focused = |buttons: &[gtk::Button]| buttons.iter().any(|button| button.has_focus());
+            // Three rows where there is a middle one, and the middle is
+            // stepped over rather than stopped at when it is empty - which is
+            // every screen but the empty page.
             let landing = match delta {
-                _ if delta > 0 && focused(&header) => footer.first(),
-                _ if delta < 0 && focused(&footer) => header.first(),
+                _ if delta > 0 && focused(&header) => middle.first().or(footer.first()),
+                _ if delta > 0 && focused(&middle) => footer.first(),
+                _ if delta < 0 && focused(&footer) => middle.first().or(header.first()),
+                _ if delta < 0 && focused(&middle) => header.first(),
                 _ => None,
             };
             if let Some(button) = landing {
@@ -2569,9 +3506,226 @@ impl App {
         };
         let showing = playback.toggle_subtitles();
         self.subtitles_hidden.set(!showing);
-        if let Some(controls) = self.controls.borrow().as_ref() {
-            controls.set_subtitles(playback.has_subtitles(), showing);
+        self.push_subtitle_state();
+        self.wake_controls();
+    }
+
+    /// Steps one output to the next audio track in the file, on `A` for the
+    /// primary and `S` for the secondary.
+    ///
+    /// Ahead of the chooser rather than instead of it: switching live is
+    /// proven, and this makes it reachable while the rest - a menu per output,
+    /// and the branch regrouping that two outputs on one track needs - is
+    /// built. The reason it says nothing on screen is that there is nowhere
+    /// yet to say it; the chooser is where a track name belongs.
+    fn cycle_audio(&self, role: &str) {
+        let Some(playback) = self.playback.borrow().clone() else {
+            return;
+        };
+        if let Err(reason) = playback.cycle_audio(role) {
+            eprintln!("Cannot step the {role} audio: {reason}");
         }
+        self.wake_controls();
+    }
+
+    /// The chooser's rows and which of them is in force: Off, then everything
+    /// the video offers, in the order the media page lists them.
+    ///
+    /// Browsing for a file is deliberately not among them, though the media
+    /// page's version of this list ends with it. That opens a screen of its
+    /// own, and going looking on disk belongs to the page you choose from
+    /// before pressing play rather than to a list laid over a running film.
+    ///
+    /// "Off" rather than the page's "None", because on the strip it is the
+    /// same state the icon and the toggle already call off.
+    fn subtitle_entries(&self) -> (Vec<String>, Option<usize>) {
+        let mut entries = vec!["Off".to_string()];
+        let chosen = self.subtitle.borrow().clone();
+        // Off unless something matches, which is also the answer when a
+        // remembered choice names a subtitle this video does not have.
+        let mut current = Some(0);
+        for (position, option) in self.subtitle_options.borrow().iter().enumerate() {
+            if chosen.as_ref() == Some(&option.choice()) {
+                current = Some(position + 1);
+            }
+            entries.push(subtitle_label(option));
+        }
+        (entries, current)
+    }
+
+    /// One output's soundtrack list, and which row it is playing.
+    ///
+    /// The film's own tracks, with "None" first for the second output only:
+    /// playing nothing on the second is a legitimate choice in a way it is not
+    /// on the first, where it would mean a film with no sound at all.
+    ///
+    /// Browsing for a separate audio file is deliberately not here, though the
+    /// media page's version of this list ends with it. That opens a screen of
+    /// its own, and going looking on disk belongs to the page you choose from
+    /// before pressing play - the same rule the subtitle chooser follows.
+    /// Takes the playback rather than reading it off `self`, because playback
+    /// starting has not put it into its cell yet - the same reason
+    /// [`Self::show_subtitle_state`] takes one. Reading `self` here marked the
+    /// first row of both lists on every film, since with no playback to ask,
+    /// nothing matched what was playing.
+    fn audio_entries(&self, playback: &Playback, role: Role) -> (Vec<String>, Option<usize>) {
+        let offers_none = role == Role::Secondary;
+        let mut entries = Vec::new();
+        if offers_none {
+            entries.push("None".to_string());
+        }
+        let playing = playback.playing_on(role.key());
+        let offset = usize::from(offers_none);
+        // None when the output is on a separate file, which this list has no
+        // row for: nothing in it is in force, so nothing is marked.
+        let mut current = match playing {
+            Some(Playing::File(_)) => None,
+            None if offers_none => Some(0),
+            _ => None,
+        };
+        for (position, track) in self.tracks.borrow().iter().enumerate() {
+            if playing == Some(Playing::Track(track.index)) {
+                current = Some(position + offset);
+            }
+            entries.push(describe_audio_track(track));
+        }
+        (entries, current)
+    }
+
+    /// Fills both outputs' menus with what this video offers.
+    fn push_audio_entries(&self, playback: &Playback, controls: &Rc<Controls>) {
+        for (index, role) in [Role::Primary, Role::Secondary].into_iter().enumerate() {
+            let (entries, current) = self.audio_entries(playback, role);
+            controls.set_audio_entries(index, &entries, current);
+        }
+    }
+
+    /// Puts one output onto the soundtrack at `at` in its own list, without
+    /// stopping the film.
+    fn choose_audio(self: &Rc<Self>, role: &str, at: usize) {
+        let Some(playback) = self.playback.borrow().clone() else {
+            return;
+        };
+        let offers_none = role == Role::Secondary.key();
+        // The "None" row on the second output's list, which is a row rather
+        // than a track and so cannot be looked up among them.
+        let wanted = match (offers_none, at) {
+            (true, 0) => None,
+            _ => {
+                let index = at - usize::from(offers_none);
+                match self.tracks.borrow().get(index) {
+                    Some(track) => Some(Playing::Track(track.index)),
+                    None => return,
+                }
+            }
+        };
+        if let Err(reason) = playback.set_audio(role, wanted) {
+            eprintln!("Cannot change the {role} soundtrack: {reason}");
+        }
+        if let Some(controls) = self.controls.borrow().clone() {
+            self.push_audio_entries(&playback, &controls);
+        }
+    }
+
+    /// Tells the strip what subtitles are doing and what there is to choose
+    /// from, which is one answer in three places: whether the icon can be
+    /// worked at all, whether it is lit, and what the chooser lists.
+    ///
+    /// Takes both rather than reading them off `self`, because playback
+    /// starting has not put either into its cell yet.
+    fn show_subtitle_state(&self, playback: &Playback, controls: &Rc<Controls>) {
+        // What the video offers, not what is attached. The icon opens a list
+        // that includes turning subtitles on, so a film started with them off
+        // has to be able to reach it - which asking whether anything is
+        // attached would refuse.
+        let offers = !self.subtitle_options.borrow().is_empty() || playback.has_subtitles();
+        // What has been chosen, not what the pipeline has got to yet.
+        //
+        // A switch takes a moment to arrive, and the overlay is deliberately
+        // blank until it does - see `Playback::set_subtitle`. An icon that
+        // read the pipeline therefore dimmed at the start of every switch and
+        // stayed dim, because nothing comes back to ask again once the
+        // subtitle lands. The choice is the honest answer to what the icon is
+        // saying: subtitles are on, and one is on its way.
+        let showing = self.subtitle.borrow().is_some() && !self.subtitles_hidden.get();
+        controls.set_subtitles(offers, showing);
+        let (entries, current) = self.subtitle_entries();
+        controls.set_subtitle_entries(&entries, current);
+    }
+
+    /// The same, for everywhere that can simply ask what is playing.
+    fn push_subtitle_state(&self) {
+        let playback = self.playback.borrow().clone();
+        let controls = self.controls.borrow().clone();
+        if let (Some(playback), Some(controls)) = (playback, controls) {
+            self.show_subtitle_state(&playback, &controls);
+        }
+    }
+
+    /// Takes a row from the chooser and puts it into the film already running.
+    ///
+    /// Row zero is Off; the rest follow `subtitle_options` in order, which is
+    /// the order [`Self::subtitle_entries`] built them in. The choice is
+    /// remembered as well as applied, the same as choosing one from the media
+    /// page: it is the same decision, made later.
+    fn choose_subtitle(self: &Rc<Self>, entry: usize) {
+        let playback = self.playback.borrow().clone();
+        let file = self.file.borrow().clone();
+        let (Some(playback), Some(file)) = (playback, file) else {
+            return;
+        };
+        let picked = match entry.checked_sub(1) {
+            None => None,
+            Some(index) => match self.subtitle_options.borrow().get(index) {
+                Some(option) => Some(option.choice()),
+                // A list that changed under the press. Nothing to apply, and
+                // the mark stays where it was.
+                None => return,
+            },
+        };
+
+        // Already what is playing, and already showing it. Nothing to do, and
+        // doing it anyway would rebuild the subtitle chain to arrive back
+        // where it started - a blank second in the middle of a film for no
+        // reason. This is also what makes pressing straight through the
+        // chooser a way of closing it, since it opens on this very row.
+        //
+        // The second half is not redundant: picking the subtitle that is
+        // already chosen but switched off is how it is asked for again.
+        //
+        // Asked of what has been chosen rather than of the pipeline, for the
+        // reason `show_subtitle_state` gives - mid-switch the pipeline is
+        // deliberately showing nothing, and taking that at face value would
+        // make every second press of the same row a needless switch.
+        if picked == *self.subtitle.borrow() && self.subtitles_hidden.get() == (entry == 0) {
+            return;
+        }
+
+        // Located here for the reason it is at the start of playback: finding
+        // one can need the server address and access token, which are ours to
+        // know and the pipeline's to be kept out of.
+        let located = match self.locate_subtitle(&file, picked.as_ref()) {
+            Ok(located) => located,
+            // The same answer playback gives when a subtitle cannot be found
+            // as a film opens: it gives up the subtitle and not the film.
+            // Nothing is recorded either, so the mark stays on whatever is
+            // still playing - which is what says the choice did not take.
+            Err(e) => {
+                eprintln!("{e}");
+                return;
+            }
+        };
+        if let Err(e) = playback.set_subtitle(located.as_ref()) {
+            eprintln!("{e}");
+            return;
+        }
+
+        *self.subtitle.borrow_mut() = picked;
+        // Choosing one is asking to see it, whatever the toggle was doing for
+        // the last. Off is the exception, being the toggle said deliberately.
+        self.subtitles_hidden.set(entry == 0);
+        self.remember_tracks();
+        self.push_subtitle_state();
         self.wake_controls();
     }
 
@@ -2876,6 +4030,9 @@ impl App {
             // behind it without one.
             controls.reveal_pointer();
         }
+        // Before the playback is taken, because the position is read from
+        // it and a stopped report with nowhere to read from would file zero.
+        self.report_to_jellyfin(JellyfinMoment::Stopped);
         if let Some(playback) = self.playback.borrow_mut().take() {
             playback.stop();
             if wait_for_kodi {
@@ -2893,6 +4050,59 @@ impl App {
     /// position Kodi's own interface was just showing and the two never
     /// visibly disagree. Its answer stands even when it holds no resume point:
     /// a film Kodi considers unwatched starts at the beginning rather than
+    /// Works out where a chosen subtitle actually comes from.
+    ///
+    /// The three kinds resolve against three different things - the video's
+    /// own folder, the path as given, and the paired server - which is why
+    /// this is here rather than in the pipeline: only the application knows
+    /// all three. A library's subtitle resolves to a URL carrying the access
+    /// token, and that URL is built here, used, and never stored.
+    fn locate_subtitle(
+        &self,
+        source: &Source,
+        choice: Option<&crate::subtitles::SubtitleChoice>,
+    ) -> Result<Option<crate::subtitles::SubtitleSource>, String> {
+        use crate::subtitles::{SubtitleChoice, SubtitleSource};
+
+        let uri_for = |path: std::path::PathBuf| {
+            glib::filename_to_uri(&path, None)
+                .map(|uri| SubtitleSource::Uri(uri.to_string()))
+                .map_err(|e| format!("Can't open {}: {e}", path.display()))
+        };
+
+        match choice {
+            None => Ok(None),
+            Some(SubtitleChoice::Embedded(index)) => Ok(Some(SubtitleSource::Embedded(*index))),
+            // A name, which means the folder the video is in. A source with no
+            // folder - anything opened by URL - has no subtitle files beside
+            // it to have chosen in the first place.
+            Some(SubtitleChoice::External(name)) => source
+                .local()
+                .and_then(|video| video.parent())
+                .map(|folder| folder.join(name))
+                .ok_or_else(|| format!("Can't find {name}: it sits beside a local video"))
+                .and_then(uri_for)
+                .map(Some),
+            // A path, which means itself. Chosen by hand from somewhere else
+            // on disk, or named on the command line, and so not tied to where
+            // the video happens to live.
+            Some(SubtitleChoice::File(path)) => uri_for(path.clone()).map(Some),
+            // Only a video the library is playing has these, and both halves
+            // are needed: the client holds the address and token, the item
+            // holds which media source the index counts against.
+            Some(SubtitleChoice::Library(index)) => {
+                let client = self.jellyfin.borrow().clone();
+                let item = self.jellyfin_item.borrow().clone();
+                match (client, item) {
+                    (Some(client), Some(item)) => Ok(Some(SubtitleSource::Uri(
+                        client.subtitle_url(&item, *index),
+                    ))),
+                    _ => Err("Can't fetch that subtitle: it belongs to a library this video did not come from".to_string()),
+                }
+            }
+        }
+    }
+
     /// wherever our own file happens to remember. Only a Kodi that does not
     /// answer at all falls back to `positions.json`.
     ///
@@ -2911,6 +4121,9 @@ impl App {
         if let Some(item) = self.kodi_item.borrow().as_ref() {
             return item.resume_ns;
         }
+        if let Some(item) = self.jellyfin_item.borrow().as_ref() {
+            return item.resume_ns;
+        }
         crate::config::load_resume(&key)
             .and_then(|resume| resume.resume_position(self.config.borrow().resume_min_percent()))
     }
@@ -2923,6 +4136,12 @@ impl App {
     fn storage_key(&self) -> Option<String> {
         if let Some(item) = self.kodi_item.borrow().as_ref() {
             return Some(item.key());
+        }
+        // The item id, never the stream address: that carries an access token
+        // which changes when it is regenerated, and every position filed
+        // against the old one would be orphaned.
+        if let Some(item) = self.jellyfin_item.borrow().as_ref() {
+            return Some(format!("jellyfin:{}", item.id));
         }
         self.file.borrow().as_ref().map(Source::key)
     }
@@ -2947,7 +4166,16 @@ impl App {
     /// chain everything else uses. Kept as one accessor so no caller has to
     /// know that Kodi is currently the only thing that supplies one.
     fn launcher_title(&self) -> String {
-        self.kodi_item
+        if let Some(title) = self
+            .kodi_item
+            .borrow()
+            .as_ref()
+            .map(|item| item.title.clone())
+            .filter(|title| !title.is_empty())
+        {
+            return title;
+        }
+        self.jellyfin_item
             .borrow()
             .as_ref()
             .map(|item| item.title.clone())
@@ -3423,7 +4651,13 @@ impl App {
     /// two from being two designs.
     fn behind_artwork(self: &Rc<Self>, content: &gtk::Box) -> gtk::Overlay {
         let backdrop = crate::artwork::Artwork::backdrop();
-        backdrop.set_texture(self.backdrop_art.borrow().clone());
+        let texture = self.backdrop_art.borrow().clone();
+        let arrived = texture.is_some() && self.fade_art.get();
+        backdrop.set_texture(texture);
+        if arrived {
+            fade_in(&backdrop);
+        }
+        *self.backdrop_widget.borrow_mut() = Some(backdrop.clone());
 
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&backdrop));
@@ -3612,14 +4846,32 @@ impl App {
         // the gap that appeared to sit between the poster and the rows.
         column.set_hexpand(false);
 
+        // How tall the frame actually is, which is the poster's height for a
+        // poster and less for anything wider.
+        //
+        // **An episode is not a poster.** Its Primary image is a 16:9 still
+        // from the episode, and cropping that into a two-by-three slot scales
+        // it to fill the height and throws away the sides - which is most of
+        // the picture. Reported on 2026-08-16. So a picture wider than the
+        // slot keeps the slot's *width* and takes only the height it needs,
+        // sitting shorter in the column. Anything at or narrower than two by
+        // three is a real poster and is unaffected.
+        //
+        // The width never changes, whatever the shape: it is what the column
+        // is sized to, and letting it vary would move the page beside it every
+        // time a different kind of thing was loaded.
+        let frame_height = poster_frame_height(self.poster_art.borrow().as_ref(), width, height);
+
         let frame = gtk::Box::builder()
             .css_classes(["tp-poster"])
             .halign(gtk::Align::Start)
-            // Clipped, so a poster that is not exactly two by three is
-            // cropped by the frame rather than allowed to reshape it.
+            // Clipped, so a poster a few pixels out of square is cropped by
+            // the frame rather than allowed to reshape it. A picture of a
+            // quite different shape is given a frame of its own shape above,
+            // so there is nothing left for this to cut off.
             .overflow(gtk::Overflow::Hidden)
             .build();
-        frame.set_size_request(width.round() as i32, height.round() as i32);
+        frame.set_size_request(width.round() as i32, frame_height.round() as i32);
 
         match self.poster_art.borrow().clone() {
             Some(texture) => {
@@ -3638,6 +4890,9 @@ impl App {
                 picture.set_texture(Some(texture));
                 picture.set_hexpand(true);
                 picture.set_vexpand(true);
+                if self.fade_art.get() {
+                    fade_in(&picture);
+                }
                 frame.append(&picture);
             }
             // Nothing found, which is the common case: of the 123 film folders
@@ -3646,6 +4901,7 @@ impl App {
             // it keeps its place inside it at every window size.
             None => frame.append(&video_file_image(width * 0.42)),
         }
+        *self.poster_frame.borrow_mut() = Some(frame.clone());
         column.append(&frame);
 
         let facts = gtk::Box::builder()
@@ -3702,6 +4958,119 @@ impl App {
             facts.append(&line);
         }
         column.append(&facts);
+
+        // What show this is, under the details of the file it lives in.
+        //
+        // Only for an episode, and only under everything else: the page names
+        // the episode, because that is what is being watched, and the series
+        // is the answer to "which programme is that" rather than a heading for
+        // it. A film has neither and this is simply absent.
+        //
+        // The picture is the *series'* poster, which is a different thing from
+        // the poster slot above: for an episode that slot holds a still from
+        // the episode itself.
+        let series_title = self.details.borrow().series_title.clone();
+        let series_art = self.series_art.borrow().clone();
+        // Whether a picture is on the way, which is not the same as having
+        // one: this page is built long before either source answers.
+        //
+        // The library is asked directly rather than through `Details`, and it
+        // has to be. A local episode's series poster is a path found while the
+        // page is being resolved, so it is in hand by now; a cast one is an
+        // HTTP request still in flight, so `series_poster` is empty at this
+        // moment and stays empty until after the page exists. Consulting only
+        // that field built no frame for a cast episode, and the picture then
+        // had nowhere to go when it arrived - which is exactly what it looked
+        // like: the title without it.
+        let expecting_series_art =
+            series_art.is_some()
+                || self.details.borrow().series_poster.is_some()
+                || self.jellyfin_item.borrow().as_ref().is_some_and(|item| {
+                    item.series_poster_tag.is_some() || !item.season_id.is_empty()
+                });
+        if !series_title.is_empty() || expecting_series_art {
+            let series = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(px(8.0))
+                .margin_top(px(10.0))
+                .margin_start(px(4.0))
+                .margin_end(px(4.0))
+                .build();
+
+            // Built whenever a picture is *expected* rather than only when
+            // one is already decoded: a library's is a file read on a thread
+            // and a cast one is an HTTP request, so at the moment this page is
+            // built there is usually nothing to draw yet. The frame is kept and
+            // `show_late_series_art` fills it - which is why the title alone
+            // appeared at first.
+            if expecting_series_art {
+                // Three eighths of the poster's width: a reference beside the
+                // details rather than a second poster competing with the one
+                // above it, and settled by looking at it rather than by
+                // reasoning about it.
+                let small = width * 3.0 / 8.0;
+                let frame = gtk::Box::builder()
+                    .css_classes(["tp-poster"])
+                    .halign(gtk::Align::Start)
+                    .valign(gtk::Align::Start)
+                    .overflow(gtk::Overflow::Hidden)
+                    .build();
+                // **Explicitly not expanding, and this is the whole bug it
+                // fixes.** The picture inside asks to expand so that it fills
+                // this frame, and GTK propagates that upwards - so in a
+                // horizontal row the frame grew to take half the width, while
+                // its height stayed at what was asked for. The picture then
+                // covered a box far wider than it was tall and was cropped top
+                // and bottom. A size request is a minimum; this is what makes
+                // it the size. The column above sets the same two for the same
+                // reason.
+                frame.set_hexpand(false);
+                frame.set_vexpand(false);
+                frame.set_size_request(
+                    small.round() as i32,
+                    series_frame_height(series_art.as_ref(), small).round() as i32,
+                );
+                if let Some(texture) = series_art {
+                    frame.append(&series_picture(texture));
+                }
+                *self.series_frame.borrow_mut() = Some(frame.clone());
+                series.append(&frame);
+            }
+
+            // The show, and which run of it, stacked beside the picture.
+            let words = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .valign(gtk::Align::Start)
+                .hexpand(true)
+                .build();
+            for (text, dim) in [(series_title.clone(), false), (self.season_label(), true)] {
+                if text.is_empty() {
+                    continue;
+                }
+                let line = gtk::Label::new(Some(&text));
+                line.add_css_class("tp-fact");
+                if dim {
+                    // Subordinate to the name above it: which season is a
+                    // qualifier, not a second thing of equal weight.
+                    line.add_css_class("tp-fact-name");
+                }
+                line.set_xalign(0.0);
+                line.set_yalign(0.0);
+                line.set_wrap(true);
+                line.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                // Capped like the facts above it, and for the same reason: a
+                // long show name would otherwise ask for the width of its own
+                // text and push the whole page to the right.
+                line.set_max_width_chars(16);
+                words.append(&line);
+            }
+            if words.first_child().is_some() {
+                series.append(&words);
+            }
+
+            column.append(&series);
+        }
+
         column
     }
 
@@ -3942,12 +5311,19 @@ impl App {
     /// is floating over a film that is still loaded.
     ///
     /// Returns the panel and its buttons, since what each one does depends on
-    /// which screen asked for it.
+    /// which screen asked for it. The Jellyfin button is absent when there is
+    /// already a pairing, and the Cancel button when `cancel` is false.
     fn choose_source_panel(
         self: &Rc<Self>,
         scale: f64,
         cancel: bool,
-    ) -> (gtk::Box, gtk::Button, gtk::Button, Option<gtk::Button>) {
+    ) -> (
+        gtk::Box,
+        gtk::Button,
+        gtk::Button,
+        Option<gtk::Button>,
+        Option<gtk::Button>,
+    ) {
         let px = |base: f64| (base * scale).round() as i32;
 
         let middle = gtk::Box::builder()
@@ -3974,6 +5350,11 @@ impl App {
 
         const BROWSE_ICON: &[u8] = include_bytes!("../data/ui/browse.png");
         const LINK_ICON: &[u8] = include_bytes!("../data/ui/link.png");
+        const CONNECT_ICON: &[u8] = include_bytes!("../data/ui/connect.png");
+        // Green in the file rather than tinted here, because a GTK image
+        // cannot be recoloured - the same reason the muted soundtrack mark
+        // fades with opacity instead of changing colour.
+        const CONNECTED_ICON: &[u8] = include_bytes!("../data/ui/connected.png");
 
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -4009,6 +5390,54 @@ impl App {
         buttons.append(&address);
         middle.append(&buttons);
 
+        // Beneath the pair rather than beside them, for the reason the Cancel
+        // button below is: those two choose a video and this does not. It
+        // makes the television reachable from a phone, and the video is chosen
+        // there afterwards.
+        //
+        // A button only while there is something to do. Once TinePlayer is
+        // paired it is already a cast target whenever it is running, so the
+        // button would offer to do something that is done - but the space says
+        // so rather than going quiet, because "is this television reachable
+        // from my phone?" is exactly the question this screen is looked at to
+        // answer, and an absence is not an answer.
+        let connect = match self.jellyfin_connected() {
+            false => {
+                let connect = gtk::Button::new();
+                connect.set_child(Some(&marked_face(
+                    marked_image(CONNECT_ICON, PLAY_MARK_PX * scale),
+                    "  Connect to Jellyfin",
+                )));
+                connect.add_css_class("tp-button");
+                connect.add_css_class("tp-jellyfin");
+                connect.set_halign(gtk::Align::Center);
+                name_it(&connect, "Connect to Jellyfin");
+                middle.append(&connect);
+                Some(connect)
+            }
+            // Stated, not offered. It is not focusable and takes no part in
+            // the navigation: there is nothing to press, and a stop that does
+            // nothing is worse than no stop at all.
+            true => {
+                let words = match self.jellyfin_server_label() {
+                    Some(server) => format!("  Connected to Jellyfin ({server})"),
+                    None => "  Connected to Jellyfin".to_string(),
+                };
+                // The same mark-and-words shape the buttons above use, so the
+                // line reads as belonging with them rather than as a caption
+                // that wandered in - but as a plain box, since there is
+                // nothing to press.
+                let connected =
+                    marked_face(marked_image(CONNECTED_ICON, PLAY_MARK_PX * scale), &words);
+                connected.add_css_class("tp-connected");
+                connected.set_halign(gtk::Align::Center);
+                connected.set_can_focus(false);
+                name_it(&connected, &words);
+                middle.append(&connected);
+                None
+            }
+        };
+
         // On a row of its own beneath them rather than beside them: it is not
         // a third way to choose a video, and standing in line with two that
         // are made it look like one.
@@ -4019,7 +5448,7 @@ impl App {
             middle.append(&back);
             back
         });
-        (middle, browse, address, back)
+        (middle, browse, address, connect, back)
     }
 
     /// The screen with no video on it: an invitation, and the two ways to
@@ -4045,7 +5474,7 @@ impl App {
             // its contents and takes the footer's corner with it.
             .build();
 
-        let (middle, browse, address, _) = self.choose_source_panel(scale, false);
+        let (middle, browse, address, connect, _) = self.choose_source_panel(scale, false);
         content.append(&middle);
 
         {
@@ -4060,6 +5489,13 @@ impl App {
             address.connect_clicked(move |_| {
                 app.sounds.borrow().click();
                 app.show_paste_uri();
+            });
+        }
+        if let Some(connect) = connect.as_ref() {
+            let app = self.clone();
+            connect.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.start_jellyfin_connect(ConnectFrom::Menu);
             });
         }
 
@@ -4082,15 +5518,21 @@ impl App {
         // rows, which is what they look like they should do - as one list they
         // fell through to GTK's own directional search, and it will not find a
         // button in the bottom corner from one in the middle of the page.
-        let header = [browse.clone(), address];
+        let header = vec![browse.clone(), address];
+        // Its own row, because it is drawn on its own line: down from the pair
+        // reaches it, and down again reaches the corner. As a third entry in
+        // the header it was reachable only sideways, which is not what a
+        // button under two others looks like it should need.
+        let connect_row: Vec<gtk::Button> = connect.into_iter().collect();
         let mut footer = vec![gear];
         footer.extend(fullscreen);
         self.set_nav(None, &header, &footer);
+        self.set_nav_middle(&connect_row);
         // And the arrows have to be sent somewhere. `wire_navigation` does
         // this for every screen built around a list, and this one is not - so
         // without it the keys reached a focused button, which does nothing
         // with them, and stopped there.
-        for button in header.iter().chain(footer.iter()) {
+        for button in header.iter().chain(connect_row.iter()).chain(footer.iter()) {
             self.wire_arrows(button.upcast_ref());
         }
         // Deferred until the page is actually in the window. This is built
@@ -4229,11 +5671,15 @@ impl App {
     /// on screen before it - a film's details held back until its wallpaper
     /// loads is the wrong thing to wait for.
     fn start_art_load(self: &Rc<Self>) {
-        let (poster, backdrop) = {
+        let (poster, backdrop, series) = {
             let details = self.details.borrow();
-            (details.poster.clone(), details.backdrop.clone())
+            (
+                details.poster.clone(),
+                details.backdrop.clone(),
+                details.series_poster.clone(),
+            )
         };
-        if poster.is_none() && backdrop.is_none() {
+        if poster.is_none() && backdrop.is_none() && series.is_none() {
             return;
         }
 
@@ -4246,12 +5692,12 @@ impl App {
             let read = |art: Option<crate::metadata::Art>| {
                 art.as_ref().and_then(crate::metadata::load_image)
             };
-            let _ = sender.send((read(poster), read(backdrop)));
+            let _ = sender.send((read(poster), read(backdrop), read(series)));
         });
 
         let app = self.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
-            let (poster, backdrop) = match receiver.try_recv() {
+            let (poster, backdrop, series) = match receiver.try_recv() {
                 Ok(art) => art,
                 Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -4280,11 +5726,13 @@ impl App {
             };
             *app.poster_art.borrow_mut() = decode(poster);
             *app.backdrop_art.borrow_mut() = decode(backdrop);
+            *app.series_art.borrow_mut() = decode(series);
 
-            // Only worth redrawing the page that shows it, and only while it
-            // is still the page on screen.
+            // Put into the page rather than rebuilding it, so that somebody
+            // already choosing their tracks is left where they were.
             if *app.screen.borrow() == Screen::Menu {
-                app.show_menu();
+                app.show_late_art();
+                app.show_late_series_art();
             }
             glib::ControlFlow::Break
         });
@@ -5167,6 +6615,7 @@ impl App {
         *self.details.borrow_mut() = Default::default();
         *self.poster_art.borrow_mut() = None;
         *self.backdrop_art.borrow_mut() = None;
+        *self.series_art.borrow_mut() = None;
         // Anything still being read for the file being forgotten is now for
         // the wrong one, and this is what tells it so.
         self.art_generation.set(self.art_generation.get() + 1);
@@ -5214,6 +6663,19 @@ impl App {
             }
         }
 
+        // A video that did not come from Jellyfin must not wear the details of
+        // one that did. Cleared here rather than when playback ends, because
+        // `begin_playback` stops the previous playback on its way in - which
+        // wiped the item a moment before anything could be reported about it.
+        let cast = self
+            .jellyfin_item
+            .borrow()
+            .as_ref()
+            .is_some_and(|item| source.uri().contains(&item.id));
+        if !cast {
+            *self.jellyfin_item.borrow_mut() = None;
+        }
+
         // What the page shows about the file, from the sidecar beside it and
         // the container's own tags. Cheap - a small file and a few `is_file`
         // calls - and the artwork behind whatever it found is read separately,
@@ -5223,6 +6685,7 @@ impl App {
         // moved out of `media`, and this reads the whole of it.
         *self.poster_art.borrow_mut() = None;
         *self.backdrop_art.borrow_mut() = None;
+        *self.series_art.borrow_mut() = None;
         self.art_generation.set(self.art_generation.get() + 1);
         let beside = {
             let config = self.config.borrow();
@@ -5236,7 +6699,17 @@ impl App {
 
         let duration_ns = media.duration_ns;
         let tracks = media.audio;
-        let mut options = crate::subtitles::options(source.local(), &media.subtitles);
+        // What the library holds beside the video, which only a cast video has.
+        // These are files on the server rather than streams in the container,
+        // so they are offered alongside the embedded ones rather than counted
+        // among them.
+        let library = self
+            .jellyfin_item
+            .borrow()
+            .as_ref()
+            .map(|item| item.streams.subtitle_options())
+            .unwrap_or_default();
+        let mut options = crate::subtitles::options(source.local(), &media.subtitles, &library);
 
         let (primary_language, secondary_language, subtitle_language, described) = {
             let config = self.config.borrow();
@@ -5413,6 +6886,10 @@ impl App {
         // Now that the video and its audio files are both settled, whatever
         // was measured about that pairing applies again.
         self.load_baselines();
+        // What the library says, over what the stream could be asked. A cast
+        // video has no sidecar beside it and its container tags are thin, so
+        // without this it arrives with a title and an empty page.
+        self.overlay_jellyfin_details();
         // The page can be drawn without artwork and filled in when it lands,
         // so this is started rather than waited for.
         self.start_art_load();
@@ -6246,7 +7723,7 @@ impl App {
     /// browsing would ever lead to it.
     fn choose_video(self: &Rc<Self>) {
         let scale = self.scale.get();
-        let (panel, browse, address, cancel) = self.choose_source_panel(scale, true);
+        let (panel, browse, address, connect, cancel) = self.choose_source_panel(scale, true);
         let cancel = cancel.expect("asked for with a cancel button");
 
         // A floor rather than a fixed size, the way the Opening panel has one:
@@ -6269,6 +7746,13 @@ impl App {
                 app.show_paste_uri();
             });
         }
+        if let Some(connect) = connect.as_ref() {
+            let app = self.clone();
+            connect.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.start_jellyfin_connect(ConnectFrom::Menu);
+            });
+        }
         {
             let app = self.clone();
             cancel.connect_clicked(move |_| {
@@ -6281,7 +7765,9 @@ impl App {
         // than replacing it: what is loaded is still loaded, and backing out
         // returns to it.
         self.remember_origin();
-        self.set_nav(None, &[], &[cancel.clone(), browse.clone(), address]);
+        let mut stops = vec![cancel.clone(), browse.clone(), address];
+        stops.extend(connect);
+        self.set_nav(None, &[], &stops);
         *self.screen.borrow_mut() = Screen::VideoSource;
         self.window.set_child(Some(&self.modal(&panel)));
         browse.grab_focus();
@@ -6428,6 +7914,48 @@ impl App {
     /// the way to stop that recurring is to leave nowhere else to apply one.
     fn push_offset(&self, playback: &Playback, role: &str) {
         playback.set_offset_ms(role, self.offset_for(role));
+    }
+
+    /// Sends an output's level to the pipeline: what that output is set to,
+    /// times the master over both of them.
+    ///
+    /// The one road to a sink's level, for the reason `push_offset` is the one
+    /// road to its delay. Two outputs and a master mean two numbers behind
+    /// every level, and every place that rebuilt the sum by hand would be a
+    /// place free to leave the master out - which sounds exactly like a level
+    /// that ignores the control somebody just moved.
+    fn push_volume(&self, role: &str) {
+        let level = self.config.borrow().volume(role);
+        self.push_volume_at(role, level);
+    }
+
+    /// The same, for a level that is not in the configuration - which is any
+    /// level that is not being kept, such as everything silenced for a knock at
+    /// the door.
+    fn push_volume_at(&self, role: &str, level: f64) {
+        let level = self.effective(level);
+        if let Some(playback) = self.playback.borrow().as_ref() {
+            playback.set_volume(role, level);
+        }
+    }
+
+    /// What a level actually plays at once the master over both outputs is
+    /// taken into account. The only place the two are multiplied together.
+    fn effective(&self, level: f64) -> f64 {
+        level * self.config.borrow().master_volume()
+    }
+
+    /// Sends whether an output is actually silent: whether it is muted in its
+    /// own right, or everything is.
+    ///
+    /// The two are kept apart all the way down to here, which is what lets the
+    /// menu go on showing each output's own state while everything is quiet.
+    /// `muted` is passed in rather than read back, because a silence nobody is
+    /// keeping never reaches the configuration to be read from.
+    fn push_mute(&self, role: &str, muted: bool) {
+        if let Some(playback) = self.playback.borrow().as_ref() {
+            playback.set_muted(role, muted || self.hushed.get());
+        }
     }
 
     /// The same, for whatever is playing now, if anything is. Cloned out of
@@ -6930,6 +8458,11 @@ impl App {
             // playercorefactory.xml goes, and choosing it lands one level
             // above the folder that is.
             Item::KodiAdd => "Add User Data Folder".to_string(),
+            Item::JellyfinConnect => "Connect to Jellyfin".to_string(),
+            Item::JellyfinDisconnect => match self.jellyfin_server_label() {
+                Some(server) => format!("Disconnect from {server}"),
+                None => "Disconnect".to_string(),
+            },
             Item::Notices => "Third-Party Notices".to_string(),
         }
     }
@@ -7053,7 +8586,15 @@ impl App {
             // Kodi's user data lives apart from Kodi itself, and it does not
             // exist until Kodi has been run once.
             Item::KodiAdd => {
-                "For a Kodi that was not found, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
+                "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
+            }
+            // Says what will happen, because the answer is unusual enough to
+            // be worth knowing before pressing it: no password is ever typed
+            // into TinePlayer, which is the whole reason this is a code and
+            // not a login form.
+            Item::JellyfinConnect => "Find and connect to a Jellyfin server using Quick Connect.",
+            Item::JellyfinDisconnect => {
+                "Removes the access token stored on this machine and signs this device out of the server."
             }
             _ => return None,
         })
@@ -7125,6 +8666,105 @@ impl App {
             // There to be read. Landing on it would be landing on a sentence.
             Item::KodiNone => false,
             _ => true,
+        }
+    }
+
+    /// What to call the paired server on screen: its own name where it gave
+    /// one, and its address otherwise. `None` when there is no pairing at all.
+    fn jellyfin_server_label(&self) -> Option<String> {
+        self.jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .map(crate::jellyfin::Pairing::label)
+    }
+
+    /// Which run of the programme this is: "Season 2".
+    ///
+    /// The library's own wording wins where it gave one, because a number
+    /// cannot say everything a name can - season zero is "Specials", and
+    /// reading it back as "Season 0" would be wrong in the one case anybody
+    /// would notice. Empty for a film, and for an episode whose source said
+    /// neither.
+    fn season_label(&self) -> String {
+        let details = self.details.borrow();
+        if !details.season_name.is_empty() {
+            return details.season_name.clone();
+        }
+        match details.episode {
+            Some((season, _)) => format!("Season {season}"),
+            None => String::new(),
+        }
+    }
+
+    /// Whether there is a token to cast with, as the pane last read it.
+    fn jellyfin_connected(&self) -> bool {
+        self.jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .is_some_and(crate::jellyfin::Pairing::is_connected)
+    }
+
+    /// Whether the Jellyfin pane is what is on screen right now.
+    ///
+    /// Asked by the two things that can finish long after they were started -
+    /// a token going stale, and a server being told about a disconnection - so
+    /// that neither redraws a screen nobody is looking at or throws a panel
+    /// over a film. The screen is copied out rather than tested in place,
+    /// which is the rule `go_back` records: a caller acting on the answer takes
+    /// the same cell mutably.
+    fn showing_jellyfin_pane(&self) -> bool {
+        let screen = *self.screen.borrow();
+        screen == Screen::Settings && self.settings_category.get() == Category::Jellyfin
+    }
+
+    /// Which of the two shapes the Jellyfin pane takes.
+    fn jellyfin_pane(&self) -> JellyfinPane {
+        match self.jellyfin_connected() {
+            true => JellyfinPane::Connected,
+            false => JellyfinPane::NotConnected,
+        }
+    }
+
+    /// What the Jellyfin heading says under itself.
+    ///
+    /// What the feature is, since a pane nobody has set up says nothing else
+    /// about why it is there - and what pairing leaves behind, which is the
+    /// one thing about this worth stating outright. Obfuscating a credential
+    /// TinePlayer can read unattended would be theatre; saying where it is is
+    /// not.
+    fn jellyfin_group_note(&self) -> GroupNote {
+        // Which server, and as whom - the two facts the rows used to spend
+        // themselves on. Stated rather than offered, since neither is a thing
+        // to press: the way to change either is to disconnect and connect
+        // again, which is the row underneath.
+        let connected = {
+            let pairing = self.jellyfin_pairing.borrow();
+            pairing.as_ref().map(|pairing| {
+                let who = pairing
+                    .account
+                    .as_ref()
+                    .map(|account| account.user_name.clone())
+                    .filter(|name| !name.is_empty());
+                match who {
+                    Some(who) => format!("Connected to {} as {who}.", pairing.label()),
+                    None => format!("Connected to {}.", pairing.label()),
+                }
+            })
+        };
+        GroupNote {
+            sentence: match self.jellyfin_pane() {
+                JellyfinPane::NotConnected => {
+                    "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet.".to_string()
+                }
+                JellyfinPane::Connected => format!(
+                    "{} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet.",
+                    connected.unwrap_or_default(),
+                ),
+            },
+            // Named rather than opened. The folder holds the token, and a
+            // settings screen that offers to show somebody their own
+            // credential in a file manager is offering the wrong thing.
+            folder: None,
         }
     }
 
@@ -7264,6 +8904,13 @@ impl App {
                 if app.settings_category.get() == Category::Kodi {
                     *app.kodi_setups.borrow_mut() = app.known_kodis();
                 }
+                // Re-read for the same reason, and it is the more important of
+                // the two: the token in that file can be revoked from a
+                // dashboard on the other side of the house, and this pane is
+                // where somebody comes to find out that it was.
+                if app.settings_category.get() == Category::Jellyfin {
+                    *app.jellyfin_pairing.borrow_mut() = crate::jellyfin::load();
+                }
                 let panes: Vec<KodiPane> = app
                     .kodi_setups
                     .borrow()
@@ -7273,7 +8920,10 @@ impl App {
                         confinement: setup.confinement,
                     })
                     .collect();
-                let entries = app.settings_category.get().items(&panes);
+                let entries = app
+                    .settings_category
+                    .get()
+                    .items(&panes, app.jellyfin_pane());
                 *app.pane_items.borrow_mut() = entries.iter().map(|(_, item)| *item).collect();
 
                 for (index, (_, item)) in entries.iter().enumerate() {
@@ -7370,6 +9020,9 @@ impl App {
                     .iter()
                     .map(|(heading, item)| match (heading, item) {
                         (Some(_), Item::KodiType(index)) => app.kodi_group_note(*index),
+                        (Some(_), Item::JellyfinConnect | Item::JellyfinDisconnect) => {
+                            Some(app.jellyfin_group_note())
+                        }
                         _ => None,
                     })
                     .collect();
@@ -7710,6 +9363,8 @@ impl App {
             // about where Kodi keeps its settings.
             Item::KodiAdd => self.show_kodi_folder(&crate::browser::home()),
             Item::KodiPermission(index) => self.show_kodi_permission(index),
+            Item::JellyfinConnect => self.start_jellyfin_connect(ConnectFrom::Settings),
+            Item::JellyfinDisconnect => self.confirm_jellyfin_disconnect(),
             Item::Notices => self.show_notices(),
             Item::UpdateStatus => self.open_release_page(),
             _ => {}
@@ -7940,6 +9595,7 @@ impl App {
         *self.details.borrow_mut() = details;
         *self.poster_art.borrow_mut() = None;
         *self.backdrop_art.borrow_mut() = None;
+        *self.series_art.borrow_mut() = None;
         self.art_generation.set(self.art_generation.get() + 1);
         self.start_art_load();
     }
@@ -8845,6 +10501,26 @@ impl App {
         self.nav_stops.borrow_mut().push(widget.clone().upcast());
     }
 
+    /// Puts a row of buttons between the header and the footer.
+    ///
+    /// Called after [`set_nav`], which clears it. Up and down then step
+    /// header, middle, footer rather than stepping over the middle - which is
+    /// what a button drawn on its own line below two others looks like it
+    /// should do, and what it did not do when it was merely the third entry of
+    /// the header row.
+    ///
+    /// [`set_nav`]: Self::set_nav
+    fn set_nav_middle(&self, middle: &[gtk::Button]) {
+        *self.nav_middle.borrow_mut() = middle.to_vec();
+        // Into the tab order in the place it is on the page: after the header
+        // it sits under, before the footer in the corner.
+        let after = self.nav_header.borrow().len();
+        let mut stops = self.nav_stops.borrow_mut();
+        for (offset, button) in middle.iter().enumerate() {
+            stops.insert(after + offset, button.clone().upcast());
+        }
+    }
+
     /// Moves to the next or previous thing on this screen worth stopping on.
     ///
     /// Returns whether it did, so a screen with no stops of its own - a text
@@ -9287,6 +10963,612 @@ impl App {
         ok.grab_focus();
     }
 
+    // --- Jellyfin pairing ----------------------------------------------
+
+    /// Puts the settings screen back with the Jellyfin category showing.
+    ///
+    /// The counterpart to [`return_to_kodi_settings`], and it does the same
+    /// job: rebuilding is what re-reads the pairing file, so the rows state
+    /// what is stored rather than what was asked for.
+    ///
+    /// [`return_to_kodi_settings`]: Self::return_to_kodi_settings
+    fn return_to_jellyfin_settings(self: &Rc<Self>) {
+        // Any code still waiting is abandoned by leaving, so nothing arriving
+        // late can pair a server the viewer has walked away from.
+        self.jellyfin_attempt.set(self.jellyfin_attempt.get() + 1);
+        self.settings_category.set(Category::Jellyfin);
+        self.in_settings_pane.set(true);
+        self.show_settings();
+    }
+
+    /// Opens the connection flow, remembering where it was opened from.
+    ///
+    /// One dialog for the whole of it rather than a row per question. Pairing
+    /// is a single errand somebody does once, and splitting it across a
+    /// settings pane made three rows out of two facts - which server, and the
+    /// code that proves it is yours.
+    fn start_jellyfin_connect(self: &Rc<Self>, from: ConnectFrom) {
+        self.connect_from.set(from);
+        self.show_jellyfin_address();
+    }
+
+    /// Leaves the flow, by finishing it or backing out of it.
+    ///
+    /// Back to whichever screen opened it. Always returning to Settings would
+    /// strand somebody who started from the empty page and never went there.
+    fn leave_jellyfin_connect(self: &Rc<Self>) {
+        // Anything still polling belongs to an attempt that is now over.
+        self.jellyfin_attempt.set(self.jellyfin_attempt.get() + 1);
+        match self.connect_from.get() {
+            ConnectFrom::Settings => self.return_to_jellyfin_settings(),
+            ConnectFrom::Menu => self.show_menu(),
+        }
+    }
+
+    /// The first half of the dialog: which server.
+    ///
+    /// It looks for one while the field sits there, and fills it in with
+    /// whatever answers - so on the machine this is built for, a box wired to a
+    /// television and driven by a remote, the address need never be typed at
+    /// all. The field stays editable because a server reached across a VPN or
+    /// on another subnet will never answer a broadcast, and its owner knows the
+    /// address perfectly well.
+    ///
+    /// **What is found fills the field rather than becoming a list to choose
+    /// from.** A list would be a second question on a panel that has one, and
+    /// on a home network the answer is one server.
+    ///
+    /// **The field is not there while it looks.** An address box offered and
+    /// then filled in underneath somebody is an invitation to start typing
+    /// into something that is about to change; waiting, with a spinner and a
+    /// sentence saying so, asks nothing of anybody for the two seconds it
+    /// takes. It appears with the answer, whether or not there was one.
+    fn show_jellyfin_address(self: &Rc<Self>) {
+        /// Long enough for a server to answer twice over, short enough to sit
+        /// through. Jellyfin replies in milliseconds; the wait is for one that
+        /// is busy or asleep, not for the network.
+        const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+        /// What the waiting half of the panel is held to, so that the field
+        /// arriving changes what the panel says rather than how big it is.
+        /// The same floor the Opening panel keeps for the same reason.
+        const BODY_MIN: f64 = 132.0;
+
+        let scale = self.scale.get();
+        let page = wizard_page("Connect to Jellyfin");
+
+        // Both states live in here, which is what gives the panel one height:
+        // a spinner and a sentence while it looks, a sentence and a field
+        // afterwards.
+        let body = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(16)
+            .valign(gtk::Align::Center)
+            .build();
+        body.set_size_request(-1, (BODY_MIN * scale).round() as i32);
+        page.append(&body);
+
+        let spinner = gtk::Spinner::new();
+        let spin = (48.0 * scale).round() as i32;
+        spinner.set_size_request(spin, spin);
+        spinner.set_halign(gtk::Align::Center);
+        spinner.start();
+        body.append(&spinner);
+
+        let hint = wizard_text("Looking for a server on this network...", false);
+        body.append(&hint);
+
+        let field = gtk::Entry::new();
+        field.add_css_class("tp-path");
+        field.set_placeholder_text(Some("http://jellyfin.local:8096"));
+        gtk::prelude::EditableExt::set_alignment(&field, 0.5);
+        field.set_hexpand(true);
+        // Whatever was here before, which is the address of a server this
+        // installation has been paired with and may be pairing with again.
+        let known = self
+            .jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .map(|pairing| pairing.server.clone())
+            .unwrap_or_default();
+        field.set_text(&known);
+        // Hidden rather than merely empty: a widget that is not visible takes
+        // no space, which is what leaves the sentence centred in the body
+        // above it.
+        field.set_visible(false);
+        body.append(&field);
+
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        let connect = gtk::Button::with_label("Connect");
+        connect.add_css_class("tp-button");
+        connect.add_css_class("tp-action");
+        connect.set_sensitive(!field.text().trim().is_empty());
+        {
+            let connect = connect.clone();
+            field.connect_changed(move |field| {
+                connect.set_sensitive(!field.text().trim().is_empty());
+            });
+        }
+        buttons.append(&cancel);
+        buttons.append(&connect);
+        page.append(&buttons);
+
+        let start = {
+            let app = self.clone();
+            let field = field.clone();
+            move || {
+                let typed = field.text();
+                if typed.trim().is_empty() {
+                    return;
+                }
+                app.sounds.borrow().click();
+                app.begin_quick_connect(&typed);
+            }
+        };
+        {
+            let start = start.clone();
+            connect.connect_clicked(move |_| start());
+        }
+        {
+            let start = start.clone();
+            field.connect_activate(move |_| start());
+        }
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.leave_jellyfin_connect();
+            });
+        }
+
+        // Its own tab order. The field is deliberately not a stop yet: it is
+        // hidden, and a stop that cannot be seen is a place the focus
+        // disappears into. It is added when it appears.
+        self.set_nav(None, &[], &[]);
+        self.add_nav_stop(&cancel);
+        self.add_nav_stop(&connect);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinPanel;
+        // `dialog` rather than `modal`, so this is the same measure as every
+        // other panel that states something and asks a question. Left
+        // uncapped, a panel is as wide as its own longest sentence wants to
+        // be - which on a wide monitor is most of the screen, and makes the
+        // two halves of this one flow visibly different shapes.
+        self.window.set_child(Some(&self.dialog(&page)));
+        // Cancel while there is nothing else to be on. The field takes the
+        // focus the moment it appears, which is the two-second mark.
+        cancel.grab_focus();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::jellyfin::discover(LOOK_FOR));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            let found = match receiver.try_recv() {
+                Ok(found) => found,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            // Gone: cancelled, or already past this step. A panel taken out of
+            // the window has no root, which is cheaper to ask than remembering
+            // which screen replaced it.
+            if page.root().is_none() {
+                return glib::ControlFlow::Break;
+            }
+            // Whatever it found, the looking is over: the spinner goes and
+            // the field takes its place, as a stop and as the focus.
+            spinner.stop();
+            spinner.set_visible(false);
+            field.set_visible(true);
+            app.add_nav_stop(&field);
+            field.grab_focus();
+            field.select_region(0, -1);
+            match found.first() {
+                Some(server) => {
+                    hint.set_text(&format!("Found {} on this network.", server.name));
+                    // Only if nobody has typed since. Overwriting an address
+                    // somebody is part way through entering would be the worst
+                    // thing this could do with its answer.
+                    if field.text() == known {
+                        field.set_text(&server.address);
+                    }
+                }
+                None => hint.set_text(
+                    "No server answered on this network. Enter its address, which is also what a server on another network or behind a VPN needs.",
+                ),
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Writes down the address, then asks the server to start a pairing.
+    ///
+    /// A scheme is added when there is none, because "hoth:8096" is what
+    /// somebody types and every request made with it would fail with nothing on
+    /// screen to say why. Plain HTTP is what a Jellyfin server on a home
+    /// network answers to; anybody reaching one over the internet types the
+    /// https themselves.
+    fn begin_quick_connect(self: &Rc<Self>, typed: &str) {
+        let typed = typed.trim();
+        let address = match typed.contains("://") {
+            true => typed.to_string(),
+            false => format!("http://{typed}"),
+        };
+
+        let pairing = match self.jellyfin_pairing.borrow().clone() {
+            Some(mut pairing) => {
+                pairing.set_server(&address);
+                pairing
+            }
+            None => crate::jellyfin::Pairing::new(&address),
+        };
+        if let Err(e) = crate::jellyfin::save(&pairing) {
+            return self.jellyfin_notice("Could Not Save", &[&e]);
+        }
+        *self.jellyfin_pairing.borrow_mut() = Some(pairing);
+        self.show_jellyfin_code();
+    }
+
+    /// The second half of the dialog: the code, and waiting for it.
+    ///
+    /// A code rather than a login form, and that is not a matter of taste: this
+    /// runs on a television, where typing a password with a remote is
+    /// miserable, and it means no password is ever typed into TinePlayer at
+    /// all. The viewer approves it in a Jellyfin app they are already signed
+    /// in to.
+    ///
+    /// One thread does the whole of it - asking for the code, then polling
+    /// until somebody approves it - and reports each step back to the main loop
+    /// through a channel, which is the same shape everything else here uses to
+    /// talk to a server without the interface stopping.
+    fn show_jellyfin_code(self: &Rc<Self>) {
+        /// How often to ask whether the code has been approved. Often enough
+        /// that pressing approve on a phone and looking up at the television
+        /// shows it done, rarely enough not to be a request a second for the
+        /// several minutes somebody may take to find their phone.
+        const ASK_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+        /// Five minutes of asking. Jellyfin expires a code of its own accord
+        /// around then, so waiting longer only produces a code that cannot
+        /// work and a screen that does not say so.
+        const TRIES: usize = 150;
+
+        let Some(pairing) = self.jellyfin_pairing.borrow().clone() else {
+            return;
+        };
+        if pairing.server.is_empty() {
+            return;
+        }
+
+        let attempt = self.jellyfin_attempt.get() + 1;
+        self.jellyfin_attempt.set(attempt);
+
+        // Named for what it is rather than repeating the step before it. This
+        // half of the dialog is Jellyfin's own Quick Connect, and the words on
+        // screen match what the viewer is about to go looking for in their
+        // Jellyfin app - which is the menu item called Quick Connect.
+        let page = wizard_page("Quick Connect");
+        // Filled in once the server answers. Empty rather than absent, so the
+        // panel does not change shape under the eye when the code arrives.
+        let code = gtk::Label::new(None);
+        code.add_css_class("tp-code");
+        code.set_selectable(true);
+        code.set_can_focus(false);
+        page.append(&code);
+        let status = wizard_text("Asking the server for a code...", false);
+        page.append(&status);
+
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        cancel.set_halign(gtk::Align::Center);
+        page.append(&cancel);
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.leave_jellyfin_connect();
+            });
+        }
+
+        self.set_nav(None, std::slice::from_ref(&cancel), &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinConnect;
+        // The same cap as the step before it, so pressing Connect changes what
+        // the panel says rather than how big it is.
+        self.window.set_child(Some(&self.dialog(&page)));
+        cancel.grab_focus();
+
+        let server = pairing.server.clone();
+        let device_id = pairing.device_id.clone();
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let asking = alive.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Some(name) = crate::jellyfin::server_name(&server)
+                && sender.send(QuickConnect::Named(name)).is_err()
+            {
+                return;
+            }
+            let pending = match crate::jellyfin::quick_connect_start(&server, &device_id) {
+                Ok(pending) => pending,
+                Err(e) => {
+                    let _ = sender.send(QuickConnect::Failed(e.to_string()));
+                    return;
+                }
+            };
+            if sender
+                .send(QuickConnect::Code(pending.code.clone()))
+                .is_err()
+            {
+                return;
+            }
+            for _ in 0..TRIES {
+                // Checked before the request rather than after it, so
+                // cancelling stops the asking rather than stopping one round
+                // later.
+                if !asking.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                match crate::jellyfin::quick_connect_poll(&server, &device_id, &pending) {
+                    Ok(Some(account)) => {
+                        let _ = sender.send(QuickConnect::Done(Box::new(account)));
+                        return;
+                    }
+                    // Nobody has approved it yet, which is the ordinary answer
+                    // while somebody finds their phone.
+                    Ok(None) => {}
+                    Err(e) => {
+                        let _ = sender.send(QuickConnect::Failed(e.to_string()));
+                        return;
+                    }
+                }
+                std::thread::sleep(ASK_EVERY);
+            }
+            let _ = sender.send(QuickConnect::Failed(
+                "Nobody approved the code in time. Ask for another.".to_string(),
+            ));
+        });
+
+        let app = self.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            // Left behind by a panel that has been closed, or by a second
+            // attempt started over the top of this one. Either way this one is
+            // over, and the thread is told so it stops asking.
+            if app.jellyfin_attempt.get() != attempt {
+                alive.store(false, std::sync::atomic::Ordering::Relaxed);
+                return glib::ControlFlow::Break;
+            }
+            let step = match receiver.try_recv() {
+                Ok(step) => step,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return glib::ControlFlow::Break;
+                }
+            };
+            match step {
+                // Held rather than shown: this panel is about the code. It is
+                // written down when the pairing is saved, and it is what every
+                // screen afterwards calls this server.
+                QuickConnect::Named(name) => {
+                    if let Some(pairing) = app.jellyfin_pairing.borrow_mut().as_mut() {
+                        pairing.name = Some(name);
+                    }
+                    glib::ControlFlow::Continue
+                }
+                QuickConnect::Code(shown) => {
+                    code.set_text(&shown);
+                    status.set_text(
+                        "In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code.",
+                    );
+                    glib::ControlFlow::Continue
+                }
+                QuickConnect::Done(account) => {
+                    app.jellyfin_paired(*account);
+                    glib::ControlFlow::Break
+                }
+                QuickConnect::Failed(why) => {
+                    app.jellyfin_notice("Could Not Connect", &[&why]);
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    }
+
+    /// Somebody approved the code. Writes the token down and goes on the air.
+    ///
+    /// Connecting straight away rather than at the next start: this is the
+    /// moment the viewer is watching to see whether it worked, and a cast
+    /// target that appears on their phone only after a restart looks like one
+    /// that did not.
+    fn jellyfin_paired(self: &Rc<Self>, account: crate::jellyfin::Account) {
+        let Some(mut pairing) = self.jellyfin_pairing.borrow().clone() else {
+            return;
+        };
+        pairing.account = Some(account);
+        if let Err(e) = crate::jellyfin::save(&pairing) {
+            return self.jellyfin_notice("Could Not Save", &[&e]);
+        }
+        *self.jellyfin_pairing.borrow_mut() = Some(pairing);
+        self.start_jellyfin();
+        self.leave_jellyfin_connect();
+    }
+
+    /// Asked before disconnecting, because it throws a pairing away.
+    fn confirm_jellyfin_disconnect(self: &Rc<Self>) {
+        let server = self
+            .jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .map(crate::jellyfin::Pairing::label)
+            .unwrap_or_default();
+
+        let app = self.clone();
+        self.confirm_jellyfin(
+            "Disconnect from Jellyfin?",
+            &[&format!(
+                "TinePlayer will no longer appear as a player in {server}."
+            )],
+            Confirm {
+                label: "Disconnect",
+                destructive: true,
+            },
+            move || app.disconnect_jellyfin(),
+        );
+    }
+
+    /// Ends the pairing here and, as far as it can, at the server too.
+    ///
+    /// The server is told on a worker thread while the local file goes at
+    /// once. Waiting on it would mean a settings screen that hangs for as long
+    /// as a switched-off server takes to time out, for a message the viewer has
+    /// already decided the answer to - and what they asked for is to stop being
+    /// paired, which is true the moment the token is gone from this machine.
+    fn disconnect_jellyfin(self: &Rc<Self>) {
+        let client = self
+            .jellyfin_pairing
+            .borrow()
+            .as_ref()
+            .and_then(crate::jellyfin::Client::new);
+        if let Some(client) = client {
+            let app = self.clone();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = sender.send(client.disconnect());
+            });
+            glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+                match receiver.try_recv() {
+                    Ok(Ok(())) => {}
+                    // Said rather than swallowed, and said where it can be
+                    // acted on. This is now only reached when the server could
+                    // not be reached at all - a single logout either revokes
+                    // the token and removes the device or does neither - so the
+                    // pairing really is still live over there, and the viewer
+                    // is the only one who can end it. Only over the pane it was
+                    // asked from: a panel arriving over a film minutes later
+                    // would be a worse fault than the one it reports.
+                    Ok(Err(e)) => {
+                        eprintln!("Jellyfin was not told about the disconnection: {e}");
+                        if app.showing_jellyfin_pane() {
+                            app.jellyfin_notice(
+                                "Disconnected Here Only",
+                                &[
+                                    "The access token stored on this machine has been removed.",
+                                    "The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there.",
+                                    &e.to_string(),
+                                ],
+                            );
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        return glib::ControlFlow::Continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
+                glib::ControlFlow::Break
+            });
+        }
+
+        *self.jellyfin.borrow_mut() = None;
+        // Dropping it closes the socket, which is what takes TinePlayer off
+        // everybody's phone.
+        *self.jellyfin_session.borrow_mut() = None;
+        if let Err(e) = crate::jellyfin::remove() {
+            eprintln!("Couldn't remove the Jellyfin pairing: {e}");
+        }
+        *self.jellyfin_pairing.borrow_mut() = None;
+        self.return_to_jellyfin_settings();
+    }
+
+    /// A panel stating something the Jellyfin pane has to say, with the one
+    /// way on from it.
+    fn jellyfin_notice(self: &Rc<Self>, title: &str, lines: &[&str]) {
+        let page = wizard_page(title);
+        for line in lines {
+            page.append(&wizard_text(line, false));
+        }
+
+        let ok = gtk::Button::with_label("OK");
+        ok.add_css_class("tp-button");
+        ok.set_halign(gtk::Align::Center);
+        page.append(&ok);
+        {
+            let app = self.clone();
+            ok.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_jellyfin_settings();
+            });
+        }
+
+        self.set_nav(None, std::slice::from_ref(&ok), &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinPanel;
+        self.window.set_child(Some(&self.dialog(&page)));
+        ok.grab_focus();
+    }
+
+    /// The same question shape the Kodi pane asks, returning to this pane
+    /// instead.
+    fn confirm_jellyfin(
+        self: &Rc<Self>,
+        title: &str,
+        lines: &[&str],
+        confirm: Confirm<'_>,
+        action: impl Fn() + 'static,
+    ) {
+        let page = wizard_page(title);
+        for line in lines {
+            page.append(&wizard_text(line, false));
+        }
+
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(24)
+            .halign(gtk::Align::Center)
+            .build();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.add_css_class("tp-button");
+        let destructive = confirm.destructive;
+        let confirm = gtk::Button::with_label(confirm.label);
+        confirm.add_css_class("tp-button");
+        confirm.add_css_class(match destructive {
+            true => "tp-danger",
+            false => "tp-action",
+        });
+        row.append(&cancel);
+        row.append(&confirm);
+        page.append(&row);
+
+        {
+            let app = self.clone();
+            cancel.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_jellyfin_settings();
+            });
+        }
+        {
+            let app = self.clone();
+            confirm.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                action();
+            });
+        }
+
+        self.set_nav(None, &[cancel.clone(), confirm.clone()], &[]);
+        *self.copy_root.borrow_mut() = Some(page.clone().upcast());
+        *self.screen.borrow_mut() = Screen::JellyfinPanel;
+        self.window.set_child(Some(&self.dialog(&page)));
+        // Cancel, so a reflexive second press changes nothing.
+        cancel.grab_focus();
+    }
+
     fn confirm_clear_data(self: &Rc<Self>) {
         let app = self.clone();
         self.show_confirm("Clear all saved playback data?", "Clear", move || {
@@ -9586,11 +11868,30 @@ impl App {
         // inline because the reveal below waits for playback to reach it.
         let resume = (!restart).then(|| self.resume_position()).flatten();
 
+        // Worked out here rather than in the pipeline, because locating one
+        // can need the server address and access token, which are ours to
+        // know. A subtitle that cannot be found gives up the subtitle and not
+        // the film: it is the least of what somebody pressed play for.
+        let located = match self.locate_subtitle(&path, subtitle.as_ref()) {
+            Ok(located) => located,
+            Err(e) => {
+                eprintln!("{e}");
+                None
+            }
+        };
+        // Either there is something to switch to, or something already chosen.
+        // The second half is not redundant: `--play` goes straight past the
+        // page that fills the list in, so a subtitle named on the command line
+        // would otherwise resolve correctly and then have no overlay to be
+        // drawn by.
+        let offers_subtitles = !self.subtitle_options.borrow().is_empty() || located.is_some();
+
         let result = Playback::start(
             &path,
             primary_audio.as_ref(),
             secondary_audio.as_ref(),
-            subtitle.as_ref(),
+            located.as_ref(),
+            offers_subtitles,
             &self.config.borrow(),
             resume,
             self.storage_key().unwrap_or_default(),
@@ -9650,6 +11951,14 @@ impl App {
                     &outputs,
                 );
                 controls.set_levels(&levels);
+                // The pipeline built each output's level from that output's own
+                // setting, which is all the configuration told it. The master is
+                // applied here, once, before a frame has played - the same shape
+                // as the alignment baseline below it.
+                controls.set_master_level(self.config.borrow().master_volume());
+                for (role, _) in &outputs {
+                    playback.set_volume(role, self.effective(self.config.borrow().volume(role)));
+                }
                 // What the configuration holds for each output, so the panel
                 // opens showing the shift already in force rather than zero.
                 let syncs: Vec<(&str, f64, bool)> = {
@@ -9667,10 +11976,18 @@ impl App {
                     // chore rather than a control.
                     let app = self.clone();
                     controls.connect_volume(move |role, level, muted, persist| {
-                        if let Some(playback) = app.playback.borrow().as_ref() {
-                            playback.set_volume(role, level);
-                            playback.set_muted(role, muted);
-                        }
+                        // Through the one function that knows about the master,
+                        // rather than sent straight to the sink from here. What
+                        // an output plays at is its own level times the master,
+                        // and a second place doing that arithmetic is how the
+                        // two come to disagree - the same lesson `push_offset`
+                        // is already the answer to.
+                        //
+                        // Given the level rather than reading it back out of the
+                        // configuration, because a level that is not being kept
+                        // never reaches the configuration at all.
+                        app.push_volume_at(role, level);
+                        app.push_mute(role, muted);
                         if !persist {
                             return;
                         }
@@ -9680,6 +11997,35 @@ impl App {
                             config.set_muted(role, muted);
                         }
                         app.save_volume_soon();
+                    });
+
+                    // The master moves both outputs, so both are pushed again
+                    // rather than one being singled out. Kept like a level and
+                    // unlike a hush: somebody chose it, and a film that started
+                    // at half volume because of last week is a setting, where a
+                    // film that started silent would be a bug.
+                    // Silencing everything is a layer over the outputs rather
+                    // than a change to them, so what comes back is only whether
+                    // the layer is on. Each output is then pushed at its own
+                    // state underneath it, which is what it goes on showing.
+                    let app = self.clone();
+                    controls.connect_hush(move |hushed| {
+                        app.hushed.set(hushed);
+                        for role in ["primary", "secondary"] {
+                            let muted = app.config.borrow().muted(role);
+                            app.push_mute(role, muted);
+                        }
+                        app.report_sound_soon();
+                    });
+
+                    let app = self.clone();
+                    controls.connect_master(move |level| {
+                        app.config.borrow_mut().set_master_volume(level);
+                        for role in ["primary", "secondary"] {
+                            app.push_volume(role);
+                        }
+                        app.save_volume_soon();
+                        app.report_sound_soon();
                     });
 
                     // Always kept, unlike a level silenced for a knock at the
@@ -9708,8 +12054,18 @@ impl App {
                     controls.connect_fullscreen(move || app.toggle_fullscreen());
                 }
                 {
+                    // Holding the icon, which shows or hides what is already
+                    // chosen. Tapping it opens the chooser instead.
                     let app = self.clone();
                     controls.connect_subtitles(move || app.toggle_subtitles());
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_subtitle_chosen(move |entry| app.choose_subtitle(entry));
+                }
+                {
+                    let app = self.clone();
+                    controls.connect_audio_chosen(move |role, entry| app.choose_audio(role, entry));
                 }
                 {
                     // Under a launcher there is no menu worth returning to:
@@ -9860,7 +12216,8 @@ impl App {
                 if self.subtitles_hidden.get() && playback.subtitles_showing() {
                     playback.toggle_subtitles();
                 }
-                controls.set_subtitles(playback.has_subtitles(), playback.subtitles_showing());
+                self.show_subtitle_state(&playback, &controls);
+                self.push_audio_entries(&playback, &controls);
                 controls.update(&playback);
                 // Where playback has reached, and nothing else. A film
                 // opening with a full row of buttons over it announces the
@@ -9876,6 +12233,8 @@ impl App {
                     .set_title(Some(&self.file_label().unwrap_or_default()));
                 *self.playback.borrow_mut() = Some(playback);
                 self.publish_now_playing();
+                self.jellyfin_reported.set(0);
+                self.report_to_jellyfin(JellyfinMoment::Started);
                 // Playback begins playing, so the display is held from here
                 // until it is paused or torn down.
                 self.awake.set(true);
@@ -10301,6 +12660,21 @@ fn heading_label(text: &str) -> gtk::Label {
 /// there is nothing for a second version to adapt to.
 pub fn subtitles_image(scale: f64) -> gtk::Image {
     const ICON: &[u8] = include_bytes!("../data/ui/subtitles.png");
+    marked_image(ICON, 26.0 * scale)
+}
+
+/// The mark on the button that opens one output's soundtracks.
+///
+/// A note rather than a speaker, which is the whole reason the soundtracks and
+/// the levels are on separate buttons: two speakers side by side say nothing
+/// about which is which, and this one is a choice about the film rather than
+/// about how loud it is.
+///
+/// Bundled rather than taken from the icon theme, like every other mark on this
+/// strip: GStreamer's Windows bundle ships no icon theme at all, and a missing
+/// icon draws as a broken-image box.
+pub fn soundtrack_image(scale: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/soundtrack.png");
     marked_image(ICON, 26.0 * scale)
 }
 
@@ -11901,6 +14275,26 @@ fn style_css(scale: f64) -> String {
             border-color: transparent;
         }}
         .tp-action:hover {{ background-color: {play_hover}; }}
+        /* Jellyfin's own gradient, on the one button that connects to one.
+           `background-image` carries it rather than `background-color`, which
+           takes a single value - and the theme paints its own gradient image
+           there, so anything set as a colour alone is drawn over.
+
+           Their permission covers the gradient on a logo, so a control wearing
+           it is beyond what is written down - kept only while it is being
+           looked at. The hex values are theirs exactly. */
+        .tp-jellyfin {{
+            font-weight: bold;
+            /* Restated rather than inherited from `.tp-button`. A background
+               *image* is not clipped to that rule's radius the way a colour
+               is, so the gradient came out square-cornered inside a rounded
+               button. */
+            border-radius: {radius}px;
+            background-image: linear-gradient(to right, {jf_start}, {jf_end});
+            background-color: transparent;
+            color: {play_ink};
+            border-color: transparent;
+        }}
         /* Focus said loudly, because this is read from a distance and these
            buttons no longer sit in a list whose highlight does the saying. A
            ring around the button rather than a change of fill: the fill is
@@ -12022,6 +14416,12 @@ fn style_css(scale: f64) -> String {
            of text of one weight. */
         .tp-fact-name {{ opacity: 0.6; }}
         .tp-empty-prompt {{ font-size: {row}px; opacity: 0.7; }}
+        /* The line that stands where the Connect button stands when there is
+           nothing to connect. Sized like the buttons it sits under rather than
+           like small print, because it answers the same question they ask -
+           and at full strength, so the green mark beside it stays green
+           instead of being dimmed along with the words. */
+        .tp-connected {{ font-size: {row}px; }}
         /* Backing out, on every screen that offers it. A literal red for the
            same reason the highlight is literal: a theme name that does not
            exist makes the whole declaration fail to parse. */
@@ -12213,6 +14613,26 @@ fn style_css(scale: f64) -> String {
             padding: {crumb_pad}px;
             border-radius: {radius}px;
         }}
+        /* Less underneath a block than above it. The panel already spaces the
+           groups apart and pads its own bottom edge, so a group's own padding
+           was a third helping and left each set of bars floating well clear of
+           the divider under it. */
+        /* Written against the rule above rather than beside it. A bare
+           `.tp-menu-group` is one class where that is a class and a type, so it
+           loses on specificity and the padding never changes - which looks
+           exactly like a rule that was never added. */
+        .tp-volume-panel > box.tp-menu-group {{ padding-bottom: 0px; }}
+        /* The last group is the panel's bottom edge rather than a join between
+           two blocks, so it keeps what the others give up: the space under the
+           final bar answers the space above the first heading, where the space
+           between groups only has to separate them.
+
+           An explicit class rather than `:last-child`, because a selector GTK
+           will not parse is discarded whole and says so only in the log - and
+           the failure looks identical to a rule nobody added. Later in the
+           sheet than the rule above, which is what settles the tie between two
+           selectors of the same weight. */
+        .tp-volume-panel > box.tp-menu-foot {{ padding-bottom: {crumb_pad}px; }}
         .tp-volume-panel label {{ color: #ffffff; }}
         /* The same size as the transport icons, which are drawn to be read
            from a sofa rather than a desk. A button built from an icon name
@@ -12220,6 +14640,83 @@ fn style_css(scale: f64) -> String {
         .tp-volume-panel button image {{
             -gtk-icon-size: {icon}px;
             color: #ffffff;
+        }}
+        /* The 1 and 2 on the two output buttons, tucked into the lower
+           trailing corner of the speaker. Drawn on its own dark disc: the
+           strip sits over a moving picture, and a bare numeral lands on
+           whatever the film happens to be showing.
+
+           Sized off the icon rather than off the body text, so it stays a mark
+           on an icon at every ui_scale instead of growing into a second
+           glyph. */
+        .tp-output-badge {{
+            font-size: {badge}px;
+            font-weight: bold;
+            color: #ffffff;
+            background-color: rgba(0, 0, 0, 0.8);
+            border-radius: {badge}px;
+            padding: 0 {badge_pad}px;
+            margin: 0;
+        }}
+        /* Between the soundtracks and the device below them. Faint rather than
+           a rule: it separates two kinds of thing inside one menu, and a hard
+           line would read as two panels that had run together. */
+        .tp-menu-divider {{
+            background-color: rgba(255, 255, 255, 0.25);
+            margin-top: {crumb_pad}px;
+            margin-bottom: {crumb_pad}px;
+        }}
+        /* A list taller than the window scrolls rather than running off the
+           top of it. The scrolled window itself carries no background: the
+           panel behind it already has one, and a second would show as a
+           lighter block wherever the list did not fill its box. */
+        .tp-volume-panel scrolledwindow {{ background-color: transparent; }}
+        /* Drawn over the list rather than beside it, so that a film with more
+           soundtracks than fit does not come out a different width from one
+           that fits - the panel is opened and closed constantly, and a width
+           that moved with the content would read as the menu jumping. */
+        .tp-volume-panel scrollbar,
+        .tp-subtitle-panel scrollbar {{
+            background-color: transparent;
+            border: none;
+        }}
+        .tp-volume-panel scrollbar slider,
+        .tp-subtitle-panel scrollbar slider {{
+            background-color: rgba(255, 255, 255, 0.35);
+            border-radius: {radius}px;
+        }}
+        /* The subtitle chooser, laid over the bar exactly as the volume panel
+           is and out of the same corner: they are the two things the strip
+           opens rather than does, and a list that arrived looking like
+           something else would read as a different kind of thing. */
+        .tp-subtitle-panel {{
+            background-color: rgba(0, 0, 0, 0.75);
+            border-radius: {radius}px;
+            padding: {crumb_pad}px;
+            margin-bottom: {crumb_pad}px;
+            margin-right: {pad_h}px;
+        }}
+        /* Padded so the selection mark has room around a row rather than
+           sitting tight against the words, the same as the panel beside it.
+
+           At the interface's own row size rather than the size a stock label
+           comes out at, which is drawn for a desk. This is a list of languages
+           read from a sofa while a film runs, so it is sized like every other
+           list in the application and not like the panel's device names, which
+           are a caption above a control rather than the thing being chosen. */
+        .tp-subtitle-row {{
+            font-size: {row}px;
+            padding: {crumb_pad}px;
+            border-radius: {radius}px;
+            color: #ffffff;
+        }}
+        /* The subtitle in force, marked apart from where the cursor is - the
+           two part company as soon as anybody moves, which is the point of
+           marking them separately. The same bar down the leading edge the
+           menus draw, so 'you are here' and 'this is what is on' read the
+           same way over a film as they do on a page. */
+        .tp-subtitle-row.tp-current {{
+            box-shadow: inset {mark}px 0 0 0 {highlight};
         }}
         /* The handle, not the whole bar: filling the trough drew over the
            very thing that says where playback is. */
@@ -12252,6 +14749,24 @@ fn style_css(scale: f64) -> String {
         /* Taller than a stock entry: this is the one thing on its panel, and
            it is read from the same distance as everything else. */
         .tp-path {{ font-size: {row}px; padding: {pad_v}px {pad_h}px; }}
+        /* The Quick Connect code, which is copied off the screen a character
+           at a time into a phone across the room. Sized like a film's title
+           because that is the one other thing in the interface meant to be
+           read from that far away, and spaced out so no two characters run
+           together - a 6 beside a G at a glance is what turns this into two
+           attempts. */
+        .tp-code {{
+            font-size: {film_title}px;
+            font-weight: bold;
+            letter-spacing: {code_tracking}px;
+        }}
+        /* A soundtrack icon whose output is silenced, faded the same way and
+           for the same reason as the subtitle mark: the button reports the
+           state as well as offering to change it. It is the only thing on
+           screen that can, now that the levels have a menu of their own -
+           holding one of these mutes that output, and without this the gesture
+           worked and looked as though it had not. */
+        .tp-soundtrack-muted {{ opacity: 0.45; }}
         .tp-subtitles-button {{ opacity: 0.45; }}
         .tp-subtitles-on {{ opacity: 1; }}
         .tp-subtitles-button:disabled {{ opacity: 0.2; }}
@@ -12453,6 +14968,11 @@ fn style_css(scale: f64) -> String {
         icon = px(ICON_PX + 3.5),
         icon_main = px(38.4),
         crumb_pad = px(6.0),
+        // The 1 and 2 on the output buttons. About half the icon, which is
+        // what keeps it a mark on a speaker rather than a numeral with a
+        // speaker behind it.
+        badge = px(ICON_PX * 0.5),
+        badge_pad = px(3.0),
         leading = px(38.0),
         back_icon = px(22.0),
         row_icon = px(18.0),
@@ -12469,6 +14989,7 @@ fn style_css(scale: f64) -> String {
         modal_pad = px(16.0),
         highlight = "#3584e4",
         film_title = px(48.0),
+        code_tracking = px(8.0).max(2),
         film_facts = px(24.0),
         film_plot = px(22.0),
         fact = px(20.0),
@@ -12482,6 +15003,8 @@ fn style_css(scale: f64) -> String {
         focus_ring = px(3.0).max(2),
         // The blue the play and restart buttons are drawn in - the same accent
         // as everything else the application colors deliberately.
+        jf_start = "#AA5CC3",
+        jf_end = "#00A4DC",
         play_fill = "#3584e4",
         play_hover = "#4a90e8",
         play_ink = "#ffffff",
@@ -12650,6 +15173,47 @@ mod summary_lines {
 }
 
 #[cfg(test)]
+mod poster_shape {
+    /// The rule without the texture, so it can be checked without a display -
+    /// the same reason `artwork::fitted` is written to be testable.
+    fn height_for(picture: (f64, f64), slot: (f64, f64)) -> f64 {
+        let (width, height) = slot;
+        let aspect = picture.0 / picture.1;
+        match aspect > (width / height) * 1.15 {
+            true => (width / aspect).min(height),
+            false => height,
+        }
+    }
+
+    /// A real poster fills the slot exactly, which is the case that must not
+    /// change: every library's film artwork is two by three.
+    #[test]
+    fn a_poster_fills_the_slot() {
+        assert_eq!(height_for((1000.0, 1500.0), (300.0, 450.0)), 450.0);
+        // And one a few pixels out is still treated as a poster, cropped by
+        // the frame rather than reshaping it.
+        assert_eq!(height_for((1000.0, 1490.0), (300.0, 450.0)), 450.0);
+    }
+
+    /// An episode still is 16:9, and gets the slot's width and its own height
+    /// rather than being scaled up until its sides fall off the frame.
+    #[test]
+    fn a_wide_still_keeps_its_width_and_loses_height() {
+        let tall = height_for((1920.0, 1080.0), (300.0, 450.0));
+        assert!((tall - 168.75).abs() < 0.01, "{tall}");
+        // Shorter than the slot, never taller, so the rows beside it stay put.
+        assert!(tall < 450.0);
+    }
+
+    /// Taller than two by three - some libraries carry 1000x1500 and some
+    /// carry narrower scans - still fills the slot, and is cropped by it.
+    #[test]
+    fn a_narrow_picture_still_fills_the_slot() {
+        assert_eq!(height_for((1000.0, 2000.0), (300.0, 450.0)), 450.0);
+    }
+}
+
+#[cfg(test)]
 mod readings {
     use super::{offset_label, volume_label};
 
@@ -12740,6 +15304,16 @@ mod settings_rows {
     /// it is, and what it does when it hands a video over.
     const ROWS_PER_KODI: usize = 2;
 
+    /// Every row the whole screen holds, for one state of the Jellyfin
+    /// pairing.
+    fn every_row(jellyfin: JellyfinPane) -> Vec<Item> {
+        Category::ALL
+            .iter()
+            .flat_map(|category| category.items(&kodis(), jellyfin))
+            .map(|(_, item)| item)
+            .collect()
+    }
+
     /// Every setting is somewhere, and nowhere twice.
     ///
     /// This is what the old numbering could not promise. Rows were positions
@@ -12750,24 +15324,64 @@ mod settings_rows {
     /// be left out of every list and never appear at all.
     #[test]
     fn every_item_appears_in_exactly_one_category() {
-        let all: Vec<Item> = Category::ALL
-            .iter()
-            .flat_map(|category| category.items(&kodis()))
-            .map(|(_, item)| item)
-            .collect();
-        for item in &all {
-            let count = all.iter().filter(|other| *other == item).count();
-            assert_eq!(count, 1, "an item appears {count} times");
+        // Both states of the pairing, because the Jellyfin pane shows
+        // different rows in each - and a row placed in neither would be a row
+        // nobody can ever reach.
+        for jellyfin in [JellyfinPane::NotConnected, JellyfinPane::Connected] {
+            let all = every_row(jellyfin);
+            for item in &all {
+                let count = all.iter().filter(|other| *other == item).count();
+                assert_eq!(count, 1, "an item appears {count} times");
+            }
+            // Written out rather than derived, so adding a setting and
+            // forgetting to place it fails here instead of at a glance. It is
+            // not the number of `Item` variants: the five an output has are
+            // placed once for each output, and the Kodi category holds a group
+            // of rows per Kodi found, plus the one row that belongs to no
+            // installation and names another by hand.
+            let elsewhere = 24;
+            let kodi = ROWS_PER_KODI * kodis().len() + 1;
+            // One row either way: the way in, or the way out.
+            let paired = 1;
+            assert_eq!(all.len(), elsewhere + kodi + paired);
         }
-        // Written out rather than derived, so adding a setting and forgetting
-        // to place it fails here instead of at a glance. It is not the number
-        // of `Item` variants: the five an output has are placed once for each
-        // output, and the Kodi category holds a group of rows per Kodi found, plus
-        // the one row that belongs to no installation and names another by
-        // hand.
-        let elsewhere = 24;
-        let integrations = ROWS_PER_KODI * kodis().len() + 1;
-        assert_eq!(all.len(), elsewhere + integrations);
+
+        // And between the two states, every Jellyfin row is reachable.
+        let both: Vec<Item> = every_row(JellyfinPane::NotConnected)
+            .into_iter()
+            .chain(every_row(JellyfinPane::Connected))
+            .collect();
+        for item in [Item::JellyfinConnect, Item::JellyfinDisconnect] {
+            assert!(both.contains(&item), "{item:?} is on no pane at all");
+        }
+    }
+
+    /// The pane says one thing or the other, and never both: a Connect on a
+    /// pane that is already connected, or a Disconnect on one with nothing to
+    /// disconnect from, would each mean the opposite of what it says.
+    #[test]
+    fn the_jellyfin_pane_takes_two_shapes() {
+        let rows = |state| -> Vec<Item> {
+            Category::Jellyfin
+                .items(&[], state)
+                .into_iter()
+                .map(|(_, item)| item)
+                .collect()
+        };
+        assert_eq!(
+            rows(JellyfinPane::NotConnected),
+            vec![Item::JellyfinConnect]
+        );
+        assert_eq!(
+            rows(JellyfinPane::Connected),
+            vec![Item::JellyfinDisconnect]
+        );
+        // One row under one heading, in both.
+        for state in [JellyfinPane::NotConnected, JellyfinPane::Connected] {
+            let rows = Category::Jellyfin.items(&[], state);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].0.as_deref(), Some("JELLYFIN"));
+        }
     }
 
     /// Every installation heads its own group, and the row that adds one by
@@ -12778,7 +15392,7 @@ mod settings_rows {
     /// handover - are the heading and the two rows under it.
     #[test]
     fn each_installation_heads_its_own_group() {
-        let rows = Category::Kodi.items(&kodis());
+        let rows = Category::Kodi.items(&kodis(), JellyfinPane::NotConnected);
         let headed: Vec<(String, Item)> = rows
             .iter()
             .filter_map(|(heading, item)| heading.as_ref().map(|text| (text.to_string(), *item)))
@@ -12813,10 +15427,13 @@ mod settings_rows {
     fn a_sandbox_changes_which_rows_an_installation_has() {
         let sandboxed = |confinement| {
             Category::Kodi
-                .items(&[KodiPane {
-                    heading: "KODI".to_string(),
-                    confinement,
-                }])
+                .items(
+                    &[KodiPane {
+                        heading: "KODI".to_string(),
+                        confinement,
+                    }],
+                    JellyfinPane::NotConnected,
+                )
                 .into_iter()
                 .map(|(_, item)| item)
                 .collect::<Vec<_>>()
@@ -12840,7 +15457,7 @@ mod settings_rows {
     /// add something and leaving open whether it ever looked.
     #[test]
     fn an_empty_pane_says_why_it_is_empty() {
-        let rows = Category::Kodi.items(&[]);
+        let rows = Category::Kodi.items(&[], JellyfinPane::NotConnected);
         let items: Vec<Item> = rows.iter().map(|(_, item)| *item).collect();
         assert_eq!(items, vec![Item::KodiNone, Item::KodiAdd]);
         // One heading over both, since the row saying nothing was found and
@@ -12855,7 +15472,7 @@ mod settings_rows {
     #[test]
     fn the_version_follows_the_update_switch() {
         let general: Vec<Item> = Category::General
-            .items(&kodis())
+            .items(&kodis(), JellyfinPane::NotConnected)
             .into_iter()
             .map(|(_, item)| item)
             .collect();
@@ -12868,7 +15485,7 @@ mod settings_rows {
     /// General rather than among the everyday toggles.
     #[test]
     fn clearing_data_comes_last() {
-        let general = Category::General.items(&kodis());
+        let general = Category::General.items(&kodis(), JellyfinPane::NotConnected);
         assert_eq!(general.last().map(|(_, item)| *item), Some(Item::ClearData));
     }
 
@@ -12880,7 +15497,7 @@ mod settings_rows {
     fn every_switch_row_has_something_to_switch() {
         for (_, item) in Category::ALL
             .iter()
-            .flat_map(|category| category.items(&kodis()))
+            .flat_map(|category| category.items(&kodis(), JellyfinPane::Connected))
         {
             if item.has_switch() {
                 assert!(
@@ -12890,4 +15507,104 @@ mod settings_rows {
             }
         }
     }
+}
+
+/// How tall the series' small frame should be for the picture in it.
+///
+/// **Whatever the picture needs, so none of it is cropped.** This one is a
+/// reference rather than a composition - it says which programme this is - and
+/// a poster with its title lettering cut off the bottom fails at exactly that.
+/// The frame above it crops on purpose, because it is a fixed slot in a layout;
+/// this is not.
+///
+/// Two by three until a picture turns up, which is what most posters are, so
+/// the space reserved is about right before the fetch lands.
+fn series_frame_height(texture: Option<&gdk::Texture>, width: f64) -> f64 {
+    let Some(texture) = texture.filter(|texture| texture.width() > 0 && texture.height() > 0)
+    else {
+        return width * 3.0 / 2.0;
+    };
+    width * f64::from(texture.height()) / f64::from(texture.width())
+}
+
+/// The series' poster as a widget, filling its small frame.
+///
+/// Expanding both ways for the reason the main poster does: the widget draws a
+/// texture and measures as nothing, so without it the frame allocates no room
+/// at all and the picture simply does not appear.
+fn series_picture(texture: gdk::Texture) -> crate::artwork::Artwork {
+    let picture = crate::artwork::Artwork::poster();
+    picture.set_texture(Some(texture));
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture
+}
+
+/// How tall the poster frame should be for the picture going into it.
+///
+/// The slot's full height for a poster, and only what it needs for anything
+/// wider - an episode's Primary image is a 16:9 still, and cropping that into a
+/// two-by-three slot scales it to fill the height and throws the sides away,
+/// which is most of the picture. Reported on 2026-08-16.
+///
+/// **The width is never touched**, whatever the shape. It is what the column is
+/// sized to, so letting it vary would shift the page beside it every time a
+/// different kind of item was loaded.
+fn poster_frame_height(texture: Option<&gdk::Texture>, width: f64, height: f64) -> f64 {
+    let Some(texture) = texture.filter(|texture| texture.width() > 0 && texture.height() > 0)
+    else {
+        return height;
+    };
+    let aspect = f64::from(texture.width()) / f64::from(texture.height());
+    // **With room to spare, so a near-miss is still cropped.** Libraries carry
+    // posters a few pixels off two by three, and reshaping for those would let
+    // the frame's height wobble from one film to the next for no reason anyone
+    // could name. The two real cases are nowhere near each other - a poster is
+    // about 0.67 and an episode still is 1.78 - so this only has to be wide
+    // enough to tell a bad scan from a different kind of picture.
+    const CLEARLY_WIDER: f64 = 1.15;
+    match aspect > (width / height) * CLEARLY_WIDER {
+        // Wider than the slot: keep the width, take less height.
+        true => (width / aspect).min(height),
+        false => height,
+    }
+}
+
+/// Brings a widget up from nothing over a quarter of a second.
+///
+/// Artwork is loaded after the page is already up, so without this it appears
+/// at full strength between one frame and the next - which reads as a fault
+/// rather than as something finishing loading.
+///
+/// Opacity rather than a `Revealer`, which is what the controls use for their
+/// panels: a revealer that is not revealed takes no space, and a poster
+/// collapsing its frame and then pushing it back open would be a worse jolt
+/// than the one being fixed. Opacity never touches the layout.
+///
+/// Driven by the frame clock rather than a timer, so it runs at whatever rate
+/// the screen is actually drawing and finishes on a frame rather than between
+/// two.
+fn fade_in(widget: &impl IsA<gtk::Widget>) {
+    const OVER: f64 = 0.5;
+
+    let widget = widget.clone().upcast::<gtk::Widget>();
+    widget.set_opacity(0.0);
+    let started = std::time::Instant::now();
+    widget.add_tick_callback(move |widget, _| {
+        let progress = (started.elapsed().as_secs_f64() / OVER).clamp(0.0, 1.0);
+        // Eased out, so it arrives softly rather than stopping dead.
+        widget.set_opacity(1.0 - (1.0 - progress).powi(3));
+        match progress >= 1.0 {
+            true => glib::ControlFlow::Break,
+            false => glib::ControlFlow::Continue,
+        }
+    });
+}
+
+/// Which of Jellyfin's three reporting endpoints a moment belongs to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum JellyfinMoment {
+    Started,
+    Progress,
+    Stopped,
 }

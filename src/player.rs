@@ -1,5 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gst::prelude::*;
@@ -7,8 +9,9 @@ use gstreamer as gst;
 use gtk::{gdk, glib};
 
 use crate::config::{Config, clear_position, save_position};
-use crate::pipeline::build_pipeline;
+use crate::pipeline::{Playing, build_pipeline};
 use crate::source::Source;
+use crate::subtitles::SubtitleSource;
 
 /// Applied to the video widget so the letterbox area around the picture
 /// can be styled black without affecting the rest of the interface.
@@ -42,6 +45,57 @@ const SCRUB_RATES: [(Duration, f64); 4] = [
     (Duration::from_secs(6), 800.0),
 ];
 
+/// Whether a stream id names a subtitle, according to the collection it came
+/// from. Unknown ids are treated as not-subtitles, so a stream that cannot be
+/// identified keeps playing rather than being dropped silently.
+fn is_text(collection: Option<&gst::StreamCollection>, id: &str) -> bool {
+    collection.is_some_and(|collection| {
+        collection.iter().any(|stream| {
+            stream.stream_id().is_some_and(|found| found == id)
+                && stream.stream_type().contains(gst::StreamType::TEXT)
+        })
+    })
+}
+
+/// Whether a stream id names an audio stream, according to the collection it
+/// came from. The counterpart of [`is_text`], and unknown ids are treated the
+/// same way: not audio, so anything unidentifiable keeps playing.
+fn is_audio(collection: Option<&gst::StreamCollection>, id: &str) -> bool {
+    collection.is_some_and(|collection| {
+        collection.iter().any(|stream| {
+            stream.stream_id().is_some_and(|found| found == id)
+                && stream.stream_type().contains(gst::StreamType::AUDIO)
+        })
+    })
+}
+
+/// Seeks through the video branch rather than through the pipeline.
+///
+/// A bin hands an event to every one of its sinks and reports success only if
+/// all of them took it. An output resting on None has a chain that is
+/// deliberately fed by nothing, and a sink with an unlinked pad has nowhere to
+/// send a seek upstream - so it fails, and takes the whole seek's answer down
+/// with it. Resuming a film with the second output on None therefore reported
+/// a seek failure while the seek itself had worked.
+///
+/// The video sink is the right one to ask. A seek travels upstream to the
+/// source, and every branch hangs off the same `urisourcebin` - so the flush
+/// and the new segment reach the audio the same as before. What it skips is
+/// asking a branch that has nothing to answer with.
+///
+/// External audio and subtitles still need their own, because those chains
+/// have sources of their own that this never reaches. See `run_seek`.
+fn seek_through_video(
+    pipeline: &gst::Pipeline,
+    flags: gst::SeekFlags,
+    target: gst::ClockTime,
+) -> Result<(), glib::BoolError> {
+    match pipeline.by_name("vsink") {
+        Some(sink) => sink.seek_simple(flags, target),
+        None => pipeline.seek_simple(flags, target),
+    }
+}
+
 /// Why playback stopped on its own.
 ///
 /// The two are worth telling apart because reaching the end is the ordinary
@@ -71,6 +125,29 @@ pub struct Playback {
     /// position near the end is dropped rather than saved.
     watched_percent: f64,
     picture: gtk::Picture,
+    /// Every stream the file turned out to have, kept from the message that
+    /// announced them.
+    ///
+    /// Switching a subtitle means naming every stream to keep playing, and the
+    /// names live here - there is no way to ask an element for its collection
+    /// after the fact, so it is caught as it goes past.
+    collection: RefCell<Option<gst::StreamCollection>>,
+    /// Which of them are playing, by id, from the message that says so. The
+    /// list a switch starts from: keep these, drop the subtitle, add the
+    /// wanted one.
+    selected_streams: RefCell<Vec<String>>,
+    /// Which decoded stream feeds which output, and the plumbing between them.
+    ///
+    /// The record of what each output is playing lives here rather than beside
+    /// it, because the pipeline needs the same answer to route by and two
+    /// copies would be free to disagree.
+    routing: Arc<Mutex<crate::pipeline::AudioRouting>>,
+    /// Bumped every time the subtitle changes, so that a probe still waiting
+    /// for a stream nobody wants any more does not draw it when it arrives.
+    ///
+    /// Atomic and shared rather than a `Cell` like everything else here: the
+    /// probe that reads it runs on a streaming thread.
+    subtitle_switch: Arc<AtomicU64>,
     playing: Cell<bool>,
     last_toggle: Cell<Instant>,
     /// Set when the pipeline reports end-of-stream, so teardown clears the
@@ -126,14 +203,25 @@ impl Playback {
         source: &Source,
         primary_audio: Option<&crate::pipeline::AudioSource>,
         secondary_audio: Option<&crate::pipeline::AudioSource>,
-        subtitle: Option<&crate::subtitles::SubtitleChoice>,
+        subtitle: Option<&crate::subtitles::SubtitleSource>,
+        // Whether the video has any subtitle to offer, which is not the same
+        // as one being chosen. The overlay is built either way so that
+        // subtitles can be switched on later; see `build_pipeline`.
+        offers_subtitles: bool,
         config: &Config,
         resume_ns: Option<u64>,
         key: String,
         kodi_file: String,
         on_ended: impl Fn(Ended) + 'static,
     ) -> Result<Rc<Self>, String> {
-        let pipeline = build_pipeline(source, primary_audio, secondary_audio, subtitle, config)?;
+        let (pipeline, routing) = build_pipeline(
+            source,
+            primary_audio,
+            secondary_audio,
+            subtitle,
+            offers_subtitles,
+            config,
+        )?;
 
         // gtk4paintablesink renders into a GdkPaintable rather than creating
         // its own window; handing that to a gtk::Picture is what embeds the
@@ -157,6 +245,10 @@ impl Playback {
             reached_eos: Cell::new(false),
             finished: Cell::new(false),
             bus_watch: RefCell::new(None),
+            collection: RefCell::new(None),
+            selected_streams: RefCell::new(Vec::new()),
+            routing: routing.clone(),
+            subtitle_switch: Arc::new(AtomicU64::new(0)),
             final_report: RefCell::new(None),
             seek_target: Cell::new(None),
             seeking: Cell::new(false),
@@ -193,6 +285,27 @@ impl Playback {
                             playback.seek_target.set(None);
                         }
                     }
+                    // Caught rather than asked for: an element will not hand
+                    // its collection over later, and switching subtitles needs
+                    // it to name the streams that carry on playing.
+                    MessageView::StreamCollection(announced) => {
+                        let announced = announced.stream_collection();
+                        // The routing needs it too, to say which track a
+                        // stream arriving on a pad actually is.
+                        playback
+                            .routing
+                            .lock()
+                            .unwrap()
+                            .set_collection(announced.clone());
+                        *playback.collection.borrow_mut() = Some(announced);
+                    }
+                    MessageView::StreamsSelected(chosen) => {
+                        *playback.selected_streams.borrow_mut() = chosen
+                            .streams()
+                            .iter()
+                            .filter_map(|stream| stream.stream_id().map(|id| id.to_string()))
+                            .collect();
+                    }
                     MessageView::Warning(warn) => {
                         eprintln!(
                             "Warning [{}]: {} ({:?})",
@@ -228,12 +341,12 @@ impl Playback {
             // zero and started it over. Accurate seeking decodes forward from
             // that keyframe to the exact position instead, which costs a
             // moment once at startup and lands where the viewer actually was.
-            pipeline
-                .seek_simple(
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                    gst::ClockTime::from_nseconds(ns),
-                )
-                .map_err(|e| e.to_string())?;
+            seek_through_video(
+                &pipeline,
+                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                gst::ClockTime::from_nseconds(ns),
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         pipeline
@@ -536,6 +649,33 @@ impl Playback {
         }
     }
 
+    /// Sends a seek to the subtitle chain, which has a source of its own.
+    ///
+    /// The same hand delivery the external audio needs, and for the same
+    /// reason: this chain is fed by its own source rather than by the video's,
+    /// so a seek sent through the pipeline does not reliably reach it. Without
+    /// this the subtitles carry on from where they were while the picture
+    /// moves, which reads as them being wrong rather than merely behind.
+    fn seek_external_subtitle(&self, target: gst::ClockTime) {
+        let Some(source) = self
+            .pipeline
+            .by_name(crate::pipeline::EXTERNAL_SUBTITLE_SOURCE)
+        else {
+            return;
+        };
+        let seek = gst::event::Seek::new(
+            1.0,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            gst::SeekType::Set,
+            target,
+            gst::SeekType::None,
+            gst::ClockTime::NONE,
+        );
+        if !source.send_event(seek) {
+            eprintln!("Failed to seek the subtitle source");
+        }
+    }
+
     fn run_seek(&self) {
         let Some(target) = self.seek_target.get() else {
             return;
@@ -562,9 +702,11 @@ impl Playback {
             }
         }
 
-        let result = self
-            .pipeline
-            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target);
+        let result = seek_through_video(
+            &self.pipeline,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            target,
+        );
 
         // Unconditional, not part of the workaround above. Measured on the Pi
         // on 2026-08-10: an external file goes silent on the first seek with
@@ -574,6 +716,7 @@ impl Playback {
         // reach. Seeking the same target twice is harmless - both branches are
         // being sent to the same place.
         self.seek_external_audio(target);
+        self.seek_external_subtitle(target);
 
         if workaround {
             for role in ["primary", "secondary"] {
@@ -680,12 +823,273 @@ impl Playback {
         self.bus_watch.borrow_mut().take();
     }
 
-    /// Whether this playback has subtitles to turn on and off at all.
+    /// Changes which subtitle is showing, without stopping the film.
     ///
-    /// The overlay is only built when a subtitle was chosen, so its absence is
-    /// the same question as "was anything selected".
+    /// Three cases that look alike and are not. An embedded one is a matter of
+    /// telling `decodebin3` to decode a different stream. An external one is a
+    /// small source chain of its own, which has to be built, attached and then
+    /// sent to where the film already is - a branch added part-way through
+    /// starts at zero, and would otherwise play the opening titles' subtitles
+    /// over the middle of the film. Off is neither: nothing is selected and
+    /// nothing is attached.
+    ///
+    /// The overlay's `subtitle_sink` takes one source at a time, so whatever
+    /// was feeding it is always taken away first, whichever kind it was.
+    ///
+    /// Drawing stops here and starts again only once the new subtitle has
+    /// something to draw. None of the three cases is instant - a stream has to
+    /// be selected and decoded, or a source built and seeked to where the film
+    /// already is - and the line already on screen would otherwise sit there
+    /// for the rest of its duration in the language somebody just changed
+    /// away from, which reads as a switch that did nothing.
+    pub fn set_subtitle(&self, subtitle: Option<&SubtitleSource>) -> Result<(), String> {
+        let Some(overlay) = self.pipeline.by_name("suboverlay") else {
+            // No overlay means the film offered no subtitles when it opened,
+            // and nothing can be switched on that was never there.
+            return Ok(());
+        };
+
+        overlay.set_property("silent", true);
+        // Claimed before anything is torn down, so that a switch made while an
+        // earlier one is still coming disowns it rather than racing it.
+        let mark = self.subtitle_switch.fetch_add(1, Ordering::Relaxed) + 1;
+
+        self.detach_external_subtitle();
+
+        // Everything currently playing except the subtitles, which is what all
+        // three cases start from.
+        let mut keep: Vec<String> = {
+            let collection = self.collection.borrow();
+            self.selected_streams
+                .borrow()
+                .iter()
+                .filter(|id| !is_text(collection.as_ref(), id))
+                .cloned()
+                .collect()
+        };
+
+        if let Some(SubtitleSource::Embedded(index)) = subtitle {
+            let id = self
+                .text_stream_id(*index)
+                .ok_or_else(|| format!("The file has no subtitle track {index}"))?;
+            keep.push(id);
+        }
+
+        // Sent even when nothing was added: that is how a subtitle stops being
+        // decoded when subtitles are turned off.
+        if !keep.is_empty() {
+            let _ = self.select_streams(&keep);
+        }
+
+        if let Some(SubtitleSource::Uri(uri)) = subtitle {
+            crate::pipeline::attach_external_subtitle(&self.pipeline, &overlay, uri)?;
+            // In step with the picture rather than starting from the beginning.
+            if let Some(position) = self.position() {
+                self.seek_external_subtitle(position);
+            }
+        }
+
+        // Off stays off: it is already silent, and there is nothing coming to
+        // turn it back on for.
+        if subtitle.is_some() {
+            self.draw_when_subtitle_arrives(&overlay, mark);
+        }
+        Ok(())
+    }
+
+    /// Draws subtitles again as soon as the newly chosen one reaches the
+    /// overlay.
+    ///
+    /// A one-shot pad probe rather than a timer, because how long a subtitle
+    /// takes to start depends on where it comes from and where the film is: a
+    /// stream inside the file, a file on disk and one fetched from a media
+    /// server are not alike, and a delay long enough for the slowest of them
+    /// would be a blank gap in all the others.
+    ///
+    /// The property is set from the main loop rather than from the probe.
+    /// `subtitleoverlay` reconfigures its internal chain when `silent`
+    /// changes, and asking it to do that from inside a probe on its own sink
+    /// pad is asking for a deadlock.
+    fn draw_when_subtitle_arrives(&self, overlay: &gst::Element, mark: u64) {
+        let Some(pad) = overlay.static_pad("subtitle_sink") else {
+            return;
+        };
+        let switch = self.subtitle_switch.clone();
+        let overlay = overlay.clone();
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            let switch = switch.clone();
+            let overlay = overlay.clone();
+            glib::idle_add_once(move || {
+                // Switched again, or turned off by hand, while this was
+                // waiting. The buffer belongs to a subtitle nobody is asking
+                // for now, and drawing it would undo what they did ask for.
+                if switch.load(Ordering::Relaxed) == mark {
+                    overlay.set_property("silent", false);
+                }
+            });
+            gst::PadProbeReturn::Remove
+        });
+    }
+
+    /// Takes down the external subtitle chain, if there is one.
+    ///
+    /// Set to NULL before being removed: an element taken out of a running
+    /// pipeline while still playing leaves its thread mid-push, and the pad it
+    /// was pushing into is about to be linked to something else.
+    fn detach_external_subtitle(&self) {
+        for name in [
+            crate::pipeline::EXTERNAL_SUBTITLE_SOURCE,
+            crate::pipeline::EXTERNAL_SUBTITLE_PARSER,
+        ] {
+            if let Some(element) = self.pipeline.by_name(name) {
+                let _ = element.set_state(gst::State::Null);
+                let _ = self.pipeline.remove(&element);
+            }
+        }
+    }
+
+    /// The stream id of the nth subtitle inside the file.
+    fn text_stream_id(&self, index: u32) -> Option<String> {
+        let collection = self.collection.borrow();
+        let collection = collection.as_ref()?;
+        collection
+            .iter()
+            .filter(|stream| stream.stream_type().contains(gst::StreamType::TEXT))
+            .nth(index as usize)
+            .and_then(|stream| stream.stream_id().map(|id| id.to_string()))
+    }
+
+    /// The stream id of the nth audio track inside the file.
+    fn audio_stream_id(&self, index: u32) -> Option<String> {
+        let collection = self.collection.borrow();
+        let collection = collection.as_ref()?;
+        collection
+            .iter()
+            .filter(|stream| stream.stream_type().contains(gst::StreamType::AUDIO))
+            .nth(index as usize)
+            .and_then(|stream| stream.stream_id().map(|id| id.to_string()))
+    }
+
+    /// How many audio tracks the file offers.
+    pub fn audio_track_count(&self) -> u32 {
+        let collection = self.collection.borrow();
+        collection.as_ref().map_or(0, |collection| {
+            collection
+                .iter()
+                .filter(|stream| stream.stream_type().contains(gst::StreamType::AUDIO))
+                .count() as u32
+        })
+    }
+
+    /// What an output is playing: a track inside the file, an external file,
+    /// or nothing.
+    pub fn playing_on(&self, role: &str) -> Option<Playing> {
+        self.routing.lock().unwrap().wanted_by(role).cloned()
+    }
+
+    /// Puts one output onto a track inside the film, or onto nothing, without
+    /// stopping playback.
+    ///
+    /// Every case goes through here: a plain switch, both outputs arriving on
+    /// one track, an output leaving a shared track for one of its own, and an
+    /// output being turned off entirely. They are one operation rather than
+    /// four because the routing is told what each output should be playing and
+    /// then made to agree with itself - see [`crate::pipeline::AudioRouting`].
+    /// The selection sent here only decides what gets *decoded*; which output
+    /// hears what is settled afterwards, by the routing.
+    ///
+    /// The order matters and is the one thing here that is easy to get wrong.
+    /// The intent is recorded first, so that a stream arriving because of this
+    /// very selection finds an output already waiting for it. Recording it
+    /// afterwards would leave the pad to arrive at a routing that had never
+    /// heard of it, which is the shape of the subtitle bug in `de2e116`.
+    pub fn set_audio(&self, role: &str, playing: Option<Playing>) -> Result<(), String> {
+        let tracks = {
+            let mut routing = self.routing.lock().unwrap();
+            routing.want(role, playing);
+            routing.wanted_tracks()
+        };
+
+        // Everything that carries on playing, plus every audio track some
+        // output now wants. Built from the outputs rather than from
+        // `selected_streams`, which says which streams are playing and not
+        // which output each one is for - and lists a shared track only once.
+        let mut keep: Vec<String> = {
+            let collection = self.collection.borrow();
+            self.selected_streams
+                .borrow()
+                .iter()
+                .filter(|id| !is_audio(collection.as_ref(), id))
+                .cloned()
+                .collect()
+        };
+        for track in tracks {
+            match self.audio_stream_id(track) {
+                Some(id) => keep.push(id),
+                None => return Err(format!("The file has no audio track {track}")),
+            }
+        }
+
+        // An empty selection is not sent. Asking for nothing at all is not the
+        // way to stop decoding one track of several, and with both outputs off
+        // there is nothing to ask for anyway.
+        if keep.is_empty() {
+            return Ok(());
+        }
+        self.select_streams(&keep)
+    }
+
+    /// Asks the video's decoder for exactly these streams and no others.
+    ///
+    /// Sent to the decoder by name rather than to the pipeline. A pipeline
+    /// hands an upstream event to every sink, and one that cannot pass it on
+    /// makes the whole answer false - which an output resting on None does,
+    /// since its chain is deliberately left unlinked. See [`VIDEO_DECODER`].
+    fn select_streams(&self, keep: &[String]) -> Result<(), String> {
+        let decoder = self
+            .pipeline
+            .by_name(crate::pipeline::VIDEO_DECODER)
+            .ok_or("The pipeline has no video decoder to select streams on")?;
+        let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
+        if !decoder.send_event(gst::event::SelectStreams::new(&ids)) {
+            return Err("The decoder refused the stream selection".into());
+        }
+        Ok(())
+    }
+
+    /// Steps one output to the next audio track in the file, wrapping round.
+    ///
+    /// The shortcut behind `A` and `S`, kept while the choosers are built. It
+    /// no longer steps over the other output's track: landing both on one is a
+    /// case the routing handles like any other.
+    pub fn cycle_audio(&self, role: &str) -> Result<u32, String> {
+        let count = self.audio_track_count();
+        if count == 0 {
+            return Err("The file offers no audio tracks".into());
+        }
+        let next = match self.playing_on(role) {
+            Some(Playing::Track(current)) => (current + 1) % count,
+            // An output on a file or turned off starts from the beginning
+            // rather than refusing, which is what makes the key a way back to
+            // the film's own audio.
+            _ => 0,
+        };
+        self.set_audio(role, Some(Playing::Track(next)))?;
+        Ok(next)
+    }
+
+    /// Whether there are subtitles to turn on and off right now.
+    ///
+    /// The overlay alone stopped being the answer. It is built whenever the
+    /// video offers a subtitle rather than only when one was chosen, so that
+    /// they can be switched on later - which means it is often sitting there
+    /// with nothing feeding it. Asking whether anything is attached is what
+    /// keeps the button from offering to show what is not there.
     pub fn has_subtitles(&self) -> bool {
-        self.pipeline.by_name("suboverlay").is_some()
+        self.pipeline
+            .by_name("suboverlay")
+            .and_then(|overlay| overlay.static_pad("subtitle_sink"))
+            .is_some_and(|pad| pad.is_linked())
     }
 
     /// Turns subtitles on or off mid-playback, returning whether they are now
@@ -699,6 +1103,10 @@ impl Playback {
         let Some(overlay) = self.pipeline.by_name("suboverlay") else {
             return false;
         };
+        // Disowns any switch still waiting for its first line. Turning them
+        // off by hand while one was on its way would otherwise be undone the
+        // moment it landed.
+        self.subtitle_switch.fetch_add(1, Ordering::Relaxed);
         // Named for what the property means rather than what it is called.
         // Flipping it makes the new state the opposite of this, which is the
         // same value again: what was hidden is now showing.

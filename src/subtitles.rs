@@ -38,6 +38,18 @@ pub enum Subtitle {
         path: std::path::PathBuf,
         label: String,
     },
+    /// A subtitle file the media server holds beside the video, fetched over
+    /// HTTP rather than found on disk.
+    ///
+    /// Carried as the server's own stream index and never as a URL. The URL
+    /// would have to contain the access token, and this choice is written to
+    /// disk with the resume position - which is exactly the leak the token is
+    /// kept out of `config.yaml` to avoid. The index is meaningless to anyone
+    /// without the pairing.
+    Library {
+        index: u32,
+        label: String,
+    },
 }
 
 impl Subtitle {
@@ -45,7 +57,8 @@ impl Subtitle {
         match self {
             Subtitle::Embedded { label, .. }
             | Subtitle::External { label, .. }
-            | Subtitle::File { label, .. } => label,
+            | Subtitle::File { label, .. }
+            | Subtitle::Library { label, .. } => label,
         }
     }
 
@@ -54,6 +67,7 @@ impl Subtitle {
             Subtitle::Embedded { index, .. } => SubtitleChoice::Embedded(*index),
             Subtitle::External { name, .. } => SubtitleChoice::External(name.clone()),
             Subtitle::File { path, .. } => SubtitleChoice::File(path.clone()),
+            Subtitle::Library { index, .. } => SubtitleChoice::Library(*index),
         }
     }
 }
@@ -71,6 +85,27 @@ pub enum SubtitleChoice {
     /// A file anywhere on disk, chosen by hand or named on the command line.
     /// Stored whole, unlike `External`: there is no folder to imply it from.
     File(std::path::PathBuf),
+    /// The media server's own index for a subtitle file it holds. Resolved to
+    /// a URL only when a pipeline is built, so no token is ever written here.
+    Library(u32),
+}
+
+/// A subtitle choice with its location worked out, which is all a pipeline
+/// needs to open one.
+///
+/// Separate from [`SubtitleChoice`] because resolving needs things the
+/// pipeline has no business knowing: which folder the video sits in, and for a
+/// library's subtitle the server address and access token. Doing it before the
+/// pipeline is built also means a subtitle that cannot be found fails while
+/// there is still somewhere to say so.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SubtitleSource {
+    /// A stream inside the video, by position among the embedded subtitles.
+    Embedded(u32),
+    /// Anything that can be opened by URI: a file beside the video, one picked
+    /// by hand, or a library's, which is an HTTP address carrying its own
+    /// credential and so must never be written down.
+    Uri(String),
 }
 
 /// Everything on offer for a video: what is inside it, then what sits beside
@@ -79,7 +114,11 @@ pub enum SubtitleChoice {
 /// `video` is `None` for a remote source, which offers only what is embedded -
 /// there is no folder to look in, and a media server hands its own subtitles
 /// over inside the stream anyway.
-pub fn options(video: Option<&Path>, embedded: &[SubtitleTrack]) -> Vec<Subtitle> {
+pub fn options(
+    video: Option<&Path>,
+    embedded: &[SubtitleTrack],
+    library: &[Subtitle],
+) -> Vec<Subtitle> {
     let mut options: Vec<Subtitle> = embedded
         .iter()
         .map(|track| Subtitle::Embedded {
@@ -95,6 +134,9 @@ pub fn options(video: Option<&Path>, embedded: &[SubtitleTrack]) -> Vec<Subtitle
     if let Some(video) = video {
         options.extend(external(video));
     }
+    // After what is in the file, matching how subtitles beside a local video
+    // are listed: what the container holds first, what sits alongside it next.
+    options.extend(library.iter().cloned());
     options
 }
 
@@ -386,7 +428,9 @@ pub fn resolve(
         Subtitle::File { path, .. } => path
             .file_name()
             .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(wanted)),
-        Subtitle::Embedded { .. } => false,
+        // Neither has a file name to match. A library subtitle is still
+        // reachable by the label below, which is what somebody would type.
+        Subtitle::Embedded { .. } | Subtitle::Library { .. } => false,
     }) {
         return Ok(Some(named.choice()));
     }

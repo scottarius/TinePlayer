@@ -209,7 +209,92 @@ your films and TV and streams them to clients over the network.
 
 ### Native
 
-Not yet supported, but being investigated for a future release.
+TinePlayer connects to a Jellyfin server as a **cast target**. It does not
+browse the library itself: once connected it appears as a player in the
+Jellyfin app on a phone, tablet or browser, and whoever is holding that device
+picks the video and presses cast. The television plays it, with TinePlayer's
+own soundtrack and subtitle choices available as usual.
+
+That split is deliberate. The person who needs the described soundtrack drives
+playback from their own device, rather than asking for the remote.
+
+Videos are always played as the original file, never transcoded, so every
+soundtrack and subtitle **inside** the video survives. Subtitle files your
+library keeps *beside* a video are offered too, fetched from the server.
+
+> [!IMPORTANT]
+> **Audio files beside a video cannot be played from Jellyfin.** A described
+> soundtrack that sits next to the film as its own file, rather than being one
+> of the tracks inside it, is not offered when casting. Subtitle files beside a
+> video are, which makes the gap look arbitrary; it is not ours.
+>
+> Jellyfin has no way to send a client one of those audio files on its own. It
+> lists the file and says it supports streaming it externally, but the only
+> address it will serve it from combines it with the video into a fresh
+> transcode of the whole film. TinePlayer will not ask a server to re-encode a
+> film to fetch one soundtrack, so the track is left out rather than offered
+> and quietly played wrong.
+>
+> Two ways round it today: play the video [from a path or
+> share](usage.md#video-sources) instead of casting it, where a described file
+> beside the video is found normally; or download that audio file and pick it
+> with [Browse...](usage.md#separate-audio-files).
+>
+> This needs a Jellyfin server change, which we intend to propose. Audio tracks
+> *inside* a video are unaffected, described ones included.
+
+#### Connecting
+
+1. Open **Settings**, then **Jellyfin**.
+2. Press **Server Address**. TinePlayer looks for servers on your network and
+   lists whatever answers, by name. Choose yours.
+
+   If nothing answers, press **Enter Address** and type it as you would into a
+   browser: `http://jellyfin.local:8096`. If you leave out the `http://`, it is
+   assumed. Typing it is also the way to reach a server on another network or
+   behind a VPN, which cannot be found by looking.
+3. Press **Connect**. A six character code appears.
+4. In a Jellyfin app you are already signed in to, open **Quick Connect** from
+   the user menu and enter that code.
+
+The code is approved on a device you have already signed in to, so no password
+is ever typed into TinePlayer. If your server's administrator has turned Quick
+Connect off, TinePlayer says so rather than offering another way in.
+
+Looking for servers sends one small UDP broadcast per network this machine is
+on, to port 7359, and listens for two seconds. That is Jellyfin's own
+discovery mechanism, the same one its apps use, and TinePlayer sends it only
+while that panel is open. Some networks block broadcasts between clients, and
+some firewalls will ask the first time: allowing it is only needed to find a
+server by looking, never to play from one.
+
+Once connected, TinePlayer appears as a player in the Jellyfin app whenever it
+is running. Playback positions are reported back to Jellyfin as the film plays,
+so a video started on the television can be resumed on a phone and the other
+way round.
+
+> [!IMPORTANT]
+> Connecting stores an access token in `jellyfin.json`, in TinePlayer's user
+> data folder. That token can read and stream the library as the account that
+> approved the code, so treat that file as you would a password. It is stored
+> as a plain file, readable only by your account where the system supports it:
+> anything TinePlayer can read unattended, so can anything else running as you,
+> and obfuscating it would only look like protection. A portable install keeps
+> it on the drive it runs from.
+
+#### Disconnecting
+
+**Settings**, **Jellyfin**, then **Disconnect**. This removes the stored token
+from this machine and signs the device out of the server.
+
+It also asks the server to remove TinePlayer from your **Devices** list, which
+some servers only allow an administrator to do. If that part fails, TinePlayer
+says so: the token here is gone either way, and removing the device in the
+Jellyfin dashboard revokes it at the server as well.
+
+A pairing can also be ended from the Jellyfin side, by deleting the device or
+the user. TinePlayer treats that as an ordinary thing to happen: it stops
+appearing as a player, and the Jellyfin settings offer a new code.
 
 ### Integrate via Kodi Add-On
 

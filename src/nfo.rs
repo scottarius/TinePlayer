@@ -43,9 +43,16 @@ pub struct Sidecar {
     ///
     /// An episode's sidecar puts the episode's own name here, under a
     /// different root element, and is read without this having to know which
-    /// it got. The show's own name is still not read: an episode is shown by
-    /// what it is called, not by what it belongs to.
+    /// it got. What the show is called is [`Self::show`], kept apart because
+    /// an episode is titled by what it is called and not by what it belongs to.
     pub title: String,
+    /// What the show is called, from `<showtitle>`, which only an episode's
+    /// sidecar carries. Empty for a film.
+    ///
+    /// Read but never used as the title. It names the series *under* the
+    /// episode's own details, where somebody looking at "Ozymandias" may
+    /// reasonably want to know which programme that is.
+    pub show: String,
     pub year: Option<u32>,
     /// Which episode this is, where the sidecar says so: `<season>` and
     /// `<episode>`, which only an `<episodedetails>` file carries. Both or
@@ -190,6 +197,7 @@ pub fn parse(text: &str) -> Sidecar {
         audio,
         subtitles,
         title: value(&text, "title").unwrap_or_default(),
+        show: value(&text, "showtitle").unwrap_or_default(),
         // `<year>` is the older field and `<premiered>` the one Jellyfin and
         // Radarr write; a full date reduces to the four digits in front of it.
         year: number(&text, "year")
