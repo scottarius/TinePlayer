@@ -958,6 +958,13 @@ pub struct App {
     /// play and settings row. Up from the first row reaches them, the way Down
     /// reaches the footer.
     nav_header: RefCell<Vec<gtk::Button>>,
+    /// A row of buttons between the header and the footer, for the one screen
+    /// that has three: the empty page, where choosing a video and connecting a
+    /// server are not the same errand and do not sit on the same line.
+    ///
+    /// Set after `set_nav`, which clears it, so it belongs to one screen only -
+    /// the same way `nav_header_entry` does.
+    nav_middle: RefCell<Vec<gtk::Button>>,
     /// Which header button Up from the list should land on, where the last
     /// one is not the right answer.
     ///
@@ -1200,6 +1207,7 @@ impl App {
             wanted_scale: Cell::new(None),
             nav_footer: RefCell::new(Vec::new()),
             nav_header: RefCell::new(Vec::new()),
+            nav_middle: RefCell::new(Vec::new()),
             nav_header_entry: RefCell::new(None),
             controls: RefCell::new(None),
             styles: styles.clone(),
@@ -3139,6 +3147,7 @@ impl App {
         // Cleared here so it belongs to one screen only: a page that wants Up
         // to land somewhere particular says so after wiring its navigation.
         *self.nav_header_entry.borrow_mut() = None;
+        *self.nav_middle.borrow_mut() = Vec::new();
         *self.nav_footer.borrow_mut() = footer.to_vec();
 
         let mut stops: Vec<gtk::Widget> = header.iter().map(|b| b.clone().upcast()).collect();
@@ -3280,15 +3289,21 @@ impl App {
         let list = self.nav_list.borrow().clone();
         let footer = self.nav_footer.borrow().clone();
         let header = self.nav_header.borrow().clone();
+        let middle = self.nav_middle.borrow().clone();
 
         let Some(list) = list else {
             // A screen of buttons and no rows. Between the two rows by name,
             // since a directional search cannot reliably get from one to the
             // other when they are not above one another on the page.
             let focused = |buttons: &[gtk::Button]| buttons.iter().any(|button| button.has_focus());
+            // Three rows where there is a middle one, and the middle is
+            // stepped over rather than stopped at when it is empty - which is
+            // every screen but the empty page.
             let landing = match delta {
-                _ if delta > 0 && focused(&header) => footer.first(),
-                _ if delta < 0 && focused(&footer) => header.first(),
+                _ if delta > 0 && focused(&header) => middle.first().or(footer.first()),
+                _ if delta > 0 && focused(&middle) => footer.first(),
+                _ if delta < 0 && focused(&footer) => middle.first().or(header.first()),
+                _ if delta < 0 && focused(&middle) => header.first(),
                 _ => None,
             };
             if let Some(button) = landing {
@@ -5170,6 +5185,7 @@ impl App {
                     "  Connect to Jellyfin",
                 )));
                 connect.add_css_class("tp-button");
+                connect.add_css_class("tp-jellyfin");
                 connect.set_halign(gtk::Align::Center);
                 name_it(&connect, "Connect to Jellyfin");
                 middle.append(&connect);
@@ -5278,16 +5294,21 @@ impl App {
         // rows, which is what they look like they should do - as one list they
         // fell through to GTK's own directional search, and it will not find a
         // button in the bottom corner from one in the middle of the page.
-        let mut header = vec![browse.clone(), address];
-        header.extend(connect);
+        let header = vec![browse.clone(), address];
+        // Its own row, because it is drawn on its own line: down from the pair
+        // reaches it, and down again reaches the corner. As a third entry in
+        // the header it was reachable only sideways, which is not what a
+        // button under two others looks like it should need.
+        let connect_row: Vec<gtk::Button> = connect.into_iter().collect();
         let mut footer = vec![gear];
         footer.extend(fullscreen);
         self.set_nav(None, &header, &footer);
+        self.set_nav_middle(&connect_row);
         // And the arrows have to be sent somewhere. `wire_navigation` does
         // this for every screen built around a list, and this one is not - so
         // without it the keys reached a focused button, which does nothing
         // with them, and stopped there.
-        for button in header.iter().chain(footer.iter()) {
+        for button in header.iter().chain(connect_row.iter()).chain(footer.iter()) {
             self.wire_arrows(button.upcast_ref());
         }
         // Deferred until the page is actually in the window. This is built
@@ -10229,6 +10250,26 @@ impl App {
         self.nav_stops.borrow_mut().push(widget.clone().upcast());
     }
 
+    /// Puts a row of buttons between the header and the footer.
+    ///
+    /// Called after [`set_nav`], which clears it. Up and down then step
+    /// header, middle, footer rather than stepping over the middle - which is
+    /// what a button drawn on its own line below two others looks like it
+    /// should do, and what it did not do when it was merely the third entry of
+    /// the header row.
+    ///
+    /// [`set_nav`]: Self::set_nav
+    fn set_nav_middle(&self, middle: &[gtk::Button]) {
+        *self.nav_middle.borrow_mut() = middle.to_vec();
+        // Into the tab order in the place it is on the page: after the header
+        // it sits under, before the footer in the corner.
+        let after = self.nav_header.borrow().len();
+        let mut stops = self.nav_stops.borrow_mut();
+        for (offset, button) in middle.iter().enumerate() {
+            stops.insert(after + offset, button.clone().upcast());
+        }
+    }
+
     /// Moves to the next or previous thing on this screen worth stopping on.
     ///
     /// Returns whether it did, so a screen with no stops of its own - a text
@@ -13983,6 +14024,26 @@ fn style_css(scale: f64) -> String {
             border-color: transparent;
         }}
         .tp-action:hover {{ background-color: {play_hover}; }}
+        /* Jellyfin's own gradient, on the one button that connects to one.
+           `background-image` carries it rather than `background-color`, which
+           takes a single value - and the theme paints its own gradient image
+           there, so anything set as a colour alone is drawn over.
+
+           Their permission covers the gradient on a logo, so a control wearing
+           it is beyond what is written down - kept only while it is being
+           looked at. The hex values are theirs exactly. */
+        .tp-jellyfin {{
+            font-weight: bold;
+            /* Restated rather than inherited from `.tp-button`. A background
+               *image* is not clipped to that rule's radius the way a colour
+               is, so the gradient came out square-cornered inside a rounded
+               button. */
+            border-radius: {radius}px;
+            background-image: linear-gradient(to right, {jf_start}, {jf_end});
+            background-color: transparent;
+            color: {play_ink};
+            border-color: transparent;
+        }}
         /* Focus said loudly, because this is read from a distance and these
            buttons no longer sit in a list whose highlight does the saying. A
            ring around the button rather than a change of fill: the fill is
@@ -14691,6 +14752,8 @@ fn style_css(scale: f64) -> String {
         focus_ring = px(3.0).max(2),
         // The blue the play and restart buttons are drawn in - the same accent
         // as everything else the application colors deliberately.
+        jf_start = "#AA5CC3",
+        jf_end = "#00A4DC",
         play_fill = "#3584e4",
         play_hover = "#4a90e8",
         play_ink = "#ffffff",
