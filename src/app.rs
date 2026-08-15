@@ -8333,15 +8333,13 @@ impl App {
             // Kodi's user data lives apart from Kodi itself, and it does not
             // exist until Kodi has been run once.
             Item::KodiAdd => {
-                "For a Kodi that was not found, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
+                "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
             }
             // Says what will happen, because the answer is unusual enough to
             // be worth knowing before pressing it: no password is ever typed
             // into TinePlayer, which is the whole reason this is a code and
             // not a login form.
-            Item::JellyfinConnect => {
-                "Finds your server and shows a code to enter in a Jellyfin app you are already signed in to. No password is typed here."
-            }
+            Item::JellyfinConnect => "Find and connect to a Jellyfin server using Quick Connect.",
             Item::JellyfinDisconnect => {
                 "Removes the access token stored on this machine and signs this device out of the server."
             }
@@ -8485,10 +8483,10 @@ impl App {
         GroupNote {
             sentence: match self.jellyfin_pane() {
                 JellyfinPane::NotConnected => {
-                    "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app on a phone or tablet. Connecting stores an access token on this machine that can read and stream that library.".to_string()
+                    "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet.".to_string()
                 }
                 JellyfinPane::Connected => format!(
-                    "{} Videos can be cast to TinePlayer from the Jellyfin app on a phone or tablet. The access token stored on this machine can read and stream this library, and disconnecting removes it.",
+                    "{} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet.",
                     connected.unwrap_or_default(),
                 ),
             },
@@ -10961,7 +10959,11 @@ impl App {
         let attempt = self.jellyfin_attempt.get() + 1;
         self.jellyfin_attempt.set(attempt);
 
-        let page = wizard_page("Connect to Jellyfin");
+        // Named for what it is rather than repeating the step before it. This
+        // half of the dialog is Jellyfin's own Quick Connect, and the words on
+        // screen match what the viewer is about to go looking for in their
+        // Jellyfin app - which is the menu item called Quick Connect.
+        let page = wizard_page("Quick Connect");
         // Filled in once the server answers. Empty rather than absent, so the
         // panel does not change shape under the eye when the code arrives.
         let code = gtk::Label::new(None);
@@ -11119,10 +11121,9 @@ impl App {
         let app = self.clone();
         self.confirm_jellyfin(
             "Disconnect from Jellyfin?",
-            &[
-                &format!("TinePlayer will no longer appear as a player in {server}."),
-                "The access token stored on this machine will be removed. Connecting again takes a new code.",
-            ],
+            &[&format!(
+                "TinePlayer will no longer appear as a player in {server}."
+            )],
             Confirm {
                 label: "Disconnect",
                 destructive: true,
