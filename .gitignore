@@ -13,3 +13,8 @@ dist/
 # Upstream Noto faces that build-fonts.py downloads and cuts down. Tens of
 # megabytes, fetched again on demand, and not what we ship - data/fonts is.
 packaging/fonts/.sources/
+
+# Python leaves these beside any script it imports; the extractor gets
+# imported by its own tests.
+__pycache__/
+*.pyc

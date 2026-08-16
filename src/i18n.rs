@@ -1179,6 +1179,51 @@ mod tests {
         );
     }
 
+    /// A message with newlines inside it, which `config.rs` has three of - the
+    /// "couldn't read your settings" report is paragraphs, not a phrase.
+    ///
+    /// Worth its own test because such a message is written to a `.po` in a
+    /// shape nothing else here uses: gettext breaks it across several quoted
+    /// lines with an empty one first, and the newlines survive only as `\n`
+    /// escapes inside them. A round trip that dropped or doubled those would
+    /// show up as one run-on paragraph on the one screen somebody reads when
+    /// their settings have just gone back to defaults.
+    #[test]
+    fn a_message_with_newlines_in_it_survives_the_round_trip() {
+        let text = concat!(
+            "msgid \"\"\n",
+            "msgstr \"\"\n",
+            "\"Language: de\\n\"\n",
+            "\"MIME-Version: 1.0\\n\"\n",
+            "\"Content-Type: text/plain; charset=UTF-8\\n\"\n",
+            "\"Plural-Forms: nplurals=2; plural=(n != 1);\\n\"\n",
+            "\n",
+            "msgid \"\"\n",
+            "\"One.\\n\"\n",
+            "\"\\n\"\n",
+            "\"Two {reason}.\"\n",
+            "msgstr \"\"\n",
+            "\"Eins.\\n\"\n",
+            "\"\\n\"\n",
+            "\"Zwei {reason}.\"\n",
+        );
+
+        let path = std::env::temp_dir().join("tineplayer-newlines-catalog.po");
+        std::fs::write(&path, text).expect("the temporary directory is writable");
+        let loaded = load(&path);
+        let _ = std::fs::remove_file(&path);
+
+        let loaded = loaded.expect("a catalog with newlines in a message is still a catalog");
+        assert_eq!(
+            loaded
+                .singular
+                .get("One.\n\nTwo {reason}.")
+                .map(String::as_str),
+            Some("Eins.\n\nZwei {reason}."),
+            "the newlines did not come back as newlines"
+        );
+    }
+
     /// The `TINEPLAYER_PO` path, against a real catalog in this repository.
     ///
     /// Worth a test of its own because it is the one route through this module

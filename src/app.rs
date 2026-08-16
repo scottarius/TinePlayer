@@ -6202,7 +6202,7 @@ impl App {
                     .unwrap_or_else(|| crate::subtitles::DEFAULT_MODE.to_string());
                 current = crate::subtitles::MODES
                     .iter()
-                    .position(|(value, _)| *value == setting)
+                    .position(|value| *value == setting)
                     .or_else(|| {
                         crate::languages::LANGUAGES
                             .iter()
@@ -6215,8 +6215,13 @@ impl App {
                 // naming a language is a guess that holds until it does not.
                 dividers.push(1);
                 dividers.push(modes);
-                for (position, (_, label)) in crate::subtitles::MODES.iter().enumerate() {
-                    entries.push((label.to_string(), Some(position)));
+                for (position, value) in crate::subtitles::MODES.iter().enumerate() {
+                    // The stored value and what it reads as are two different
+                    // things now: one goes in config.yaml, the other on screen.
+                    let label = crate::subtitles::mode_label(value)
+                        .map(std::borrow::Cow::into_owned)
+                        .unwrap_or_else(|| (*value).to_string());
+                    entries.push((label, Some(position)));
                 }
                 for (position, (code, name, native, _)) in
                     crate::languages::LANGUAGES.iter().enumerate()
@@ -6698,7 +6703,7 @@ impl App {
                 let modes = crate::subtitles::MODES.len();
                 let picked = choice.map(|index| match index.checked_sub(modes) {
                     Some(language) => crate::languages::LANGUAGES[language].0.to_string(),
-                    None => crate::subtitles::MODES[index].0.to_string(),
+                    None => crate::subtitles::MODES[index].to_string(),
                 });
                 let mut config = self.config.borrow_mut();
                 config.subtitle_language = picked;
@@ -9179,10 +9184,12 @@ impl App {
             sentence: setup
                 .confinement
                 .unsupported_reason()
-                .unwrap_or(
-                    "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect.",
-                )
-                .to_string(),
+                .unwrap_or_else(|| {
+                    tr!(
+                        "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect."
+                    )
+                })
+                .into_owned(),
             folder: Some(setup.userdata().to_path_buf()),
         })
     }
@@ -11382,13 +11389,13 @@ impl App {
             return;
         };
 
-        let page = wizard_page(manual.what);
-        page.append(&wizard_text(manual.why, false));
+        let page = wizard_page(&manual.what);
+        page.append(&wizard_text(&manual.why, false));
         if let Some(command) = manual.command {
             page.append(&wizard_text("Run this once, in a terminal:", false));
             page.append(&wizard_text(command, true));
         }
-        page.append(&wizard_text(manual.cost, false));
+        page.append(&wizard_text(&manual.cost, false));
         if let Some(undo) = manual.undo {
             page.append(&wizard_text("To undo it:", false));
             page.append(&wizard_text(undo, true));

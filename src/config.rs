@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::tr;
+
 /// What the per-user folder is called.
 ///
 /// Capitalized on Windows, where `AppData\Local` is a list of application
@@ -456,17 +458,24 @@ impl Config {
                 // and the typo in it is the one thing that would explain what
                 // happened. Copied aside first, so it survives.
                 let kept = Self::preserve_unreadable(&path);
-                let mut message = format!(
-                    "Couldn't read your settings from {}.\n\n{e}\n\nTinePlayer has started with default settings.",
-                    path.display()
-                );
+                // On screen rather than only on stderr - it is the one
+                // message somebody has to read to understand why their
+                // settings went back to defaults - so it is translated,
+                // unlike the diagnostics elsewhere in this file.
+                let mut message = tr!(
+                    "Couldn't read your settings from {path}.\n\n{reason}\n\nTinePlayer has started with default settings.",
+                    path = path.display(),
+                    reason = e,
+                )
+                .into_owned();
                 match kept {
-                    Ok(Some(backup)) => message.push_str(&format!(
-                        "\n\nThe file has been kept as {}.",
-                        backup.display()
+                    Ok(Some(backup)) => message.push_str(&tr!(
+                        "\n\nThe file has been kept as {path}.",
+                        path = backup.display()
                     )),
                     Ok(None) => {}
-                    Err(e) => message.push_str(&format!("\n\nIt could not be backed up: {e}")),
+                    Err(e) => message
+                        .push_str(&tr!("\n\nIt could not be backed up: {reason}", reason = e)),
                 }
                 (Config::default(), Some(message))
             }

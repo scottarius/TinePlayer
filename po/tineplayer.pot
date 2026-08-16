@@ -26,92 +26,417 @@ msgid_plural "+{n} more"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/app.rs:8789
+#: src/app.rs:8794
 msgid "Interface Size"
 msgstr ""
 
-#: src/app.rs:8790
+#: src/app.rs:8795
 msgid "Interface Language"
 msgstr ""
 
-#: src/app.rs:8791
+#: src/app.rs:8796
 msgid "Navigation Sounds"
 msgstr ""
 
-#: src/app.rs:8821
+#: src/app.rs:8826
 msgid "Disconnect from {server}"
 msgstr ""
 
-#: src/app.rs:8822
+#: src/app.rs:8827
 msgid "Disconnect"
 msgstr ""
 
-#: src/app.rs:8844
+#: src/app.rs:8849
 msgctxt "audio output device"
 msgid "Not set"
 msgstr ""
 
-#: src/app.rs:8845
+#: src/app.rs:8850
 msgctxt "audio output device"
 msgid "None"
 msgstr ""
 
-#: src/app.rs:8943
+#: src/app.rs:8948
 msgid "The language TinePlayer's own menus are in."
 msgstr ""
 
-#: src/app.rs:8945
+#: src/app.rs:8950
 msgid "Find and read metadata beside video files like .nfo and images often provided by media libraries."
 msgstr ""
 
-#: src/app.rs:8950
+#: src/app.rs:8955
 msgid "If backdrop artwork is found, display it behind the video details."
 msgstr ""
 
-#: src/app.rs:8953
+#: src/app.rs:8958
 msgid "How much of a video should be viewed before offering the choice to resume a previously watched video."
 msgstr ""
 
-#: src/app.rs:8958
+#: src/app.rs:8963
 msgid "How much of a video should be viewed to consider it as watched."
 msgstr ""
 
-#: src/app.rs:8960
+#: src/app.rs:8965
 msgid "Attempt to auto-select a language track for the output."
 msgstr ""
 
-#: src/app.rs:8962
+#: src/app.rs:8967
 msgid "Attempt to auto-select an Audio Description track for the output."
 msgstr ""
 
-#: src/app.rs:8965
+#: src/app.rs:8970
 msgid "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
 msgstr ""
 
-#: src/app.rs:8969
+#: src/app.rs:8974
 msgid "Attempt to auto-select subtitles when available."
 msgstr ""
 
-#: src/app.rs:8971
+#: src/app.rs:8976
 msgid "Delete remembered video preferences, track choices, and resume positions."
 msgstr ""
 
-#: src/app.rs:8974
+#: src/app.rs:8979
 msgid "This Kodi runs in a sandbox and needs permission before it can start TinePlayer."
 msgstr ""
 
-#: src/app.rs:8982
+#: src/app.rs:8987
 msgid "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
 msgstr ""
 
-#: src/app.rs:8991
+#: src/app.rs:8996
 msgid "Find and connect to a Jellyfin server using Quick Connect."
 msgstr ""
 
-#: src/app.rs:8994
+#: src/app.rs:8999
 msgid "Removes the access token stored on this machine and signs this device out of the server."
+msgstr ""
+
+#: src/app.rs:9188
+msgid "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect."
+msgstr ""
+
+#: src/config.rs:465
+msgid ""
+"Couldn't read your settings from {path}.\n"
+"\n"
+"{reason}\n"
+"\n"
+"TinePlayer has started with default settings."
+msgstr ""
+
+#: src/config.rs:472
+msgid ""
+"\n"
+"\n"
+"The file has been kept as {path}."
+msgstr ""
+
+#: src/config.rs:478
+msgid ""
+"\n"
+"\n"
+"It could not be backed up: {reason}"
+msgstr ""
+
+#: src/controls.rs:1068 src/controls.rs:2619
+msgid "Playback controls"
+msgstr ""
+
+#: src/controls.rs:2617
+msgid "Playback position"
+msgstr ""
+
+#: src/controls.rs:556
+msgid "Play or pause"
+msgstr ""
+
+#: src/controls.rs:567
+msgid "Skip back"
+msgstr ""
+
+#: src/controls.rs:574
+msgid "Skip forward"
+msgstr ""
+
+#: src/controls.rs:614 src/shortcuts.rs:129
+msgid "Toggle fullscreen"
+msgstr ""
+
+#: src/controls.rs:626
+msgid "Show or hide subtitles"
+msgstr ""
+
+#: src/controls.rs:746 src/controls.rs:769
+msgid "Audio sync, {name}"
+msgstr ""
+
+#: src/controls.rs:757
+msgid "Use audio sync, {name}"
+msgstr ""
+
+#: src/controls.rs:854
+msgid "All Outputs"
+msgstr ""
+
+#: src/controls.rs:863
+msgid "Silence all outputs"
+msgstr ""
+
+#: src/controls.rs:870 src/controls.rs:880
+msgid "Volume, all outputs"
 msgstr ""
 
 #: src/i18n.rs:696
 msgid "Use the system language"
+msgstr ""
+
+#: src/kodi_setup.rs:122
+msgid "Snap installs do not support external players."
+msgstr ""
+
+#: src/kodi_setup.rs:138
+msgid "Default Installation"
+msgstr ""
+
+#: src/kodi_setup.rs:271
+msgid "Custom"
+msgstr ""
+
+#: src/kodi_setup.rs:58
+msgid "Not configured"
+msgstr ""
+
+#: src/kodi_setup.rs:59
+msgid "Additional Player"
+msgstr ""
+
+#: src/kodi_setup.rs:60
+msgid "Default Player"
+msgstr ""
+
+#: src/kodi_setup.rs:682
+msgid "Allow Kodi to start programs outside its sandbox"
+msgstr ""
+
+#: src/kodi_setup.rs:683
+msgid ""
+"Kodi is installed as a Flatpak. It starts an external player inside its own \\\n"
+"                 sandbox, where TinePlayer is not installed and your files are not visible, \\\n"
+"                 so it has to be allowed to run the command on the machine instead."
+msgstr ""
+
+#: src/kodi_setup.rs:691
+msgid ""
+"This lets Kodi run anything on this machine, not only TinePlayer. TinePlayer \\\n"
+"                 will not run it for you."
+msgstr ""
+
+#: src/kodi_setup.rs:75
+msgid "Remove configuration"
+msgstr ""
+
+#: src/shortcuts.rs:104
+msgid "General"
+msgstr ""
+
+#: src/shortcuts.rs:107
+msgctxt "keyboard keys"
+msgid "Arrows"
+msgstr ""
+
+#: src/shortcuts.rs:109
+msgid "Navigate menus and controls"
+msgstr ""
+
+#: src/shortcuts.rs:112
+msgctxt "keyboard keys"
+msgid "Tab"
+msgstr ""
+
+#: src/shortcuts.rs:113
+msgctxt "gamepad buttons"
+msgid "Bumpers"
+msgstr ""
+
+#: src/shortcuts.rs:114
+msgid "Navigate between menu sections"
+msgstr ""
+
+#: src/shortcuts.rs:117
+msgctxt "keyboard keys"
+msgid "Enter"
+msgstr ""
+
+#: src/shortcuts.rs:118
+msgctxt "gamepad buttons"
+msgid "A"
+msgstr ""
+
+#: src/shortcuts.rs:119
+msgid "Select/Activate focused element"
+msgstr ""
+
+#: src/shortcuts.rs:122
+msgctxt "keyboard keys"
+msgid "F, F11"
+msgstr ""
+
+#: src/shortcuts.rs:123
+msgctxt "gamepad buttons"
+msgid "Y"
+msgstr ""
+
+#: src/shortcuts.rs:132
+msgctxt "keyboard keys"
+msgid "Ctrl+O"
+msgstr ""
+
+#: src/shortcuts.rs:134
+msgid "Browse for a video file to open"
+msgstr ""
+
+#: src/shortcuts.rs:137
+msgctxt "keyboard keys"
+msgid "Ctrl+L"
+msgstr ""
+
+#: src/shortcuts.rs:139
+msgid "Open a video by URL"
+msgstr ""
+
+#: src/shortcuts.rs:142
+msgctxt "keyboard keys"
+msgid "F1"
+msgstr ""
+
+#: src/shortcuts.rs:143
+msgctxt "gamepad buttons"
+msgid "Select"
+msgstr ""
+
+#: src/shortcuts.rs:144
+msgid "Display shortcuts"
+msgstr ""
+
+#: src/shortcuts.rs:59
+msgid "Player Control"
+msgstr ""
+
+#: src/shortcuts.rs:62
+msgctxt "keyboard keys"
+msgid "Space"
+msgstr ""
+
+#: src/shortcuts.rs:63
+msgctxt "gamepad buttons"
+msgid "A, Start"
+msgstr ""
+
+#: src/shortcuts.rs:64
+msgid "Toggle play/pause"
+msgstr ""
+
+#: src/shortcuts.rs:67
+msgctxt "keyboard keys"
+msgid "Left, Right"
+msgstr ""
+
+#: src/shortcuts.rs:68 src/shortcuts.rs:73 src/shortcuts.rs:108
+msgctxt "gamepad buttons"
+msgid "D-pad"
+msgstr ""
+
+#: src/shortcuts.rs:69
+msgid "Skip ten seconds, hold to scrub"
+msgstr ""
+
+#: src/shortcuts.rs:72
+msgctxt "keyboard keys"
+msgid "Up, Down"
+msgstr ""
+
+#: src/shortcuts.rs:74
+msgid "Open/Close player controls"
+msgstr ""
+
+#: src/shortcuts.rs:77
+msgctxt "keyboard keys"
+msgid "A, S"
+msgstr ""
+
+#: src/shortcuts.rs:79
+msgid "Next soundtrack on the first or second output"
+msgstr ""
+
+#: src/shortcuts.rs:82
+msgctxt "keyboard keys"
+msgid "+, -"
+msgstr ""
+
+#: src/shortcuts.rs:84
+msgid "Adjust main volume (all outputs)"
+msgstr ""
+
+#: src/shortcuts.rs:87
+msgctxt "keyboard keys"
+msgid "M"
+msgstr ""
+
+#: src/shortcuts.rs:88
+msgctxt "gamepad buttons"
+msgid "Hold X"
+msgstr ""
+
+#: src/shortcuts.rs:89
+msgid "Toggle mute"
+msgstr ""
+
+#: src/shortcuts.rs:92
+msgctxt "keyboard keys"
+msgid "C"
+msgstr ""
+
+#: src/shortcuts.rs:93
+msgctxt "gamepad buttons"
+msgid "X"
+msgstr ""
+
+#: src/shortcuts.rs:94
+msgid "Toggle subtitles"
+msgstr ""
+
+#: src/shortcuts.rs:97
+msgctxt "keyboard keys"
+msgid "Esc"
+msgstr ""
+
+#: src/shortcuts.rs:98
+msgctxt "gamepad buttons"
+msgid "B"
+msgstr ""
+
+#: src/shortcuts.rs:99
+msgid "Back, or close menus/controls"
+msgstr ""
+
+#: src/subtitles.rs:236
+msgctxt "subtitle preference"
+msgid "None"
+msgstr ""
+
+#: src/subtitles.rs:237
+msgid "Forced (Prefer First Output Language)"
+msgstr ""
+
+#: src/subtitles.rs:238
+msgid "Forced (Prefer Second Output Language)"
+msgstr ""
+
+#: src/subtitles.rs:239
+msgid "First Output Language"
+msgstr ""
+
+#: src/subtitles.rs:240
+msgid "Second Output Language"
 msgstr ""

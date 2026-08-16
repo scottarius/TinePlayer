@@ -4,11 +4,13 @@
 //! an independent choice, and may well be a third language rather than a copy
 //! of either soundtrack.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::probe::SubtitleTrack;
+use crate::{tr, trc};
 
 /// Formats GStreamer can parse from a plain file. Blu-ray `.sup` and the
 /// VOBSUB `.sub`/`.idx` pair are deliberately absent: both are bitmap
@@ -212,13 +214,33 @@ impl Subtitle {
 /// The automatic choices offered above the language list, as stored and as
 /// shown. Following an output is usually better than naming a language: it
 /// tracks whatever is actually being heard, file by file.
-pub const MODES: [(&str, &str); 5] = [
-    ("none", "None"),
-    ("primary_forced", "Forced (Prefer First Output Language)"),
-    ("secondary_forced", "Forced (Prefer Second Output Language)"),
-    ("primary", "First Output Language"),
-    ("secondary", "Second Output Language"),
+/// **Stored values only.** These go into `config.yaml` and are matched by
+/// `--subtitle`, so they are not language and never change. What each one
+/// reads as on screen is [`mode_label`], which is - the two used to be one
+/// table of pairs, and a translated label in it would have been written to
+/// the config file as the setting.
+pub const MODES: [&str; 5] = [
+    "none",
+    "primary_forced",
+    "secondary_forced",
+    "primary",
+    "secondary",
 ];
+
+/// How one of [`MODES`] reads on screen, or `None` if that is not a mode.
+pub fn mode_label(value: &str) -> Option<Cow<'static, str>> {
+    Some(match value {
+        // A third sense of "None" in this interface, after an output device
+        // and a list of languages. English spells all three the same way and
+        // several languages do not, which is what the context is for.
+        "none" => trc!("subtitle preference", "None"),
+        "primary_forced" => tr!("Forced (Prefer First Output Language)"),
+        "secondary_forced" => tr!("Forced (Prefer Second Output Language)"),
+        "primary" => tr!("First Output Language"),
+        "secondary" => tr!("Second Output Language"),
+        _ => return None,
+    })
+}
 
 /// How the setting reads on screen: one of [`MODES`] or a language name.
 ///
@@ -227,10 +249,8 @@ pub const MODES: [(&str, &str); 5] = [
 /// settings list showed `primary_forced` rather than what it means.
 pub fn describe(setting: Option<&str>) -> String {
     let setting = setting.unwrap_or(DEFAULT_MODE);
-    MODES
-        .iter()
-        .find(|(value, _)| *value == setting)
-        .map(|(_, label)| (*label).to_string())
+    mode_label(setting)
+        .map(Cow::into_owned)
         .unwrap_or_else(|| crate::languages::name_for(setting))
 }
 
@@ -355,10 +375,7 @@ pub fn resolve(
 
     // Anything the setting accepts is accepted here too, and means the same:
     // one run set that way, rather than changing the setting itself.
-    if MODES
-        .iter()
-        .any(|(value, _)| value.eq_ignore_ascii_case(spec))
-    {
+    if MODES.iter().any(|value| value.eq_ignore_ascii_case(spec)) {
         return Ok(automatic(
             &Auto::parse(spec),
             options,

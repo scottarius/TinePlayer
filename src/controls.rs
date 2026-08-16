@@ -27,6 +27,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::player::Playback;
+use crate::tr;
 
 /// Which part of the strip a controller is driving.
 ///
@@ -552,7 +553,7 @@ impl Controls {
         let play = gtk::Button::new();
         play.set_child(Some(&icon));
         play.add_css_class("tp-transport-button");
-        name_it(&play, "Play or pause");
+        name_it(&play, &tr!("Play or pause"));
 
         // go-* rather than media-seek-*: the seek glyphs are absent from the
         // GTK that ships with GStreamer on Windows, and a missing icon draws
@@ -563,14 +564,14 @@ impl Controls {
         let skip_back = gtk::Button::new();
         skip_back.set_child(Some(&back_icon));
         skip_back.add_css_class("tp-transport-button");
-        name_it(&skip_back, "Skip back");
+        name_it(&skip_back, &tr!("Skip back"));
 
         let forward_icon = gtk::Image::from_icon_name("go-next-symbolic");
         forward_icon.add_css_class("tp-transport");
         let skip_forward = gtk::Button::new();
         skip_forward.set_child(Some(&forward_icon));
         skip_forward.add_css_class("tp-transport-button");
-        name_it(&skip_forward, "Skip forward");
+        name_it(&skip_forward, &tr!("Skip forward"));
 
         // Beside play, because they are the same kind of thing: what playback
         // is doing right now.
@@ -610,7 +611,7 @@ impl Controls {
         let fullscreen = gtk::Button::new();
         fullscreen.set_child(Some(&crate::app::fullscreen_image(fullscreen_now, scale)));
         fullscreen.add_css_class("tp-transport-button");
-        name_it(&fullscreen, "Toggle fullscreen");
+        name_it(&fullscreen, &tr!("Toggle fullscreen"));
         // Hidden rather than dimmed when fullscreen is fixed for this run:
         // there is nothing to be waiting for, so nothing to grey out.
         fullscreen.set_visible(!lock_fullscreen);
@@ -622,7 +623,7 @@ impl Controls {
         subtitles.set_child(Some(&crate::app::subtitles_image(scale)));
         subtitles.add_css_class("tp-transport-button");
         subtitles.add_css_class("tp-subtitles-button");
-        name_it(&subtitles, "Show or hide subtitles");
+        name_it(&subtitles, &tr!("Show or hide subtitles"));
         subtitles.set_sensitive(false);
 
         // One speaker for the sound, where there used to be one per output.
@@ -742,7 +743,7 @@ impl Controls {
             sync.set_hexpand(true);
             sync.set_can_focus(false);
             sync.add_css_class("tp-progress");
-            name_it(&sync, &format!("Audio sync, {name}"));
+            name_it(&sync, &tr!("Audio sync, {name}", name = name));
 
             // The same shape as the row above: a button the width of the
             // mute one, then the bar. Pressing it puts the output back in
@@ -753,7 +754,7 @@ impl Controls {
             sync_toggle.set_child(Some(&crate::app::sync_image(scale)));
             sync_toggle.add_css_class("tp-transport-button");
             sync_toggle.set_can_focus(false);
-            name_it(&sync_toggle, &format!("Use audio sync, {name}"));
+            name_it(&sync_toggle, &tr!("Use audio sync, {name}", name = name));
 
             let sync_reading = reading_label(&crate::app::offset_label(0.0));
 
@@ -765,7 +766,7 @@ impl Controls {
                 .spacing(ROW_SPACING)
                 .build();
             sync_row.set_focusable(true);
-            name_it(&sync_row, &format!("Audio sync, {name}"));
+            name_it(&sync_row, &tr!("Audio sync, {name}", name = name));
             sync_row.append(&sync_toggle);
             sync_row.append(&sync);
             sync_row.append(&sync_reading);
@@ -850,7 +851,7 @@ impl Controls {
         // this row is the same kind of thing at a different scope rather than a
         // third output.
         let main_label = gtk::Label::builder()
-            .label("All Outputs")
+            .label(tr!("All Outputs").as_ref())
             .halign(gtk::Align::Start)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(["tp-hint"])
@@ -859,14 +860,14 @@ impl Controls {
         let main_mute = gtk::Button::from_icon_name("audio-volume-high-symbolic");
         main_mute.add_css_class("tp-transport-button");
         main_mute.set_can_focus(false);
-        name_it(&main_mute, "Silence all outputs");
+        name_it(&main_mute, &tr!("Silence all outputs"));
 
         let main = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
         main.set_draw_value(false);
         main.set_hexpand(true);
         main.set_can_focus(false);
         main.add_css_class("tp-progress");
-        name_it(&main, "Volume, all outputs");
+        name_it(&main, &tr!("Volume, all outputs"));
         main.set_value(1.0);
 
         let main_reading = reading_label(&crate::app::volume_label(1.0, false));
@@ -876,7 +877,7 @@ impl Controls {
             .spacing(ROW_SPACING)
             .build();
         main_row.set_focusable(true);
-        name_it(&main_row, "Volume, all outputs");
+        name_it(&main_row, &tr!("Volume, all outputs"));
         main_row.append(&main_mute);
         main_row.append(&main);
         main_row.append(&main_reading);
@@ -1064,7 +1065,7 @@ impl Controls {
         // Takes the focus for everything inside it. Nothing else in the strip
         // can hold it, which is what makes this the one place to put it.
         row.set_focusable(true);
-        name_it(&row, "Playback controls");
+        name_it(&row, &tr!("Playback controls"));
 
         // Slides up rather than appearing, which reads as deliberate at a
         // distance where a sudden change is just a flicker.
@@ -2612,10 +2613,10 @@ impl Controls {
 
         name_it(
             &self.holder,
-            if self.row.get() == Row::Timeline {
-                "Playback position"
+            &if self.row.get() == Row::Timeline {
+                tr!("Playback position")
             } else {
-                "Playback controls"
+                tr!("Playback controls")
             },
         );
 

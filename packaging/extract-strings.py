@@ -263,6 +263,50 @@ def quote(text: str) -> str:
     return "\n".join(out)
 
 
+def similar(text: str) -> str:
+    """A message flattened to what it would mean to a translator.
+
+    Case, trailing punctuation, doubled spaces and the *names* of holes are all
+    things two strings can differ in while saying the same thing - and a
+    translator handed both translates the same sentence twice, after which the
+    two can drift apart in the interface with nothing to catch it.
+    """
+    flattened = re.sub(r"\s+", " ", text).strip().lower()
+    flattened = re.sub(r"\{[a-z_0-9]+\}", "{}", flattened)
+    return flattened.rstrip(".:!?…")
+
+
+def report_duplicates(messages: dict) -> None:
+    """Prints messages that are near enough to be worth consolidating.
+
+    NOT done automatically, and not a failure. Whether two similar strings
+    should be one is a judgment about the interface - "Choose a video" and
+    "Choose a video file" may be two rows that should agree, or a row and a
+    dialog title that should not. What the script can do is make sure nobody
+    has to notice them by reading.
+
+    Worth acting on BEFORE a catalog reaches Weblate. A msgid is its own key,
+    so changing one afterwards orphans every translation of it: the string
+    comes back untranslated in every language, and somebody has to do the work
+    again. Consolidating is free today and expensive next month.
+    """
+    groups: dict[str, list] = {}
+    for (context, msgid), entry in messages.items():
+        groups.setdefault(similar(msgid), []).append((context, msgid, entry))
+
+    families = [g for g in groups.values() if len({m for _, m, _ in g}) > 1]
+    if not families:
+        return
+
+    print(f"\n{len(families)} group(s) worth looking at for consolidation:\n")
+    for family in sorted(families, key=lambda g: g[0][1]):
+        for context, msgid, entry in sorted(family, key=lambda m: m[1]):
+            marker = f" [context: {context}]" if context else ""
+            print(f'  "{msgid}"{marker}')
+            print(f"      {entry['places'][0]}")
+        print()
+
+
 def main() -> None:
     messages = extract()
 
@@ -322,6 +366,7 @@ msgstr ""
         f"{TEMPLATE.relative_to(ROOT)}: {len(messages)} messages "
         f"({plurals} with plural forms, {contexts} with a context)"
     )
+    report_duplicates(messages)
 
 
 if __name__ == "__main__":
