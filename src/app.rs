@@ -2351,12 +2351,12 @@ impl App {
             }
             // Everything below drives the controls rather than the pipeline,
             // which is what keeps one answer to each of these questions: the
-            // remote moves the same master and picks from the same lists the
-            // person in the room does, and the strip is woken so what it did is
-            // visible rather than mysterious.
+            // remote moves the same all-outputs level and picks from the same
+            // lists the person in the room does, and the strip is woken so what
+            // it did is visible rather than mysterious.
             Command::SetVolume(level) => {
                 if let Some(controls) = self.controls.borrow().clone() {
-                    controls.master_to(level);
+                    controls.main_to(level);
                 }
                 self.wake_controls();
             }
@@ -2388,8 +2388,9 @@ impl App {
         }
     }
 
-    /// What a controller should show: the master, the blanket silence, and what
-    /// the first output and the subtitles are playing, in Jellyfin's numbering.
+    /// What a controller should show: the main level, the blanket silence, and
+    /// what the first output and the subtitles are playing, in Jellyfin's
+    /// numbering.
     ///
     /// Worked out here rather than remembered as it changes, because every
     /// answer already lives somewhere - and a second copy kept in step by hand
@@ -2427,7 +2428,7 @@ impl App {
         };
 
         crate::jellyfin::Sound {
-            level: self.config.borrow().master_volume(),
+            level: self.config.borrow().main_volume(),
             muted: self.hushed.get(),
             audio,
             subtitle,
@@ -3031,10 +3032,10 @@ impl App {
     /// to the next scheduled report.
     ///
     /// Those go every ten seconds, which is right for a position that a phone
-    /// can interpolate between and wrong for a level: moving the master in the
-    /// room left the slider on somebody's phone showing the old value for most
-    /// of a minute, which reads as a remote that has lost the player rather
-    /// than one that is a moment behind. Reported by Scott, 2026-08-14.
+    /// can interpolate between and wrong for a level: moving the main level in
+    /// the room left the slider on somebody's phone showing the old value for
+    /// most of a minute, which reads as a remote that has lost the player
+    /// rather than one that is a moment behind. Reported by Scott, 2026-08-14.
     ///
     /// The same debounce the configuration write uses, and for the same reason,
     /// with a shorter wait because this one is about what somebody is watching
@@ -7970,13 +7971,13 @@ impl App {
     }
 
     /// Sends an output's level to the pipeline: what that output is set to,
-    /// times the master over both of them.
+    /// times the main level over both of them.
     ///
     /// The one road to a sink's level, for the reason `push_offset` is the one
-    /// road to its delay. Two outputs and a master mean two numbers behind
+    /// road to its delay. Two outputs and a main level mean two numbers behind
     /// every level, and every place that rebuilt the sum by hand would be a
-    /// place free to leave the master out - which sounds exactly like a level
-    /// that ignores the control somebody just moved.
+    /// place free to leave the main level out - which sounds exactly like a
+    /// level that ignores the control somebody just moved.
     fn push_volume(&self, role: &str) {
         let level = self.config.borrow().volume(role);
         self.push_volume_at(role, level);
@@ -7992,10 +7993,10 @@ impl App {
         }
     }
 
-    /// What a level actually plays at once the master over both outputs is
+    /// What a level actually plays at once the main level over both outputs is
     /// taken into account. The only place the two are multiplied together.
     fn effective(&self, level: f64) -> f64 {
-        level * self.config.borrow().master_volume()
+        level * self.config.borrow().main_volume()
     }
 
     /// Sends whether an output is actually silent: whether it is muted in its
@@ -12058,10 +12059,10 @@ impl App {
                 );
                 controls.set_levels(&levels);
                 // The pipeline built each output's level from that output's own
-                // setting, which is all the configuration told it. The master is
-                // applied here, once, before a frame has played - the same shape
-                // as the alignment baseline below it.
-                controls.set_master_level(self.config.borrow().master_volume());
+                // setting, which is all the configuration told it. The main
+                // level is applied here, once, before a frame has played - the
+                // same shape as the alignment baseline below it.
+                controls.set_main_level(self.config.borrow().main_volume());
                 for (role, _) in &outputs {
                     playback.set_volume(role, self.effective(self.config.borrow().volume(role)));
                 }
@@ -12082,16 +12083,16 @@ impl App {
                     // chore rather than a control.
                     let app = self.clone();
                     controls.connect_volume(move |role, level, muted, persist| {
-                        // Through the one function that knows about the master,
-                        // rather than sent straight to the sink from here. What
-                        // an output plays at is its own level times the master,
-                        // and a second place doing that arithmetic is how the
-                        // two come to disagree - the same lesson `push_offset`
-                        // is already the answer to.
+                        // Through the one function that knows about the main
+                        // level, rather than sent straight to the sink from
+                        // here. What an output plays at is its own level times
+                        // the main level, and a second place doing that
+                        // arithmetic is how the two come to disagree - the same
+                        // lesson `push_offset` is already the answer to.
                         //
-                        // Given the level rather than reading it back out of the
-                        // configuration, because a level that is not being kept
-                        // never reaches the configuration at all.
+                        // Given the level rather than reading it back out of
+                        // the configuration, because a level that is not being
+                        // kept never reaches the configuration at all.
                         app.push_volume_at(role, level);
                         app.push_mute(role, muted);
                         if !persist {
@@ -12105,11 +12106,11 @@ impl App {
                         app.save_volume_soon();
                     });
 
-                    // The master moves both outputs, so both are pushed again
-                    // rather than one being singled out. Kept like a level and
-                    // unlike a hush: somebody chose it, and a film that started
-                    // at half volume because of last week is a setting, where a
-                    // film that started silent would be a bug.
+                    // The main level moves both outputs, so both are pushed
+                    // again rather than one being singled out. Kept like a
+                    // level and unlike a hush: somebody chose it, and a film
+                    // that started at half volume because of last week is a
+                    // setting, where a film that started silent would be a bug.
                     // Silencing everything is a layer over the outputs rather
                     // than a change to them, so what comes back is only whether
                     // the layer is on. Each output is then pushed at its own
@@ -12125,8 +12126,8 @@ impl App {
                     });
 
                     let app = self.clone();
-                    controls.connect_master(move |level| {
-                        app.config.borrow_mut().set_master_volume(level);
+                    controls.connect_main(move |level| {
+                        app.config.borrow_mut().set_main_volume(level);
                         for role in ["primary", "secondary"] {
                             app.push_volume(role);
                         }
