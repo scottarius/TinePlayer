@@ -8120,7 +8120,7 @@ impl App {
         // windows rather than one panel changing what it says.
         page.set_size_request((ALIGN_PANEL_MIN * self.scale.get()).round() as i32, -1);
 
-        let heading = heading_label("Auto-Align");
+        let heading = heading_label("Sync Audio");
         heading.set_halign(gtk::Align::Center);
         page.append(&heading);
 
