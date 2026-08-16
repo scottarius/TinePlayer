@@ -45,6 +45,8 @@ pub enum Action {
     /// Swap the right-hand readout between the running time and what is left
     /// of it.
     TimeReadout,
+    /// Show the list of keys and buttons, or put it away.
+    Shortcuts,
 }
 
 /// 60Hz. Polling has to be fast enough that a press feels immediate, and this
@@ -140,6 +142,10 @@ fn button_action(button: Button) -> Option<Action> {
         Button::LeftTrigger2 => Some(Action::PageUp),
         Button::RightTrigger2 => Some(Action::PageDown),
         Button::Start => Some(Action::PlayPause),
+        // Select, which on a pad is where "what do the buttons do" has lived
+        // since long before this application. gilrs also reports it as `Mode`
+        // on some layouts, so both are taken.
+        Button::Select | Button::Mode => Some(Action::Shortcuts),
         // Clicking the right stick: a deliberate press that nothing else
         // wants, for a readout somebody either cares about or never touches.
         Button::RightThumb => Some(Action::TimeReadout),

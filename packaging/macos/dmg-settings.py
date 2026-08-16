@@ -56,7 +56,7 @@ format = "UDZO"
 compression_level = 9
 
 # The mounted volume takes the application's own icon, rather than the
-# generic white disk. bundle.sh generates this from data/tineplayer.png, so
+# generic white disk. bundle.sh generates this from data/branding/, so
 # there is nothing extra to keep in step.
 _icns = "dist/macos/TinePlayer.app/Contents/Resources/TinePlayer.icns"
 if os.path.exists(_icns):

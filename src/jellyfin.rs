@@ -549,7 +549,7 @@ impl Client {
                 // offered without anything behind them at all.
                 //
                 // Volume and the two selectors went in once there was something
-                // behind each of them: one master over both outputs for the
+                // behind each of them: one level over both outputs for the
                 // slider, and the choosers on the control strip for the tracks.
                 // Each drives the same thing the person in the room drives
                 // rather than a second path to the same setting.
@@ -932,7 +932,7 @@ fn to_ticks(nanoseconds: u64) -> u64 {
 /// been chosen, from the phone or from the sofa. Reported by Scott, 2026-08-14.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Sound {
-    /// The master, as a fraction of full.
+    /// The main level, as a fraction of full.
     pub level: f64,
     /// Whether everything is silenced at once. Each output's own mute is
     /// deliberately not folded in: it belongs to one of two people listening,
@@ -1405,9 +1405,9 @@ pub enum Command {
     PlayPause,
     Stop,
     Seek(u64),
-    /// Where the master should stand, as a fraction of full. Jellyfin counts
-    /// in whole percent and TinePlayer in fractions, so the conversion happens
-    /// on the way in and nowhere else.
+    /// Where the main level should stand, as a fraction of full. Jellyfin
+    /// counts in whole percent and TinePlayer in fractions, so the conversion
+    /// happens on the way in and nowhere else.
     SetVolume(f64),
     Mute,
     Unmute,

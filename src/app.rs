@@ -314,6 +314,10 @@ enum Screen {
     AlignResult,
     Confirm,
     Notices,
+    /// The key and button list, when there is no picture to lay it over. In
+    /// playback it is an overlay on the controls instead - see
+    /// `Controls::toggle_shortcuts` for why it cannot be a page there.
+    Shortcuts,
     /// The panels the Kodi pane can open over itself: the folder
     /// browser for naming a Kodi by hand, the confirmation asked before the
     /// first change to a file and before a removal, the sandbox instructions
@@ -1599,6 +1603,102 @@ impl App {
         bind_accels(gtk_app, "app.settings", &["comma"]);
     }
 
+    /// Whether the key list is over the picture right now.
+    fn shortcuts_showing(&self) -> bool {
+        self.controls
+            .borrow()
+            .as_ref()
+            .is_some_and(|controls| controls.shortcuts_open())
+    }
+
+    /// Shows the key list, or puts it away again.
+    ///
+    /// Two ways of showing one list, because there is no single way that works
+    /// on both sides: during playback it is an overlay over the picture, since
+    /// a page would replace the window's child and take the video widget with
+    /// it, and everywhere else it is an ordinary page.
+    fn toggle_shortcuts(self: &Rc<Self>) {
+        if let Some(controls) = self.controls.borrow().clone() {
+            controls.toggle_shortcuts(self.scale.get());
+            return;
+        }
+        if *self.screen.borrow() == Screen::Shortcuts {
+            self.return_to_origin();
+        } else {
+            self.show_shortcuts();
+        }
+    }
+
+    /// The key list as a page, for the menus.
+    fn show_shortcuts(self: &Rc<Self>) {
+        let px = |base: f64| (base * self.scale.get()).round() as i32;
+        // Centered on both axes, like every other panel that floats over a
+        // screen. Without the vertical half the box takes the whole window,
+        // and the dialog around it grows with it however short the list is -
+        // which reads as a panel that failed to size itself.
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(px(20.0))
+            .valign(gtk::Align::Center)
+            .margin_top(px(28.0))
+            .margin_bottom(px(28.0))
+            .margin_start(px(32.0))
+            .margin_end(px(32.0))
+            .build();
+        page.append(&heading_label("Keys and Buttons"));
+
+        // Scrolled for the same reason the notices are: on a small window, or
+        // at a large interface scale, the list is taller than the screen.
+        //
+        // Not expanded, unlike the notices: two hundred crates are always
+        // longer than the window and a fixed share of it reads as a page,
+        // where a dozen keys are not, and a panel stretched to the window
+        // around them reads as a panel that failed to size itself.
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .propagate_natural_width(true)
+            .vexpand(false)
+            .valign(gtk::Align::Center)
+            .child(&crate::shortcuts::page(self.scale.get()))
+            .build();
+        scroller.set_focusable(false);
+        let height = (self.window.height() as f64 * NOTICES_SHARE).round() as i32;
+        scroller.set_max_content_height(height.max(px(320.0)));
+        page.set_halign(gtk::Align::Center);
+        page.append(&scroller);
+
+        let close = gtk::Button::with_label("Close");
+        close.add_css_class("tp-button");
+        close.set_halign(gtk::Align::Center);
+        page.append(&close);
+        {
+            let app = self.clone();
+            close.connect_clicked(move |_| {
+                app.sounds.borrow().click();
+                app.return_to_origin();
+            });
+        }
+
+        self.remember_origin();
+        // Nothing to step through, so up and down scroll it - the same
+        // arrangement the notices use.
+        self.set_nav(None, std::slice::from_ref(&close), &[]);
+        *self.about_scroll.borrow_mut() = Some(scroller.vadjustment());
+        *self.screen.borrow_mut() = Screen::Shortcuts;
+        self.window.set_child(Some(&self.modal(&page)));
+        close.grab_focus();
+    }
+
+    /// The level over every output, moved by a key rather than by the panel.
+    /// Cloned out of the cell before it is used, the way every other caller
+    /// here does it, since what it reaches takes the same borrows.
+    fn nudge_main(self: &Rc<Self>, delta: isize) {
+        if let Some(controls) = self.controls.borrow().clone() {
+            controls.nudge_main(delta);
+        }
+    }
+
     fn install_key_handling(self: &Rc<Self>) {
         let controller = gtk::EventControllerKey::new();
         let primary = primary_mask();
@@ -1673,6 +1773,24 @@ impl App {
                 }
                 gdk::Key::Right if playing => {
                     app.controls_left_right(1);
+                    glib::Propagation::Stop
+                }
+                // The key list, which is the one binding that has to work
+                // wherever you are - including on the screen where you have
+                // forgotten what any of the others do.
+                gdk::Key::F1 => {
+                    app.toggle_shortcuts();
+                    glib::Propagation::Stop
+                }
+                // The level over both outputs, on the keys every other player
+                // uses for it. `equal` as well as `plus` because they are the
+                // same key and nobody holds Shift to turn a film up.
+                gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add if playing => {
+                    app.nudge_main(1);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::minus | gdk::Key::KP_Subtract if playing => {
+                    app.nudge_main(-1);
                     glib::Propagation::Stop
                 }
                 // In the menus they belong to a slider if one is selected,
@@ -2351,12 +2469,12 @@ impl App {
             }
             // Everything below drives the controls rather than the pipeline,
             // which is what keeps one answer to each of these questions: the
-            // remote moves the same master and picks from the same lists the
-            // person in the room does, and the strip is woken so what it did is
-            // visible rather than mysterious.
+            // remote moves the same all-outputs level and picks from the same
+            // lists the person in the room does, and the strip is woken so what
+            // it did is visible rather than mysterious.
             Command::SetVolume(level) => {
                 if let Some(controls) = self.controls.borrow().clone() {
-                    controls.master_to(level);
+                    controls.main_to(level);
                 }
                 self.wake_controls();
             }
@@ -2388,8 +2506,9 @@ impl App {
         }
     }
 
-    /// What a controller should show: the master, the blanket silence, and what
-    /// the first output and the subtitles are playing, in Jellyfin's numbering.
+    /// What a controller should show: the main level, the blanket silence, and
+    /// what the first output and the subtitles are playing, in Jellyfin's
+    /// numbering.
     ///
     /// Worked out here rather than remembered as it changes, because every
     /// answer already lives somewhere - and a second copy kept in step by hand
@@ -2427,7 +2546,7 @@ impl App {
         };
 
         crate::jellyfin::Sound {
-            level: self.config.borrow().master_volume(),
+            level: self.config.borrow().main_volume(),
             muted: self.hushed.get(),
             audio,
             subtitle,
@@ -2748,6 +2867,7 @@ impl App {
             // but its answer is dropped, and nothing has been written.
             Screen::PasteUri
             | Screen::Browser
+            | Screen::Shortcuts
             | Screen::AlignChoose
             | Screen::AlignProgress
             | Screen::AlignResult => self.return_to_origin(),
@@ -2886,6 +3006,14 @@ impl App {
     /// gives.
     fn close_chooser_or_go_back(self: &Rc<Self>) {
         use crate::controls::Row;
+        // The key list first, wherever it is: it is laid over everything else
+        // and has to be got rid of before "back" can mean anything else.
+        let controls = self.controls.borrow().clone();
+        if let Some(controls) = controls
+            && controls.close_shortcuts()
+        {
+            return;
+        }
         // Cloned out rather than acted on through the borrow, the way every
         // other caller here does it: `set_row` runs the strip's own handlers,
         // and holding the cell open across them is how a re-entrant borrow
@@ -3031,10 +3159,10 @@ impl App {
     /// to the next scheduled report.
     ///
     /// Those go every ten seconds, which is right for a position that a phone
-    /// can interpolate between and wrong for a level: moving the master in the
-    /// room left the slider on somebody's phone showing the old value for most
-    /// of a minute, which reads as a remote that has lost the player rather
-    /// than one that is a moment behind. Reported by Scott, 2026-08-14.
+    /// can interpolate between and wrong for a level: moving the main level in
+    /// the room left the slider on somebody's phone showing the old value for
+    /// most of a minute, which reads as a remote that has lost the player
+    /// rather than one that is a moment behind. Reported by Scott, 2026-08-14.
     ///
     /// The same debounce the configuration write uses, and for the same reason,
     /// with a shorter wait because this one is about what somebody is watching
@@ -3274,6 +3402,16 @@ impl App {
         use crate::gamepad::Action;
         self.hide_pointer();
         match action {
+            Action::Shortcuts => self.toggle_shortcuts(),
+            // While the list is up it is the only thing on screen worth
+            // driving, so the D-pad scrolls it rather than working the strip
+            // underneath - which is hidden anyway.
+            Action::Up | Action::Down if self.shortcuts_showing() => {
+                let delta = if action == Action::Up { -1 } else { 1 };
+                if let Some(controls) = self.controls.borrow().clone() {
+                    controls.scroll_shortcuts(delta);
+                }
+            }
             Action::Up if self.playback.borrow().is_some() => self.enter_controls(),
             Action::Down if self.playback.borrow().is_some() => self.leave_controls(),
             Action::Up => self.move_selection(-1),
@@ -7970,13 +8108,13 @@ impl App {
     }
 
     /// Sends an output's level to the pipeline: what that output is set to,
-    /// times the master over both of them.
+    /// times the main level over both of them.
     ///
     /// The one road to a sink's level, for the reason `push_offset` is the one
-    /// road to its delay. Two outputs and a master mean two numbers behind
+    /// road to its delay. Two outputs and a main level mean two numbers behind
     /// every level, and every place that rebuilt the sum by hand would be a
-    /// place free to leave the master out - which sounds exactly like a level
-    /// that ignores the control somebody just moved.
+    /// place free to leave the main level out - which sounds exactly like a
+    /// level that ignores the control somebody just moved.
     fn push_volume(&self, role: &str) {
         let level = self.config.borrow().volume(role);
         self.push_volume_at(role, level);
@@ -7992,10 +8130,10 @@ impl App {
         }
     }
 
-    /// What a level actually plays at once the master over both outputs is
+    /// What a level actually plays at once the main level over both outputs is
     /// taken into account. The only place the two are multiplied together.
     fn effective(&self, level: f64) -> f64 {
-        level * self.config.borrow().master_volume()
+        level * self.config.borrow().main_volume()
     }
 
     /// Sends whether an output is actually silent: whether it is muted in its
@@ -12058,10 +12196,10 @@ impl App {
                 );
                 controls.set_levels(&levels);
                 // The pipeline built each output's level from that output's own
-                // setting, which is all the configuration told it. The master is
-                // applied here, once, before a frame has played - the same shape
-                // as the alignment baseline below it.
-                controls.set_master_level(self.config.borrow().master_volume());
+                // setting, which is all the configuration told it. The main
+                // level is applied here, once, before a frame has played - the
+                // same shape as the alignment baseline below it.
+                controls.set_main_level(self.config.borrow().main_volume());
                 for (role, _) in &outputs {
                     playback.set_volume(role, self.effective(self.config.borrow().volume(role)));
                 }
@@ -12082,16 +12220,16 @@ impl App {
                     // chore rather than a control.
                     let app = self.clone();
                     controls.connect_volume(move |role, level, muted, persist| {
-                        // Through the one function that knows about the master,
-                        // rather than sent straight to the sink from here. What
-                        // an output plays at is its own level times the master,
-                        // and a second place doing that arithmetic is how the
-                        // two come to disagree - the same lesson `push_offset`
-                        // is already the answer to.
+                        // Through the one function that knows about the main
+                        // level, rather than sent straight to the sink from
+                        // here. What an output plays at is its own level times
+                        // the main level, and a second place doing that
+                        // arithmetic is how the two come to disagree - the same
+                        // lesson `push_offset` is already the answer to.
                         //
-                        // Given the level rather than reading it back out of the
-                        // configuration, because a level that is not being kept
-                        // never reaches the configuration at all.
+                        // Given the level rather than reading it back out of
+                        // the configuration, because a level that is not being
+                        // kept never reaches the configuration at all.
                         app.push_volume_at(role, level);
                         app.push_mute(role, muted);
                         if !persist {
@@ -12105,11 +12243,11 @@ impl App {
                         app.save_volume_soon();
                     });
 
-                    // The master moves both outputs, so both are pushed again
-                    // rather than one being singled out. Kept like a level and
-                    // unlike a hush: somebody chose it, and a film that started
-                    // at half volume because of last week is a setting, where a
-                    // film that started silent would be a bug.
+                    // The main level moves both outputs, so both are pushed
+                    // again rather than one being singled out. Kept like a
+                    // level and unlike a hush: somebody chose it, and a film
+                    // that started at half volume because of last week is a
+                    // setting, where a film that started silent would be a bug.
                     // Silencing everything is a layer over the outputs rather
                     // than a change to them, so what comes back is only whether
                     // the layer is on. Each output is then pushed at its own
@@ -12125,8 +12263,8 @@ impl App {
                     });
 
                     let app = self.clone();
-                    controls.connect_master(move |level| {
-                        app.config.borrow_mut().set_master_volume(level);
+                    controls.connect_main(move |level| {
+                        app.config.borrow_mut().set_main_volume(level);
                         for role in ["primary", "secondary"] {
                             app.push_volume(role);
                         }
@@ -12575,10 +12713,10 @@ fn scrolling_list() -> (gtk::ScrolledWindow, gtk::ListBox) {
 }
 
 /// The mark on its own, for a screen that says the name some other way.
-const APP_MARK: &[u8] = include_bytes!("../data/ui/tineplayer.png");
+const APP_MARK: &[u8] = include_bytes!("../data/branding/tineplayer.png");
 
 /// The mark with the name beside it, for a header.
-const HORIZONTAL_LOCKUP: &[u8] = include_bytes!("../data/ui/lockup-horizontal.png");
+const HORIZONTAL_LOCKUP: &[u8] = include_bytes!("../data/branding/lockup-horizontal.png");
 
 /// The full logo at `width`, in [`crate::lockup`], which explains why it is
 /// not a `GtkImage` like every other picture here.
@@ -13794,7 +13932,7 @@ fn group_header(title: &str, note: Option<&GroupNote>, scale: f64, first: bool) 
     stack.upcast()
 }
 
-fn group_heading(title: &str, scale: f64, first: bool) -> gtk::Label {
+pub fn group_heading(title: &str, scale: f64, first: bool) -> gtk::Label {
     let heading = gtk::Label::new(Some(title));
     heading.set_xalign(0.0);
     heading.add_css_class("tp-group");
@@ -13815,7 +13953,7 @@ fn group_heading(title: &str, scale: f64, first: bool) -> gtk::Label {
 ///
 /// "FIRST OUTPUT" read literally is a risk of being spelled out a letter at a
 /// time, which is a real behaviour of several readers on all-capital text.
-fn title_case(text: &str) -> String {
+pub fn title_case(text: &str) -> String {
     text.split(' ')
         .map(|word| {
             let mut characters = word.chars();
@@ -14738,6 +14876,39 @@ fn style_css(scale: f64) -> String {
             background-color: {highlight};
             border-radius: {radius}px;
         }}
+        /* The key list. Darker and more opaque than the volume panel beside
+           it, because that one is read against a bar and this one is read
+           against whatever frame the film happens to be on - which may be
+           anything at all. */
+        .tp-shortcuts {{
+            background-color: rgba(0, 0, 0, 0.9);
+            border-radius: {radius}px;
+            padding: {crumb_pad}px;
+        }}
+        .tp-shortcuts label {{ color: #ffffff; }}
+        /* The keys themselves, set apart from what they do so the two columns
+           are told apart at a glance from across a room.
+
+           Sized here rather than left to the theme's default, which is what a
+           label with no size of its own gets: a size nobody chose, and one
+           that does not follow the interface when a fullscreen television
+           doubles everything else. Row size, the same as the menus, because
+           this is read from the same distance they are. */
+        .tp-shortcut-keys {{
+            font-size: {row}px;
+            font-weight: bold;
+            padding: {tight_v}px {pad_h}px;
+        }}
+        .tp-shortcut-means {{
+            font-size: {row}px;
+            opacity: 0.85;
+            padding: {tight_v}px {pad_h}px;
+        }}
+        /* Every other row shaded rather than ruled. A line between rows draws
+           the eye across the page as much as the row does; a band under the
+           words is read as one line without being looked at. */
+        .tp-shortcut-row {{ border-radius: {radius}px; }}
+        .tp-shortcut-stripe {{ background-color: rgba(255, 255, 255, 0.07); }}
         /* Darker than the strip it sits on, so it reads as a panel laid over
            the bar rather than as more of the bar. */
         .tp-volume-panel {{

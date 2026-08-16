@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="data/ui/tineplayer.png" width="96" alt=""><br>
+  <img src="data/branding/tineplayer.png" width="96" alt=""><br>
   TinePlayer
 </h1>
 
