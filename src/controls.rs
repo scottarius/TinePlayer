@@ -302,6 +302,11 @@ const SUBTITLES: usize = 5;
 /// ordinary press, short enough to be a deliberate gesture rather than a wait.
 pub const HOLD: Duration = Duration::from_millis(600);
 
+/// How much of the window the key list may take before it scrolls inside
+/// itself. A ceiling only: a list shorter than this is drawn at its own
+/// height, so the panel is the size of what is in it.
+const SHORTCUTS_SHARE: f64 = 0.9;
+
 /// How far one press moves a level. Twenty steps across the range: coarse
 /// enough to cross it in a second of held input, fine enough to settle on a
 /// level rather than overshoot it.
@@ -1082,9 +1087,38 @@ impl Controls {
             row.add_controller(controller);
         }
 
+        // The key list, over the picture rather than in place of it. Every
+        // other full page in the application replaces the window's child,
+        // which during playback would take the video widget down with it -
+        // so this one is an overlay, like the strip it explains.
+        let shortcuts_page = crate::shortcuts::page(scale);
+        shortcuts_page.add_css_class("tp-shortcuts");
+        // Held to its own height inside the scroller's viewport, which hands a
+        // child the whole viewport when it is willing to fill one - and this
+        // child carries the panel's background, so filling it is visible as a
+        // panel taller than what is in it.
+        shortcuts_page.set_valign(gtk::Align::Start);
+        let shortcuts_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .propagate_natural_width(true)
+            .vexpand(false)
+            .valign(gtk::Align::Center)
+            .child(&shortcuts_page)
+            .build();
+        shortcuts_scroll.set_focusable(false);
+        let shortcuts = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::Crossfade)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .reveal_child(false)
+            .child(&shortcuts_scroll)
+            .build();
+
         let root = gtk::Overlay::new();
         root.set_child(Some(video));
         root.add_overlay(&strip);
+        root.add_overlay(&shortcuts);
 
         // The order a controller steps through, which has to match the order
         // they are drawn in above - including one button per output, however
@@ -1103,6 +1137,8 @@ impl Controls {
 
         let controls = Rc::new(Self {
             root,
+            shortcuts,
+            shortcuts_scroll,
             strip,
             holder: row.clone(),
             buttons: button_row.clone(),

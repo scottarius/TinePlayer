@@ -33,6 +33,7 @@ mod nfo;
 mod pipeline;
 mod player;
 mod probe;
+mod shortcuts;
 mod sound;
 mod source;
 mod subtitles;
