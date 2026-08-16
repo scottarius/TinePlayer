@@ -354,12 +354,21 @@ impl Playback {
             // zero and started it over. Accurate seeking decodes forward from
             // that keyframe to the exact position instead, which costs a
             // moment once at startup and lands where the viewer actually was.
+            let target = gst::ClockTime::from_nseconds(ns);
             seek_through_video(
                 &pipeline,
                 gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::ClockTime::from_nseconds(ns),
+                target,
             )
             .map_err(|e| e.to_string())?;
+            // The same hand delivery every other seek makes, and for the same
+            // reason: these chains have sources of their own that a seek
+            // through the video never reaches. Without it a resumed film came
+            // back where it was left while its separate soundtrack started
+            // from the beginning, so the two ran however far apart the resume
+            // position was - and a subtitle file did the same, silently.
+            playback.seek_external_audio(target);
+            playback.seek_external_subtitle(target);
         }
 
         pipeline
