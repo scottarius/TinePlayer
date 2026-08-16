@@ -1675,6 +1675,24 @@ impl App {
                     app.controls_left_right(1);
                     glib::Propagation::Stop
                 }
+                // The key list, which is the one binding that has to work
+                // wherever you are - including on the screen where you have
+                // forgotten what any of the others do.
+                gdk::Key::F1 => {
+                    app.toggle_shortcuts();
+                    glib::Propagation::Stop
+                }
+                // The level over both outputs, on the keys every other player
+                // uses for it. `equal` as well as `plus` because they are the
+                // same key and nobody holds Shift to turn a film up.
+                gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add if playing => {
+                    app.nudge_main(1);
+                    glib::Propagation::Stop
+                }
+                gdk::Key::minus | gdk::Key::KP_Subtract if playing => {
+                    app.nudge_main(-1);
+                    glib::Propagation::Stop
+                }
                 // In the menus they belong to a slider if one is selected,
                 // and to nothing otherwise.
                 gdk::Key::Left if app.settings_slider(-1) => glib::Propagation::Stop,
