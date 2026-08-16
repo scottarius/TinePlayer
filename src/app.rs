@@ -17,6 +17,9 @@ use crate::player::Playback;
 use crate::probe::AudioTrack;
 use crate::sound::Sounds;
 use crate::subtitles::{Subtitle, SubtitleChoice};
+// Exported at the crate root by `macro_export`, which is where a macro lands
+// however deep in the tree it was written. See src/i18n.rs.
+use crate::{tr, trc, trn};
 
 /// Marks the overlay a modal is stacked in, so that opening one over another
 /// can tell it apart from a page that happens to be built out of an overlay
@@ -59,9 +62,15 @@ const UNKNOWN_LANGUAGE: &str = "Unknown";
 /// appeared to have six - worse than a long line, because it is wrong rather
 /// than merely crowded. The count is dimmed like the label, so it reads as a
 /// note about the list rather than as another language in it.
+/// **The markup is built here rather than translated.** It used to be inside
+/// the string - `", <span alpha='60%'>+{extra} more</span>"` - which asks
+/// every translator to carry a `<span>` through into their own language
+/// intact. One dropped angle bracket and Pango refuses the whole label, so a
+/// slip in one catalog costs the row rather than the word. What is translated
+/// is the words; the dimming is wrapped around them afterwards.
 fn summary_markup(name: &str, languages: &[String]) -> String {
     let shown = match languages.is_empty() {
-        true => NO_TRACKS.to_string(),
+        true => trc!("audio or subtitle languages", "None").into_owned(),
         false => languages
             .iter()
             .take(MOST_LANGUAGES)
@@ -71,10 +80,20 @@ fn summary_markup(name: &str, languages: &[String]) -> String {
     };
     let more = match languages.len().saturating_sub(MOST_LANGUAGES) {
         0 => String::new(),
-        extra => format!(", <span alpha='60%'>+{extra} more</span>"),
+        extra => {
+            // Both English forms are the same, and it is still a plural: a
+            // language with a dual or a case ending on the number needs to say
+            // so, and cannot if it is handed one fixed string.
+            let counted = trn!("+{n} more", "+{n} more", extra as u64, n = extra);
+            format!(
+                ", <span alpha='60%'>{}</span>",
+                glib::markup_escape_text(&counted)
+            )
+        }
     };
     format!(
-        "<span alpha='60%'>{name}:</span> {}{more}",
+        "<span alpha='60%'>{}:</span> {}{more}",
+        glib::markup_escape_text(name),
         glib::markup_escape_text(&shown),
     )
 }
@@ -92,11 +111,17 @@ fn summary_markup(name: &str, languages: &[String]) -> String {
 /// integration should have to be talked out of rather than into.
 const HANDOVER: [&str; 2] = ["Show Track Selection Menu", "Play Video Immediately"];
 
-/// What a summary line says when the file carries no such track at all.
+/// What a summary line says when the file carries no such track at all, in
+/// English. The text itself now lives in the catalog under the context
+/// "audio or subtitle languages" - see `summary_markup` - and this is what the
+/// tests read, since they check the untranslated interface.
 ///
 /// Distinct from `Unknown`, and the difference is worth keeping: one means
 /// there is a track and nobody said what language it is in, the other means
-/// there is nothing there to choose.
+/// there is nothing there to choose. That distinction is exactly why the
+/// string carries a context: two languages that spell those differently
+/// cannot say so if both arrive as the bare word "None".
+#[cfg(test)]
 const NO_TRACKS: &str = "None";
 
 /// Which setting a chooser screen is editing. The menu drills into one of
@@ -112,6 +137,10 @@ enum Setting {
     SecondaryLanguage,
     SubtitleLanguage,
     SubtitleFont,
+    /// What language the interface itself is in, which is a different question
+    /// from what language the *audio* should be in and sits in a different
+    /// category for that reason.
+    InterfaceLanguage,
     /// What one Kodi does with TinePlayer, and what happens when it hands a
     /// video over. Both carry that installation's place in the list the
     /// Kodi pane was built from, since there may be several.
@@ -409,6 +438,7 @@ type Fill = dyn Fn(&Rc<App>);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Item {
     InterfaceScale,
+    InterfaceLanguage,
     Sounds,
     StartFullscreen,
     ReadMetadata,
@@ -475,6 +505,7 @@ impl Item {
             Item::Language(Role::Secondary) => Setting::SecondaryLanguage,
             Item::SubtitlePreference => Setting::SubtitleLanguage,
             Item::SubtitleFont => Setting::SubtitleFont,
+            Item::InterfaceLanguage => Setting::InterfaceLanguage,
             Item::KodiType(index) => Setting::KodiType(index),
             Item::KodiHandover(index) => Setting::KodiHandover(index),
             _ => return None,
@@ -602,6 +633,7 @@ impl Category {
         match self {
             Category::General => vec![
                 (Some("INTERFACE".into()), Item::InterfaceScale),
+                (None, Item::InterfaceLanguage),
                 (None, Item::Sounds),
                 (None, Item::StartFullscreen),
                 (Some("LIBRARY".into()), Item::ReadMetadata),
@@ -6207,6 +6239,18 @@ impl App {
                     entries.push((font.to_string(), Some(position)));
                 }
             }
+            Setting::InterfaceLanguage => {
+                let chosen = self.config.borrow().language.clone();
+                let languages = crate::i18n::offered();
+                current = languages.iter().position(|offered| offered.code == chosen);
+                // Below "Use the system language", which is not a language but
+                // the answer almost everybody wants and so sits above the list
+                // rather than in it.
+                dividers.push(1);
+                for (position, offered) in languages.into_iter().enumerate() {
+                    entries.push((offered.label, Some(position)));
+                }
+            }
             Setting::KodiType(index) => {
                 use crate::kodi_setup::Registration;
                 let Some((state, configured)) =
@@ -6666,6 +6710,24 @@ impl App {
                     .and_then(|index| SUBTITLE_FONTS.get(index))
                     .map(|font| font.to_string());
                 let _ = config.save();
+            }
+            Setting::InterfaceLanguage => {
+                let picked = choice
+                    .and_then(|index| crate::i18n::offered().into_iter().nth(index))
+                    .and_then(|offered| offered.code);
+                {
+                    let mut config = self.config.borrow_mut();
+                    config.language = picked.clone();
+                    let _ = config.save();
+                }
+                // Put in force straight away rather than on the next start.
+                // The caller rebuilds this pane the moment this returns - the
+                // same route a choice of output device takes - so the row that
+                // was just used, and every row around it, comes back in the
+                // new language. Nothing else on screen is older than that:
+                // the playback controls are built per film, and Settings
+                // cannot be reached while one is playing.
+                crate::i18n::set_language(picked.as_deref());
             }
             Setting::KodiType(index) => return self.choose_kodi_type(index, choice),
             Setting::KodiHandover(index) => {
@@ -8724,8 +8786,9 @@ impl App {
     /// What a settings row is called.
     fn item_label(&self, item: Item) -> String {
         match item {
-            Item::InterfaceScale => "Interface Size".to_string(),
-            Item::Sounds => "Navigation Sounds".to_string(),
+            Item::InterfaceScale => tr!("Interface Size").into_owned(),
+            Item::InterfaceLanguage => tr!("Interface Language").into_owned(),
+            Item::Sounds => tr!("Navigation Sounds").into_owned(),
             Item::StartFullscreen => "Always Start Fullscreen".to_string(),
             Item::ReadMetadata => "Read Metadata Beside Files".to_string(),
             Item::ShowBackdrop => "Show Backdrop Artwork".to_string(),
@@ -8753,8 +8816,10 @@ impl App {
             Item::KodiAdd => "Add User Data Folder".to_string(),
             Item::JellyfinConnect => "Connect to Jellyfin".to_string(),
             Item::JellyfinDisconnect => match self.jellyfin_server_label() {
-                Some(server) => format!("Disconnect from {server}"),
-                None => "Disconnect".to_string(),
+                // Named rather than positional, so a translator can put the
+                // server where their own grammar wants it.
+                Some(server) => tr!("Disconnect from {server}", server = server).into_owned(),
+                None => tr!("Disconnect").into_owned(),
             },
             Item::Notices => "Third-Party Notices".to_string(),
         }
@@ -8771,9 +8836,13 @@ impl App {
                     Role::Primary => config.primary_sink.clone(),
                     Role::Secondary => config.secondary_sink.clone(),
                 };
+                // Both carry a context. "None" here is an output device that
+                // was deliberately left off, which several languages spell
+                // differently from "None" meaning no subtitles - and a
+                // translator handed the bare word cannot tell which is which.
                 sink.unwrap_or_else(|| match role {
-                    Role::Primary => "Not set".to_string(),
-                    Role::Secondary => "None".to_string(),
+                    Role::Primary => trc!("audio output device", "Not set").into_owned(),
+                    Role::Secondary => trc!("audio output device", "None").into_owned(),
                 })
             }
             Item::Language(role) => {
@@ -8785,6 +8854,23 @@ impl App {
                     Some(code) => crate::languages::name_for(code),
                     None => unset.to_string(),
                 }
+            }
+            Item::InterfaceLanguage => {
+                // What is *set*, not what is in force. Those differ on a
+                // machine set to a language with no catalog, and this row is
+                // the setting rather than a report - "Use the system language"
+                // is the honest reading of an unset preference even where the
+                // system's language is one nothing answers to.
+                let chosen = config.language.clone();
+                drop(config);
+                crate::i18n::offered()
+                    .into_iter()
+                    .find(|offered| offered.code == chosen)
+                    .map(|offered| offered.label)
+                    // A config naming a language this build has no catalog
+                    // for. The code itself says more than a blank would.
+                    .or(chosen)
+                    .unwrap_or_default()
             }
             Item::SubtitlePreference => {
                 crate::subtitles::describe(config.subtitle_language.as_deref())
@@ -8847,47 +8933,67 @@ impl App {
     /// a wall of text nobody reads, and the ones that matter stop standing
     /// out. These are the settings whose effect is invisible until it happens,
     /// or whose name is a term of art.
-    fn item_description(&self, item: Item) -> Option<&'static str> {
+    /// `Cow` rather than `&'static str`, which is what it was: a translated
+    /// string is built at run time and cannot be static. Every const table and
+    /// `&'static str` return in this file carrying interface text has the same
+    /// problem, and this is the first of them to be converted - see
+    /// `src/i18n.rs` for what the rest of that pass involves.
+    fn item_description(&self, item: Item) -> Option<Cow<'static, str>> {
         Some(match item {
+            Item::InterfaceLanguage => tr!("The language TinePlayer's own menus are in."),
             Item::ReadMetadata => {
-                "Find and read metadata beside video files like .nfo and images often provided by media libraries."
+                tr!(
+                    "Find and read metadata beside video files like .nfo and images often provided by media libraries."
+                )
             }
             Item::ShowBackdrop => {
-                "If backdrop artwork is found, display it behind the video details."
+                tr!("If backdrop artwork is found, display it behind the video details.")
             }
             Item::ResumeThreshold => {
-                "How much of a video should be viewed before offering the choice to resume a previously watched video."
+                tr!(
+                    "How much of a video should be viewed before offering the choice to resume a previously watched video."
+                )
             }
             Item::WatchedThreshold => {
-                "How much of a video should be viewed to consider it as watched."
+                tr!("How much of a video should be viewed to consider it as watched.")
             }
-            Item::Language(_) => "Attempt to auto-select a language track for the output.",
+            Item::Language(_) => tr!("Attempt to auto-select a language track for the output."),
             Item::Description(_) => {
-                "Attempt to auto-select an Audio Description track for the output."
+                tr!("Attempt to auto-select an Audio Description track for the output.")
             }
             Item::Sync(_) => {
-                "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
+                tr!(
+                    "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
+                )
             }
-            Item::SubtitlePreference => "Attempt to auto-select subtitles when available.",
+            Item::SubtitlePreference => tr!("Attempt to auto-select subtitles when available."),
             Item::ClearData => {
-                "Delete remembered video preferences, track choices, and resume positions."
+                tr!("Delete remembered video preferences, track choices, and resume positions.")
             }
             Item::KodiPermission(_) => {
-                "This Kodi runs in a sandbox and needs permission before it can start TinePlayer."
+                tr!(
+                    "This Kodi runs in a sandbox and needs permission before it can start TinePlayer."
+                )
             }
             // Says which folder, because the obvious guess is the wrong one:
             // Kodi's user data lives apart from Kodi itself, and it does not
             // exist until Kodi has been run once.
             Item::KodiAdd => {
-                "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
+                tr!(
+                    "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
+                )
             }
             // Says what will happen, because the answer is unusual enough to
             // be worth knowing before pressing it: no password is ever typed
             // into TinePlayer, which is the whole reason this is a code and
             // not a login form.
-            Item::JellyfinConnect => "Find and connect to a Jellyfin server using Quick Connect.",
+            Item::JellyfinConnect => {
+                tr!("Find and connect to a Jellyfin server using Quick Connect.")
+            }
             Item::JellyfinDisconnect => {
-                "Removes the access token stored on this machine and signs this device out of the server."
+                tr!(
+                    "Removes the access token stored on this machine and signs this device out of the server."
+                )
             }
             _ => return None,
         })
@@ -8896,7 +9002,7 @@ impl App {
     /// The note drawn under a row: its explanation, and for one row a link
     /// beside it.
     fn item_note(self: &Rc<Self>, item: Item, scale: f64) -> Option<gtk::Widget> {
-        let text = row_note(self.item_description(item)?, scale);
+        let text = row_note(&self.item_description(item)?, scale);
 
         // Where the data this clears actually lives, openable rather than
         // printed. A path read off a television is a path nobody is going to
@@ -15788,7 +15894,7 @@ mod settings_rows {
             // placed once for each output, and the Kodi category holds a group
             // of rows per Kodi found, plus the one row that belongs to no
             // installation and names another by hand.
-            let elsewhere = 24;
+            let elsewhere = 25;
             let kodi = ROWS_PER_KODI * kodis().len() + 1;
             // One row either way: the way in, or the way out.
             let paired = 1;

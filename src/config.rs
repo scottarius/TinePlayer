@@ -191,6 +191,20 @@ pub struct Config {
     /// are saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_scale: Option<f64>,
+    /// What language the interface is in, as a locale code: `de`, `pt-BR`.
+    ///
+    /// Absent means "whatever this machine is set to", which is right for
+    /// almost everybody and is why it is left out of the file when unset - a
+    /// person who moves a config between machines should not find one of them
+    /// pinned to the other's language. Set it where the machine's language is
+    /// not the one the viewer wants, which is common enough on a television
+    /// that the row exists under Settings.
+    ///
+    /// `en` means English specifically, rather than "no preference": English
+    /// is the language the source is written in, so it has no catalog and
+    /// needs none. See `src/i18n.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// Where the built-in browser last was, so it reopens there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_folder: Option<PathBuf>,
@@ -356,6 +370,7 @@ impl Default for Config {
             primary_sink: None,
             secondary_sink: None,
             ui_scale: None,
+            language: None,
             last_folder: None,
             kodi_paths: Vec::new(),
             subtitle_font: None,

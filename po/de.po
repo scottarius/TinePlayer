@@ -1,0 +1,158 @@
+# German translation for TinePlayer.
+#
+# SEED TRANSLATION, NOT YET REVIEWED BY A NATIVE SPEAKER.
+#
+# This catalog exists so the machinery has something real to compile: it is
+# what proves build.rs, the lookup, the plural rule and the placeholder check
+# actually work end to end. Every string in it wants a second pair of eyes
+# before a release claims TinePlayer speaks German.
+#
+# If you are that second pair of eyes: the terms worth arguing about are
+# "Tonspur" for a soundtrack and "Ausgabegerat" for an output device, both
+# chosen to match what Kodi and Jellyfin already say in German, on the grounds
+# that somebody arriving from either should not have to learn a second
+# vocabulary.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: TinePlayer\n"
+"Report-Msgid-Bugs-To: https://github.com/scottarius/TinePlayer/issues\n"
+"POT-Creation-Date: 2026-08-17\n"
+"PO-Revision-Date: 2026-08-17\n"
+"Last-Translator: unreviewed seed\n"
+"Language-Team: none yet\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: src/app.rs:73
+msgctxt "audio or subtitle languages"
+msgid "None"
+msgstr "Keine"
+
+#: src/app.rs:87
+msgid "+{n} more"
+msgid_plural "+{n} more"
+msgstr[0] "+{n} weitere"
+msgstr[1] "+{n} weitere"
+
+#: src/app.rs:8783
+msgid "Interface Size"
+msgstr "Größe der Oberfläche"
+
+#: src/app.rs:8784
+msgid "Interface Language"
+msgstr "Sprache der Oberfläche"
+
+#: src/app.rs:8785
+msgid "Navigation Sounds"
+msgstr "Navigationstöne"
+
+#: src/app.rs:8823
+msgid "Disconnect from {server}"
+msgstr "Verbindung zu {server} trennen"
+
+#: src/app.rs:8825
+msgid "Disconnect"
+msgstr "Verbindung trennen"
+
+#: src/app.rs:8845
+msgctxt "audio output device"
+msgid "Not set"
+msgstr "Nicht festgelegt"
+
+#: src/app.rs:8846
+msgctxt "audio output device"
+msgid "None"
+msgstr "Keines"
+
+#: src/app.rs:8931
+msgid "The language TinePlayer's own menus are in."
+msgstr "Die Sprache der Menüs von TinePlayer."
+
+#: src/app.rs:8934
+msgid ""
+"Find and read metadata beside video files like .nfo and images often "
+"provided by media libraries."
+msgstr ""
+"Metadaten neben Videodateien finden und lesen, etwa .nfo-Dateien und "
+"Bilder, wie sie Mediatheken häufig mitliefern."
+
+#: src/app.rs:8939
+msgid "If backdrop artwork is found, display it behind the video details."
+msgstr ""
+"Wenn ein Hintergrundbild gefunden wird, hinter den Videodetails anzeigen."
+
+#: src/app.rs:8942
+msgid ""
+"How much of a video should be viewed before offering the choice to resume a "
+"previously watched video."
+msgstr ""
+"Wie viel eines Videos gesehen sein muss, bevor angeboten wird, es später "
+"fortzusetzen."
+
+#: src/app.rs:8947
+msgid "How much of a video should be viewed to consider it as watched."
+msgstr "Wie viel eines Videos gesehen sein muss, damit es als gesehen gilt."
+
+#: src/app.rs:8950
+msgid "Attempt to auto-select a language track for the output."
+msgstr "Für diese Ausgabe automatisch eine Sprachspur auswählen."
+
+#: src/app.rs:8952
+msgid "Attempt to auto-select an Audio Description track for the output."
+msgstr "Für diese Ausgabe automatisch eine Audiodeskription auswählen."
+
+#: src/app.rs:8956
+msgid ""
+"Adjust the audio sync for the output. Useful for countering latency with "
+"bluetooth speakers and headphones."
+msgstr ""
+"Die Tonsynchronisierung dieser Ausgabe anpassen. Nützlich, um die "
+"Verzögerung von Bluetooth-Lautsprechern und -Kopfhörern auszugleichen."
+
+#: src/app.rs:8960
+msgid "Attempt to auto-select subtitles when available."
+msgstr "Untertitel automatisch auswählen, wenn welche vorhanden sind."
+
+#: src/app.rs:8962
+msgid "Delete remembered video preferences, track choices, and resume positions."
+msgstr ""
+"Gespeicherte Videoeinstellungen, Spurauswahl und Wiedergabepositionen "
+"löschen."
+
+#: src/app.rs:8965
+msgid ""
+"This Kodi runs in a sandbox and needs permission before it can start "
+"TinePlayer."
+msgstr ""
+"Dieses Kodi läuft in einer Sandbox und braucht eine Berechtigung, bevor es "
+"TinePlayer starten kann."
+
+#: src/app.rs:8972
+msgid ""
+"For a Kodi installation in a non-standard location, such as a portable "
+"install. Its user data folder is the one holding guisettings.xml, not the "
+"folder Kodi itself is installed in."
+msgstr ""
+"Für eine Kodi-Installation an einem ungewöhnlichen Ort, etwa eine portable "
+"Installation. Der Benutzerdatenordner ist der Ordner mit der Datei "
+"guisettings.xml, nicht der Ordner, in dem Kodi selbst installiert ist."
+
+#: src/app.rs:8980
+msgid "Find and connect to a Jellyfin server using Quick Connect."
+msgstr "Einen Jellyfin-Server über Quick Connect finden und verbinden."
+
+#: src/app.rs:8983
+msgid ""
+"Removes the access token stored on this machine and signs this device out of "
+"the server."
+msgstr ""
+"Entfernt das auf diesem Gerät gespeicherte Zugriffstoken und meldet dieses "
+"Gerät vom Server ab."
+
+#: src/i18n.rs:661
+msgid "Use the system language"
+msgstr "Sprache des Systems verwenden"

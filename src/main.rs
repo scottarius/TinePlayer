@@ -23,6 +23,7 @@ mod controls;
 mod devices;
 mod display;
 mod gamepad;
+mod i18n;
 mod jellyfin;
 mod kodi;
 mod kodi_setup;
@@ -33,6 +34,7 @@ mod metadata;
 mod nfo;
 mod pipeline;
 mod player;
+mod plural_rule;
 mod probe;
 mod shortcuts;
 mod sound;
@@ -880,6 +882,16 @@ fn main() -> std::process::ExitCode {
         eprintln!("{problem}");
     }
 
+    // Before any label exists, which is the only ordering that matters: every
+    // string in the interface is looked up as its widget is built, and a
+    // language resolved afterwards would translate whatever happened to be
+    // built next and nothing else.
+    //
+    // After `Config::load`, because the setting lives in that file - and a
+    // config that would not parse has already fallen back to defaults, which
+    // means the machine's own language rather than none.
+    i18n::init(config.language.as_deref());
+
     // First run: somewhere to play, rather than nowhere.
     //
     // An unset primary output meant a menu that could be navigated but not
@@ -964,6 +976,21 @@ fn main() -> std::process::ExitCode {
                 window.present();
                 return;
             }
+
+            // GTK works the text direction out for itself, but only from the
+            // locale the *process* was started in. The language here can come
+            // from a row under Settings instead, which GTK has never heard of,
+            // so somebody who set the interface to Arabic on an English
+            // machine would get Arabic words in a left-to-right layout.
+            //
+            // Here rather than beside `i18n::init` because this needs GTK to
+            // have initialized, which does not happen until activation - and
+            // before `App::build`, because a widget takes the default
+            // direction at the moment it is created.
+            if i18n::is_rtl() {
+                gtk::Widget::set_default_direction(gtk::TextDirection::Rtl);
+            }
+
             App::build(
                 gtk_app,
                 config.clone(),

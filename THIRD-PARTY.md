@@ -92,6 +92,7 @@ crate is offered under either license, at your choice.
 | clap_derive | 4.6.4 | MIT OR Apache-2.0 |
 | clap_lex | 1.1.0 | MIT OR Apache-2.0 |
 | colorchoice | 1.0.5 | MIT OR Apache-2.0 |
+| concat-string | 1.0.1 | Apache-2.0 OR MIT |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
 | const-oid | 0.10.2 | Apache-2.0 OR MIT |
 | core-foundation | 0.9.4 | MIT OR Apache-2.0 |
@@ -185,6 +186,7 @@ crate is offered under either license, at your choice.
 | js-sys | 0.3.103 | MIT OR Apache-2.0 |
 | libc | 0.2.189 | MIT OR Apache-2.0 |
 | libudev-sys | 0.1.4 | MIT |
+| linereader | 0.4.0 | MIT |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | log | 0.4.33 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
@@ -223,6 +225,7 @@ crate is offered under either license, at your choice.
 | paste | 1.0.15 | MIT OR Apache-2.0 |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
 | pkg-config | 0.3.33 | MIT OR Apache-2.0 |
+| polib | 0.3.0 | MIT |
 | primal-check | 0.3.4 | MIT OR Apache-2.0 |
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
@@ -265,6 +268,7 @@ crate is offered under either license, at your choice.
 | subtle | 2.6.1 | BSD-3-Clause |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.3 | MIT OR Apache-2.0 |
+| sys-locale | 0.3.2 | MIT OR Apache-2.0 |
 | system-deps | 7.0.8 | MIT OR Apache-2.0 |
 | target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception |
 | terminal_size | 0.4.4 | MIT OR Apache-2.0 |

@@ -1,0 +1,10 @@
+# The translations compiled into the binary, one code per line.
+#
+# A catalog in this folder that is not listed here is not built and does not
+# ship. That is deliberate: a half-finished translation somebody dropped in to
+# look at should not reach a release merely by existing.
+#
+# English is not here and never will be. It is the language the source is
+# written in, so its strings are the msgids themselves - see src/i18n.rs.
+
+de

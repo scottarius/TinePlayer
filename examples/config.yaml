@@ -23,6 +23,21 @@
 # Set it and that size applies either way.
 ui_scale: 1.5
 
+# What language TinePlayer's own menus are in, as a locale code: de, fr, pt-BR.
+#
+# Leave it out to follow whatever this machine is set to, which is right for
+# almost everybody - and is why it is left out of the file when unset, so a
+# config carried between two machines does not pin one to the other's language.
+# Set it where the machine's language is not the one the viewer wants, which
+# happens often enough on a shared television to be worth a setting.
+#
+# `en` means English specifically rather than "no preference". A language
+# TinePlayer has no translation for falls back to English.
+#
+# Which languages a build has is listed under Settings > General > Interface
+# Language. See docs/translating.md to add one.
+language: de
+
 # A short click when moving through the menus, played through the primary
 # output. true or false.
 sounds: true
