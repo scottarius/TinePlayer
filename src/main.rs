@@ -15,6 +15,7 @@ mod app;
 mod appearance;
 mod artwork;
 mod awake;
+mod beside;
 mod browser;
 mod column;
 mod config;

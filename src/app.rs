@@ -849,6 +849,15 @@ pub struct App {
     /// alone so it comes back if the file is cleared.
     primary_file: RefCell<Option<Source>>,
     secondary_file: RefCell<Option<Source>>,
+    /// Separate soundtracks sitting beside the video and named after it, found
+    /// the way subtitle files beside it are found. Offered in both outputs'
+    /// track lists, so a described or dubbed track downloaded next to a film
+    /// is simply there rather than something to go looking on disk for.
+    ///
+    /// What is *found* rather than what is chosen: an output's own choice is
+    /// `primary_file`/`secondary_file` above, which may be one of these or a
+    /// file from anywhere else on disk.
+    audio_files: RefCell<Vec<crate::beside::AudioFile>>,
     /// Which output the browser is picking a soundtrack for, or `None` when it
     /// is picking a video. Held here because stepping into a folder re-enters
     /// the browser and would otherwise lose the errand it was opened on.
@@ -1185,6 +1194,7 @@ impl App {
             tracks: RefCell::new(Vec::new()),
             primary_file: RefCell::new(None),
             secondary_file: RefCell::new(None),
+            audio_files: RefCell::new(Vec::new()),
             errand: Cell::new(Errand::Video),
             primary_baseline: Cell::new(0.0),
             secondary_baseline: Cell::new(0.0),
@@ -3691,27 +3701,77 @@ impl App {
         (entries, current)
     }
 
-    /// One output's soundtrack list, and which row it is playing.
+    /// The rows one output's soundtrack chooser offers while the film plays:
+    /// what each says, and what picking it would play.
     ///
     /// The film's own tracks, with "None" first for the second output only:
     /// playing nothing on the second is a legitimate choice in a way it is not
     /// on the first, where it would mean a film with no sound at all.
     ///
-    /// The separate audio file this output was given, if it has one, goes
-    /// after the film's own tracks, labelled the way the media page labels it.
-    /// Without it, somebody watching with a described soundtrack on one output
-    /// opened that output's list and saw the film's tracks with nothing
-    /// marked: no way to tell what was playing, and no way back to it after
-    /// moving away.
+    /// **Only what the pipeline was built with**, which is the film's tracks
+    /// and the separate audio files the two outputs were given. Every file
+    /// sitting beside the video is on the media page - see the track chooser in
+    /// [`Self::chooser_entries`] - but one nobody chose before pressing play
+    /// has no decoder in this pipeline, and none can be added to a running one:
+    /// its chain would start at the beginning of the file rather than where the
+    /// film is. Offering it would be a row that silently did nothing, since an
+    /// output asked for something nothing is carrying simply keeps what it has.
     ///
-    /// Browsing for a *new* file is deliberately still not here, though the
-    /// media page's version of this list ends with it. That opens a screen of
-    /// its own, and going looking on disk belongs to the page you choose from
+    /// Both outputs' files, not just this one's. Two people watching with two
+    /// separate soundtracks can each reach the other's, which costs nothing -
+    /// both are already decoding - and is the same list on both, which is one
+    /// less thing to explain.
+    ///
+    /// The rows stay after an output moves off a file, which is what makes them
+    /// the way back: they say what this playback was given, not only what is
+    /// being heard this second.
+    ///
+    /// Browsing for a *new* file is deliberately not here, though the media
+    /// page's version of this list ends with it. That opens a screen of its
+    /// own, and going looking on disk belongs to the page you choose from
     /// before pressing play - the same rule the subtitle chooser follows.
     ///
-    /// It goes last for a second reason: Jellyfin's `SetAudioStreamIndex`
+    /// The files go last for a second reason: Jellyfin's `SetAudioStreamIndex`
     /// arrives here as a row number counted through the embedded tracks alone,
-    /// so a row added at the top would shift every one of them.
+    /// so a row added above them would shift every one of them.
+    fn audio_rows(&self, role: Role) -> Vec<(String, Option<Playing>)> {
+        let mut rows = Vec::new();
+        if role == Role::Secondary {
+            rows.push(("None".to_string(), None));
+        }
+        for track in self.tracks.borrow().iter() {
+            rows.push((
+                describe_audio_track(track),
+                Some(Playing::Track(track.index)),
+            ));
+        }
+        for file in self.attached_files() {
+            rows.push((
+                format!("Audio File: {}", self.label_for_file(&file)),
+                Some(Playing::File(file.uri())),
+            ));
+        }
+        rows
+    }
+
+    /// The separate audio files this playback was built with: what the two
+    /// outputs were given, deduplicated, which is exactly the set the pipeline
+    /// attached a decoder for and so exactly the set an output can be moved to
+    /// without stopping the film.
+    fn attached_files(&self) -> Vec<Source> {
+        let mut files: Vec<Source> = Vec::new();
+        for role in [Role::Primary, Role::Secondary] {
+            if let Some(file) = self.file_for(role).borrow().clone()
+                && !files.contains(&file)
+            {
+                files.push(file);
+            }
+        }
+        files
+    }
+
+    /// One output's soundtrack list as the strip wants it: the words, and
+    /// which row it is playing.
     ///
     /// Takes the playback rather than reading it off `self`, because playback
     /// starting has not put it into its cell yet - the same reason
@@ -3719,35 +3779,12 @@ impl App {
     /// first row of both lists on every film, since with no playback to ask,
     /// nothing matched what was playing.
     fn audio_entries(&self, playback: &Playback, role: Role) -> (Vec<String>, Option<usize>) {
-        let offers_none = role == Role::Secondary;
-        let mut entries = Vec::new();
-        if offers_none {
-            entries.push("None".to_string());
-        }
         let playing = playback.playing_on(role.key());
-        let offset = usize::from(offers_none);
-        // Nothing is marked until a row below matches, except on the second
-        // output, where playing nothing at all is the "None" row.
-        let mut current = match playing {
-            None if offers_none => Some(0),
-            _ => None,
-        };
-        for (position, track) in self.tracks.borrow().iter().enumerate() {
-            if playing == Some(Playing::Track(track.index)) {
-                current = Some(position + offset);
-            }
-            entries.push(describe_audio_track(track));
-        }
-        // The row stays in the list after the output moves off the file, which
-        // is what makes it the way back: it says what this output was given,
-        // not only what it is playing this second.
-        if let Some(file) = self.file_for(role).borrow().clone() {
-            if matches!(playing, Some(Playing::File(_))) {
-                current = Some(entries.len());
-            }
-            entries.push(format!("Audio File: {}", file.label()));
-        }
-        (entries, current)
+        let rows = self.audio_rows(role);
+        // Nothing is marked until a row matches, which on the first output is
+        // the honest answer when it is playing nothing: it has no "None" row.
+        let current = rows.iter().position(|(_, row)| *row == playing);
+        (rows.into_iter().map(|(label, _)| label).collect(), current)
     }
 
     /// Fills both outputs' menus with what this video offers.
@@ -3760,6 +3797,12 @@ impl App {
 
     /// Puts one output onto the soundtrack at `at` in its own list, without
     /// stopping the film.
+    ///
+    /// Asks [`Self::audio_rows`] what that row stands for rather than counting
+    /// the list out a second time. The two used to agree by arithmetic - an
+    /// offset for the "None" row, and the file at one past the last track -
+    /// which is two descriptions of one list, free to disagree the moment
+    /// either grows a row.
     fn choose_audio(self: &Rc<Self>, role: &str, at: usize) {
         let Some(playback) = self.playback.borrow().clone() else {
             return;
@@ -3769,27 +3812,10 @@ impl App {
         } else {
             Role::Primary
         };
-        let offers_none = which == Role::Secondary;
-        // The "None" row on the second output's list, which is a row rather
-        // than a track and so cannot be looked up among them.
-        let wanted = match (offers_none, at) {
-            (true, 0) => None,
-            _ => {
-                let index = at - usize::from(offers_none);
-                let count = self.tracks.borrow().len();
-                let track = self.tracks.borrow().get(index).map(|track| track.index);
-                match (track, index == count) {
-                    (Some(number), _) => Some(Playing::Track(number)),
-                    // One past the last track is the separate file, which
-                    // `audio_entries` puts there when this output has one.
-                    // Anything beyond that is a row from a list since redrawn.
-                    (None, true) => match self.file_for(which).borrow().clone() {
-                        Some(file) => Some(Playing::File(file.uri())),
-                        None => return,
-                    },
-                    (None, false) => return,
-                }
-            }
+        // A row from a list since redrawn stands for nothing, and is not a
+        // reason to change what somebody is listening to.
+        let Some((_, wanted)) = self.audio_rows(which).into_iter().nth(at) else {
+            return;
         };
         if let Err(reason) = playback.set_audio(role, wanted) {
             eprintln!("Cannot change the {role} soundtrack: {reason}");
@@ -6048,23 +6074,52 @@ impl App {
                 };
                 let chosen = *self.track_for(role).borrow();
                 let file = self.file_for(role).borrow().clone();
+                let found = self.audio_files.borrow();
+                // Which of the files beside the video this output has been
+                // given, where it has been given one of them. A file chosen by
+                // hand from elsewhere is none of them and gets the row at the
+                // bottom instead, so nothing is ever listed twice.
+                let beside = file
+                    .as_ref()
+                    .and_then(|file| file.local())
+                    .and_then(|path| found.iter().position(|audio| audio.path == path));
                 for (position, track) in self.tracks.borrow().iter().enumerate() {
                     if file.is_none() && chosen == Some(track.index) {
                         current = Some(position);
                     }
                     entries.push((describe_audio_track(track), Some(position)));
                 }
-                // Last, after everything inside the video: a separate file is
-                // the answer when what you want is not in there at all, which
-                // is most films with one soundtrack and a description track
-                // downloaded beside them.
-                let audio_file = entries.len() - 1;
+                // "None" is not one of them, and the choices below count from
+                // the end of the tracks.
+                let tracks = entries.len() - 1;
+                // Then the separate soundtracks sitting beside the film, found
+                // by the same convention as the subtitle files beside it: a
+                // described or dubbed track downloaded next to a video is the
+                // commonest thing there is to want here, and nobody should
+                // have to go looking on disk for a file already in the folder.
+                if !found.is_empty() {
+                    dividers.push(entries.len());
+                }
+                for (position, audio) in found.iter().enumerate() {
+                    if beside == Some(position) {
+                        current = Some(tracks + position);
+                    }
+                    entries.push((
+                        format!("Audio File: {}", audio.label),
+                        Some(tracks + position),
+                    ));
+                }
+                // Last, after everything the film came with and everything
+                // sitting beside it: a file from somewhere else entirely,
+                // which is the answer when it is neither.
+                let elsewhere = tracks + found.len();
                 dividers.push(entries.len());
-                if let Some(file) = file.as_ref() {
-                    current = Some(audio_file);
-                    entries.push((format!("Audio File: {}", file.label()), Some(audio_file)));
-                } else {
-                    entries.push(("Browse...".to_string(), Some(audio_file)));
+                match file.as_ref().filter(|_| beside.is_none()) {
+                    Some(file) => {
+                        current = Some(elsewhere);
+                        entries.push((format!("Audio File: {}", file.label()), Some(elsewhere)));
+                    }
+                    None => entries.push(("Browse...".to_string(), Some(elsewhere))),
                 }
             }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
@@ -6652,11 +6707,27 @@ impl App {
                     Role::Secondary
                 };
                 let count = self.tracks.borrow().len();
-                // The row after the last track is the audio file one, which
-                // opens the browser instead of settling anything here.
-                if choice == Some(count) {
+                let found = self.audio_files.borrow().len();
+                // The row past the last of them all is the one that goes
+                // looking on disk, and opens a screen instead of settling
+                // anything here.
+                if choice == Some(count + found) {
                     self.browse_for_audio(role);
                     return true;
+                }
+                // A soundtrack found beside the video, taken up exactly as one
+                // chosen by hand is - because that is what it is, with the
+                // looking already done.
+                if let Some(position) = choice.filter(|choice| *choice >= count) {
+                    let path = self
+                        .audio_files
+                        .borrow()
+                        .get(position - count)
+                        .map(|audio| audio.path.clone());
+                    if let Some(path) = path {
+                        self.use_audio_file(role, &path);
+                    }
+                    return false;
                 }
 
                 let tracks = self.tracks.borrow();
@@ -6801,6 +6872,7 @@ impl App {
         self.art_generation.set(self.art_generation.get() + 1);
         *self.tracks.borrow_mut() = Vec::new();
         *self.subtitle_options.borrow_mut() = Vec::new();
+        *self.audio_files.borrow_mut() = Vec::new();
         *self.primary_track.borrow_mut() = None;
         *self.secondary_track.borrow_mut() = None;
         *self.subtitle.borrow_mut() = None;
@@ -7061,6 +7133,12 @@ impl App {
             subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
         *self.subtitle_options.borrow_mut() = options;
         *self.tracks.borrow_mut() = tracks;
+        // Separate soundtracks beside the video, found by the same convention
+        // and the same code as the subtitle files above. Only for a local
+        // file, for the reason subtitles are: there is no folder to look in
+        // otherwise, and a media server hands over what it holds in the stream.
+        *self.audio_files.borrow_mut() =
+            source.local().map(crate::beside::audio).unwrap_or_default();
         *self.file.borrow_mut() = Some(source.clone());
         self.duration_s.set(duration_ns as f64 / 1e9);
         // Now that the video and its audio files are both settled, whatever
@@ -8001,8 +8079,10 @@ impl App {
     /// What an output is playing, for its row on the menu: the name of a
     /// separate audio file when one is chosen, and otherwise the track.
     fn describe_audio(&self, role: Role) -> String {
+        // The same words the list under this row shows against the same file,
+        // which is what makes the row and the list one thing.
         if let Some(file) = self.file_for(role).borrow().as_ref() {
-            return file.label();
+            return self.label_for_file(file);
         }
         let chosen = *self.track_for(role).borrow();
         let tracks = self.tracks.borrow();
@@ -8216,18 +8296,39 @@ impl App {
         let Errand::Audio(role) = self.errand.get() else {
             return;
         };
-        let source = Source::File(path.to_path_buf());
-        match role {
-            Role::Primary => *self.primary_file.borrow_mut() = Some(source),
-            Role::Secondary => *self.secondary_file.borrow_mut() = Some(source),
-        }
         self.errand.set(Errand::Video);
+        self.use_audio_file(role, path);
+    }
+
+    /// Puts a separate audio file on one output, whether it was picked out of
+    /// the list of files beside the video or found by hand from somewhere
+    /// else. The two are the same choice once the file is known.
+    fn use_audio_file(self: &Rc<Self>, role: Role, path: &std::path::Path) {
+        *self.file_for(role).borrow_mut() = Some(Source::File(path.to_path_buf()));
         // Written down here, not left to playback to save: choosing a
         // soundtrack and then quitting without pressing play is choosing it,
         // and every other chooser on this screen remembers itself the same way.
         self.remember_tracks();
         // A pairing measured before comes back already lined up.
         self.load_baselines();
+    }
+
+    /// What a separate audio file is called in a list.
+    ///
+    /// What the convention put in its name, where it is one of the files
+    /// sitting beside the video, and the file's own name where it came from
+    /// anywhere else - which is all there is to say about a file nothing
+    /// named to a convention.
+    fn label_for_file(&self, file: &Source) -> String {
+        file.local()
+            .and_then(|path| {
+                self.audio_files
+                    .borrow()
+                    .iter()
+                    .find(|found| found.path == path)
+                    .map(|found| found.label.clone())
+            })
+            .unwrap_or_else(|| file.label())
     }
 
     // --- Alignment -----------------------------------------------------
