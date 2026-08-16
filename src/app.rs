@@ -3559,10 +3559,22 @@ impl App {
     /// playing nothing on the second is a legitimate choice in a way it is not
     /// on the first, where it would mean a film with no sound at all.
     ///
-    /// Browsing for a separate audio file is deliberately not here, though the
+    /// The separate audio file this output was given, if it has one, goes
+    /// after the film's own tracks, labelled the way the media page labels it.
+    /// Without it, somebody watching with a described soundtrack on one output
+    /// opened that output's list and saw the film's tracks with nothing
+    /// marked: no way to tell what was playing, and no way back to it after
+    /// moving away.
+    ///
+    /// Browsing for a *new* file is deliberately still not here, though the
     /// media page's version of this list ends with it. That opens a screen of
     /// its own, and going looking on disk belongs to the page you choose from
     /// before pressing play - the same rule the subtitle chooser follows.
+    ///
+    /// It goes last for a second reason: Jellyfin's `SetAudioStreamIndex`
+    /// arrives here as a row number counted through the embedded tracks alone,
+    /// so a row added at the top would shift every one of them.
+    ///
     /// Takes the playback rather than reading it off `self`, because playback
     /// starting has not put it into its cell yet - the same reason
     /// [`Self::show_subtitle_state`] takes one. Reading `self` here marked the
@@ -3576,10 +3588,9 @@ impl App {
         }
         let playing = playback.playing_on(role.key());
         let offset = usize::from(offers_none);
-        // None when the output is on a separate file, which this list has no
-        // row for: nothing in it is in force, so nothing is marked.
+        // Nothing is marked until a row below matches, except on the second
+        // output, where playing nothing at all is the "None" row.
         let mut current = match playing {
-            Some(Playing::File(_)) => None,
             None if offers_none => Some(0),
             _ => None,
         };
@@ -3588,6 +3599,15 @@ impl App {
                 current = Some(position + offset);
             }
             entries.push(describe_audio_track(track));
+        }
+        // The row stays in the list after the output moves off the file, which
+        // is what makes it the way back: it says what this output was given,
+        // not only what it is playing this second.
+        if let Some(file) = self.file_for(role).borrow().clone() {
+            if matches!(playing, Some(Playing::File(_))) {
+                current = Some(entries.len());
+            }
+            entries.push(format!("Audio File: {}", file.label()));
         }
         (entries, current)
     }
@@ -3606,22 +3626,39 @@ impl App {
         let Some(playback) = self.playback.borrow().clone() else {
             return;
         };
-        let offers_none = role == Role::Secondary.key();
+        let which = if role == Role::Secondary.key() {
+            Role::Secondary
+        } else {
+            Role::Primary
+        };
+        let offers_none = which == Role::Secondary;
         // The "None" row on the second output's list, which is a row rather
         // than a track and so cannot be looked up among them.
         let wanted = match (offers_none, at) {
             (true, 0) => None,
             _ => {
                 let index = at - usize::from(offers_none);
-                match self.tracks.borrow().get(index) {
-                    Some(track) => Some(Playing::Track(track.index)),
-                    None => return,
+                let count = self.tracks.borrow().len();
+                let track = self.tracks.borrow().get(index).map(|track| track.index);
+                match (track, index == count) {
+                    (Some(number), _) => Some(Playing::Track(number)),
+                    // One past the last track is the separate file, which
+                    // `audio_entries` puts there when this output has one.
+                    // Anything beyond that is a row from a list since redrawn.
+                    (None, true) => match self.file_for(which).borrow().clone() {
+                        Some(file) => Some(Playing::File(file.uri())),
+                        None => return,
+                    },
+                    (None, false) => return,
                 }
             }
         };
         if let Err(reason) = playback.set_audio(role, wanted) {
             eprintln!("Cannot change the {role} soundtrack: {reason}");
         }
+        // After the switch, not before: what the sink should be held back by
+        // depends on what it is now playing, and only the routing knows that.
+        self.push_offset(&playback, role);
         if let Some(controls) = self.controls.borrow().clone() {
             self.push_audio_entries(&playback, &controls);
         }
@@ -7908,8 +7945,15 @@ impl App {
     /// for, plus what alignment worked out. The two are separate quantities -
     /// one describes the headphones, the other describes the pair of files -
     /// and only the first is ever shown on the slider.
-    fn offset_for(&self, role: &str) -> f64 {
-        self.config.borrow().applied_offset_ms(role) + self.baseline_ms(role)
+    /// The baseline counts only while the output is playing the file it was
+    /// measured for. Alignment describes a *pairing* of two files, so it means
+    /// nothing to a track inside the video - and carrying it across a switch
+    /// left that track running seconds out of step with the picture, which
+    /// reads as the film being broken rather than as a setting being wrong.
+    fn offset_for(&self, playback: &Playback, role: &str) -> f64 {
+        let paired = matches!(playback.playing_on(role), Some(Playing::File(_)));
+        let baseline = if paired { self.baseline_ms(role) } else { 0.0 };
+        self.config.borrow().applied_offset_ms(role) + baseline
     }
 
     /// Sends an output's whole delay to the pipeline: what the viewer asked
@@ -7922,7 +7966,7 @@ impl App {
     /// the audio seconds out. A half-applied offset is worse than none, and
     /// the way to stop that recurring is to leave nowhere else to apply one.
     fn push_offset(&self, playback: &Playback, role: &str) {
-        playback.set_offset_ms(role, self.offset_for(role));
+        playback.set_offset_ms(role, self.offset_for(playback, role));
     }
 
     /// Sends an output's level to the pipeline: what that output is set to,
@@ -8076,7 +8120,7 @@ impl App {
         // windows rather than one panel changing what it says.
         page.set_size_request((ALIGN_PANEL_MIN * self.scale.get()).round() as i32, -1);
 
-        let heading = heading_label("Auto-Align");
+        let heading = heading_label("Sync Audio");
         heading.set_halign(gtk::Align::Center);
         page.append(&heading);
 

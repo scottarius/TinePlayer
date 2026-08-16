@@ -69,6 +69,36 @@ fn is_audio(collection: Option<&gst::StreamCollection>, id: &str) -> bool {
     })
 }
 
+/// Whether a message came from the video's own decoder, rather than from one
+/// of the chains that decode a file beside it.
+///
+/// **Every separate audio or subtitle file is a `urisourcebin` and a decoder
+/// of its own inside the same pipeline**, and they announce their streams onto
+/// the same bus. Taking whichever arrived last meant a film played with a
+/// separate soundtrack ended up describing *that soundtrack's* streams: one
+/// audio stream, numbered from zero, with ids the video's decoder has never
+/// heard of. So asking for track 1 was answered "the file has no audio track
+/// 1", and asking for track 0 sent the video's decoder a stream id belonging
+/// to something else, which it has no reason to honour. Either way the
+/// soundtrack menu did nothing whatever, and only while an external file was
+/// playing - which is exactly when the second decoder exists.
+///
+/// Answered by walking up from the message's source, so a message posted from
+/// inside the decoder counts as the decoder's. Positive identification rather
+/// than excluding the external chains by name: this is the element a stream
+/// selection is sent to, so its account of the streams is the only one the
+/// rest of this file can speak in.
+fn from_video_decoder(msg: &gst::Message) -> bool {
+    let mut current = msg.src().cloned();
+    while let Some(object) = current {
+        if object.name() == crate::pipeline::VIDEO_DECODER {
+            return true;
+        }
+        current = object.parent();
+    }
+    false
+}
+
 /// Seeks through the video branch rather than through the pipeline.
 ///
 /// A bin hands an event to every one of its sinks and reports success only if
@@ -277,7 +307,20 @@ impl Playback {
                     // Posted when a flushing seek has finished settling.
                     // Also fires after the initial preroll, which harmlessly
                     // finds nothing queued.
+                    // Traced because a seek that never settles is what a dead
+                    // branch looks like from the outside: a sink that cannot
+                    // preroll holds the whole pipeline, and the picture stops.
+                    MessageView::Buffering(buffering) => {
+                        crate::pipeline::trace(format_args!(
+                            "buffering {}% from {}",
+                            buffering.percent(),
+                            msg.src()
+                                .map(|src| src.name().to_string())
+                                .unwrap_or_default()
+                        ));
+                    }
                     MessageView::AsyncDone(_) => {
+                        crate::pipeline::trace(format_args!("async done"));
                         playback.seeking.set(false);
                         if playback.seek_queued.replace(false) {
                             playback.run_seek();
@@ -288,7 +331,7 @@ impl Playback {
                     // Caught rather than asked for: an element will not hand
                     // its collection over later, and switching subtitles needs
                     // it to name the streams that carry on playing.
-                    MessageView::StreamCollection(announced) => {
+                    MessageView::StreamCollection(announced) if from_video_decoder(msg) => {
                         let announced = announced.stream_collection();
                         // The routing needs it too, to say which track a
                         // stream arriving on a pad actually is.
@@ -299,7 +342,7 @@ impl Playback {
                             .set_collection(announced.clone());
                         *playback.collection.borrow_mut() = Some(announced);
                     }
-                    MessageView::StreamsSelected(chosen) => {
+                    MessageView::StreamsSelected(chosen) if from_video_decoder(msg) => {
                         *playback.selected_streams.borrow_mut() = chosen
                             .streams()
                             .iter()
@@ -341,12 +384,21 @@ impl Playback {
             // zero and started it over. Accurate seeking decodes forward from
             // that keyframe to the exact position instead, which costs a
             // moment once at startup and lands where the viewer actually was.
+            let target = gst::ClockTime::from_nseconds(ns);
             seek_through_video(
                 &pipeline,
                 gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::ClockTime::from_nseconds(ns),
+                target,
             )
             .map_err(|e| e.to_string())?;
+            // The same hand delivery every other seek makes, and for the same
+            // reason: these chains have sources of their own that a seek
+            // through the video never reaches. Without it a resumed film came
+            // back where it was left while its separate soundtrack started
+            // from the beginning, so the two ran however far apart the resume
+            // position was - and a subtitle file did the same, silently.
+            playback.seek_external_audio(target);
+            playback.seek_external_subtitle(target);
         }
 
         pipeline
@@ -633,6 +685,9 @@ impl Playback {
             let name = format!("{}{index}", crate::pipeline::EXTERNAL_AUDIO_DECODER);
             let Some(source) = self.pipeline.by_name(&name) else {
                 // Numbered from zero without gaps, so the first miss is the end.
+                crate::pipeline::trace(format_args!(
+                    "seek: {index} external chain(s) seeked to {target}"
+                ));
                 break;
             };
             let seek = gst::event::Seek::new(
@@ -643,7 +698,9 @@ impl Playback {
                 gst::SeekType::None,
                 gst::ClockTime::NONE,
             );
-            if !source.send_event(seek) {
+            let taken = source.send_event(seek);
+            crate::pipeline::trace(format_args!("seek: {name} to {target} -> taken={taken}"));
+            if !taken {
                 eprintln!("Failed to seek the external audio source {name}");
             }
         }
@@ -1004,11 +1061,27 @@ impl Playback {
     /// afterwards would leave the pad to arrive at a routing that had never
     /// heard of it, which is the shape of the subtitle bug in `de2e116`.
     pub fn set_audio(&self, role: &str, playing: Option<Playing>) -> Result<(), String> {
+        // Nothing is seeked here, deliberately. An external file's chain is
+        // kept walking by a branch of its own for as long as no output is
+        // drawing from it - see `pipeline::attach_pacer` - so coming back to
+        // it is a plain relink, and it is already where the film is. Seeking
+        // it instead was tried and froze the picture for as long as the file
+        // took to refill.
         let tracks = {
             let mut routing = self.routing.lock().unwrap();
             routing.want(role, playing);
+            // Before the selection rather than after it, and this is what
+            // makes a switch the selection cannot answer take effect at all -
+            // see `AudioRouting::settle` for the three of them. It is also
+            // what links the branch the seek below has to pass through.
+            routing.settle(role);
             routing.wanted_tracks()
         };
+
+        crate::pipeline::trace(format_args!(
+            "set_audio {role}: position={:?}",
+            self.position()
+        ));
 
         // Everything that carries on playing, plus every audio track some
         // output now wants. Built from the outputs rather than from
@@ -1051,6 +1124,7 @@ impl Playback {
             .by_name(crate::pipeline::VIDEO_DECODER)
             .ok_or("The pipeline has no video decoder to select streams on")?;
         let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
+        crate::pipeline::trace(format_args!("select_streams {ids:?}"));
         if !decoder.send_event(gst::event::SelectStreams::new(&ids)) {
             return Err("The decoder refused the stream selection".into());
         }
@@ -1134,7 +1208,54 @@ impl Playback {
 
 #[cfg(test)]
 mod tests {
-    use super::seek_workaround_applies;
+    use super::gst;
+    use super::gst::prelude::*;
+    use super::{from_video_decoder, seek_workaround_applies};
+
+    /// A message posted by an element of the given name, which is all
+    /// [`from_video_decoder`] looks at.
+    fn message_from(name: &str) -> (gst::Element, gst::Message) {
+        gst::init().expect("GStreamer initialises");
+        let element = gst::ElementFactory::make("identity")
+            .name(name)
+            .build()
+            .expect("identity is a core element");
+        let message = gst::message::Eos::builder().src(&element).build();
+        // The element is returned so it outlives the message's weak reference
+        // to it, which is what the walk up the parents reads.
+        (element, message)
+    }
+
+    #[test]
+    fn the_videos_own_decoder_is_recognised() {
+        let (_element, message) = message_from(crate::pipeline::VIDEO_DECODER);
+        assert!(from_video_decoder(&message));
+    }
+
+    /// The whole point: a separate soundtrack's decoder announces its streams
+    /// onto the same bus, and taking them was what stopped the in-playback
+    /// soundtrack menu working at all.
+    #[test]
+    fn an_external_audio_decoder_is_not() {
+        let (_element, message) =
+            message_from(&format!("{}0", crate::pipeline::EXTERNAL_AUDIO_DECODER));
+        assert!(!from_video_decoder(&message));
+    }
+
+    #[test]
+    fn a_message_from_inside_the_video_decoder_counts_as_its_own() {
+        gst::init().expect("GStreamer initialises");
+        let decoder = gst::Bin::builder()
+            .name(crate::pipeline::VIDEO_DECODER)
+            .build();
+        let inner = gst::ElementFactory::make("identity")
+            .name("parsebin0")
+            .build()
+            .expect("identity is a core element");
+        decoder.add(&inner).expect("the bin takes it");
+        let message = gst::message::Eos::builder().src(&inner).build();
+        assert!(from_video_decoder(&message));
+    }
 
     #[test]
     fn workaround_covers_the_versions_measured_broken() {
