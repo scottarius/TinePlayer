@@ -73,7 +73,7 @@ const GROUPS: &[Group] = &[
             Binding {
                 keys: "Esc",
                 pad: "B",
-                means: "Stop, or close menus/controls",
+                means: "Back, or close menus/controls",
             },
         ],
     },

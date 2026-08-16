@@ -1828,23 +1828,12 @@ impl App {
                     app.leave_controls();
                     glib::Propagation::Stop
                 }
-                // Straight out, whatever the strip happens to be doing. A
-                // keyboard already has Down for putting the strip away, so
-                // spending Escape on it as well made leaving a film two
-                // presses when it reads as one.
-                //
-                // With one exception, added because the menus made it one: an
-                // open chooser is closed first, exactly as the gamepad's B
-                // does. A list of soundtracks laid over the film is something
-                // you are inside of, and Escape is the key for getting out of
-                // what you are inside of - leaving the film outright from
-                // there is a much bigger step than the press suggests.
-                //
-                // Only for an open chooser. With nothing open, Escape still
-                // goes straight out rather than putting the strip away, which
-                // is what Down is for on a keyboard.
+                // One step back per press, down the ladder in `back_out`: a
+                // chooser, then the strip, then the film. The same rung the
+                // gamepad's B takes, through the same code, because the key
+                // list on `F1` promises they are the same thing.
                 gdk::Key::Escape => {
-                    app.close_chooser_or_go_back();
+                    app.back_out();
                     glib::Propagation::Stop
                 }
                 // Ours rather than GTK's, which cannot see the lists at all.
@@ -3008,13 +2997,23 @@ impl App {
         }
     }
 
-    /// Escape: shuts an open chooser, or leaves whatever is on screen.
+    /// Escape, and the gamepad's B: back out by one step, whatever the
+    /// outermost thing on screen happens to be.
     ///
-    /// Back to the buttons rather than off the strip entirely, so the icon the
-    /// chooser came out of is highlighted and can be seen to have changed -
-    /// the same landing choosing a row gives, and the same the gamepad's B
-    /// gives.
-    fn close_chooser_or_go_back(self: &Rc<Self>) {
+    /// The ladder, from the top: the key list, then an open chooser, then the
+    /// strip itself, and only once all of that is gone does it leave the film.
+    /// Each press is rid of the last thing that appeared, which is what "back"
+    /// means everywhere else in the application.
+    ///
+    /// **Leaving the film is the last rung and never a shortcut past the
+    /// others.** It used to be the first: Escape went straight out whatever the
+    /// strip was doing, reasoning that Down already put the strip away and
+    /// spending Escape on it too would make leaving a film two presses. That is
+    /// the wrong way round in practice. The strip is on screen because you just
+    /// did something, so the key for getting out of what you are in should get
+    /// you out of *that* - and a film ended by a stray Escape costs far more
+    /// than a second press does.
+    fn back_out(self: &Rc<Self>) {
         use crate::controls::Row;
         // The key list first, wherever it is: it is laid over everything else
         // and has to be got rid of before "back" can mean anything else.
@@ -3028,14 +3027,24 @@ impl App {
         // other caller here does it: `set_row` runs the strip's own handlers,
         // and holding the cell open across them is how a re-entrant borrow
         // panic gets written.
-        let controls = self.controls.borrow().clone();
-        match controls {
-            Some(controls)
-                if matches!(controls.row(), Row::Volume | Row::Audio | Row::Subtitles) =>
-            {
-                controls.set_row(Row::Buttons);
-            }
-            _ => self.go_back(),
+        let Some(controls) = self.controls.borrow().clone() else {
+            // Not playing at all, so the strip is not the thing being backed
+            // out of - the screen is.
+            self.go_back();
+            return;
+        };
+        match controls.row() {
+            // Back to the buttons rather than off the strip entirely, so the
+            // icon the chooser came out of is highlighted and can be seen to
+            // have changed - the same landing choosing a row gives.
+            Row::Volume | Row::Audio | Row::Subtitles => controls.set_row(Row::Buttons),
+            // The strip is being driven, so letting go of it is the step.
+            Row::Buttons | Row::Timeline => controls.set_row(Row::None),
+            // Nothing is being driven, but the strip may still be up from a
+            // moved pointer or a seek, and that is what is on screen to lose.
+            Row::None if controls.is_showing() => controls.hide(),
+            // Nothing left over the film. Now it means the film.
+            Row::None => self.go_back(),
         }
     }
 
@@ -3488,20 +3497,12 @@ impl App {
             // Whatever is on screen goes away first, whether it is being
             // driven or simply lingering: backing out of the film while the
             // strip is up would be a surprise either way.
-            Action::Back => {
-                let showing = self
-                    .controls
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|controls| controls.is_showing());
-                if showing {
-                    if let Some(controls) = self.controls.borrow().as_ref() {
-                        controls.hide();
-                    }
-                } else {
-                    self.go_back();
-                }
-            }
+            //
+            // Through the same ladder Escape takes rather than a copy of half
+            // of it, which is what this was - it took the strip down whole,
+            // open chooser and all, where Escape stepped out of the chooser
+            // first. One press, one rung, on both.
+            Action::Back => self.back_out(),
             Action::Fullscreen => self.toggle_fullscreen(),
             // Ignored outside playback, matching the keyboard: there is
             // nothing to turn off from a menu.
@@ -7798,7 +7799,7 @@ impl App {
     fn browser_page(self: &Rc<Self>, directory: &std::path::Path, mode: Browse) -> BrowserPage {
         let (crumbs, crumb_buttons) = self.breadcrumbs(directory, mode.folders_only());
 
-        let (page, list, _back, slot) = list_page_with(&crumbs, false);
+        let (page, list, _back, slot) = list_page_with(&crumbs, false, self.scale.get());
         // The arrow's slot holds a fixed width for every screen to line up
         // against. With no arrow in it, that is just a gap before the trail.
         slot.set_visible(false);
@@ -9120,7 +9121,7 @@ impl App {
     fn show_settings(self: &Rc<Self>) {
         let scale = self.scale.get();
         let px = |base: f64| (base * scale).round() as i32;
-        let (page, list, back, slot) = list_page("Settings", true);
+        let (page, list, back, slot) = list_page("Settings", true, self.scale.get());
 
         // What the window has to spend. The monitor stands in before the
         // window has been given a size.
@@ -12294,6 +12295,7 @@ impl App {
                     self.window.is_fullscreen(),
                     self.locked_fullscreen,
                     &outputs,
+                    self.external,
                 );
                 controls.set_levels(&levels);
                 // The pipeline built each output's level from that output's own
@@ -12428,7 +12430,7 @@ impl App {
                 }
                 {
                     let app = self.clone();
-                    controls.connect_settings(move || app.leave_playback());
+                    controls.connect_back(move || app.leave_playback());
                 }
                 {
                     // The same step the arrow keys take, through the same
@@ -12728,10 +12730,14 @@ impl App {
 /// back to, where it's made invisible instead of omitted. Leaving it out
 /// changes the header's height, which shifted the heading and the whole
 /// list every time the user moved between the menu and a chooser.
-fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
+fn list_page(
+    title: &str,
+    show_back: bool,
+    scale: f64,
+) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let heading = heading_label(title);
     heading.set_xalign(0.0);
-    let page = list_page_with(&heading, show_back);
+    let page = list_page_with(&heading, show_back, scale);
     // The list carries the page's title, so arriving on one says where you
     // are before it says what row you are on. A reader gives the container's
     // name, then the position, then the row - which is the whole context in
@@ -12745,6 +12751,7 @@ fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Butt
 fn list_page_with(
     heading: &impl IsA<gtk::Widget>,
     show_back: bool,
+    scale: f64,
 ) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let page = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -12770,7 +12777,7 @@ fn list_page_with(
         .css_classes(["tp-leading"])
         .build();
 
-    let back = back_button();
+    let back = back_button(scale);
     if !show_back {
         // Kept in the layout so it still occupies its space, but invisible
         // and skipped by focus.
@@ -13090,6 +13097,29 @@ pub fn settings_image(size: f64) -> gtk::Image {
     marked_image(ICON, size)
 }
 
+/// The mark on every Back button: the one in a page header, and the one that
+/// leaves playback.
+///
+/// A bundled mark rather than `go-previous-symbolic`, which is what these used
+/// to be. Two reasons, and the second is the one that matters. A themed icon
+/// takes its size from the theme, which knows nothing about `ui_scale`, so the
+/// arrow stayed put while everything around it doubled on a television. And
+/// the control strip already spends that same glyph on skipping back, so the
+/// two would have sat on one bar meaning different things.
+///
+/// `size` is in real pixels and is the caller's to decide, because it appears
+/// at two sizes: in a header, where it answers to the slot it sits in, and
+/// among the transport icons, where it has to agree with those.
+pub fn back_image(size: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/back.png");
+
+    marked_image(ICON, size)
+}
+
+/// How large the back mark is drawn in a page header, before scaling. Set
+/// against the slot it sits in rather than against the transport icons.
+const BACK_MARK_PX: f64 = 22.0;
+
 /// How large the two marks in the media page's corner are drawn, before
 /// scaling. One number for both, so they cannot drift apart.
 const CORNER_MARK_PX: f64 = 26.0;
@@ -13338,11 +13368,13 @@ fn name_it(widget: &impl IsA<gtk::Accessible>, name: &str) {
     widget.update_property(&[gtk::accessible::Property::Label(name)]);
 }
 
-fn back_button() -> gtk::Button {
-    // An icon rather than a text glyph: a "‹" character sits off the
+fn back_button(scale: f64) -> gtk::Button {
+    // A mark rather than a text glyph: a "‹" character sits off the
     // vertical center because it's positioned by font metrics rather than
-    // by the icon's own bounding box.
-    let button = gtk::Button::from_icon_name("go-previous-symbolic");
+    // by the icon's own bounding box. Sized here rather than left to the
+    // theme - see [`back_image`].
+    let button = gtk::Button::new();
+    button.set_child(Some(&back_image(BACK_MARK_PX * scale)));
     button.add_css_class("tp-back");
     name_it(&button, "Back");
     button.set_valign(gtk::Align::Center);
