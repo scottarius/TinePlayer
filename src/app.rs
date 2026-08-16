@@ -12575,10 +12575,10 @@ fn scrolling_list() -> (gtk::ScrolledWindow, gtk::ListBox) {
 }
 
 /// The mark on its own, for a screen that says the name some other way.
-const APP_MARK: &[u8] = include_bytes!("../data/ui/tineplayer.png");
+const APP_MARK: &[u8] = include_bytes!("../data/branding/tineplayer.png");
 
 /// The mark with the name beside it, for a header.
-const HORIZONTAL_LOCKUP: &[u8] = include_bytes!("../data/ui/lockup-horizontal.png");
+const HORIZONTAL_LOCKUP: &[u8] = include_bytes!("../data/branding/lockup-horizontal.png");
 
 /// The full logo at `width`, in [`crate::lockup`], which explains why it is
 /// not a `GtkImage` like every other picture here.

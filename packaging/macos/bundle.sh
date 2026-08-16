@@ -57,7 +57,7 @@ if [[ -f data/branding/tineplayer.icns ]]; then
 fi
 
 icon_src="data/branding/tineplayer-macos.png"
-[[ -f "$icon_src" ]] || icon_src="data/ui/tineplayer.png"
+[[ -f "$icon_src" ]] || icon_src="data/branding/tineplayer.png"
 source_px="$(sips -g pixelWidth "$icon_src" | awk '/pixelWidth/{print $2}')"
 for size in 16 32 128 256 512; do
     sips -z "$size" "$size" "$icon_src" \
