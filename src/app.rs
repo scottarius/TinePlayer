@@ -7945,8 +7945,15 @@ impl App {
     /// for, plus what alignment worked out. The two are separate quantities -
     /// one describes the headphones, the other describes the pair of files -
     /// and only the first is ever shown on the slider.
-    fn offset_for(&self, role: &str) -> f64 {
-        self.config.borrow().applied_offset_ms(role) + self.baseline_ms(role)
+    /// The baseline counts only while the output is playing the file it was
+    /// measured for. Alignment describes a *pairing* of two files, so it means
+    /// nothing to a track inside the video - and carrying it across a switch
+    /// left that track running seconds out of step with the picture, which
+    /// reads as the film being broken rather than as a setting being wrong.
+    fn offset_for(&self, playback: &Playback, role: &str) -> f64 {
+        let paired = matches!(playback.playing_on(role), Some(Playing::File(_)));
+        let baseline = if paired { self.baseline_ms(role) } else { 0.0 };
+        self.config.borrow().applied_offset_ms(role) + baseline
     }
 
     /// Sends an output's whole delay to the pipeline: what the viewer asked
@@ -7959,7 +7966,7 @@ impl App {
     /// the audio seconds out. A half-applied offset is worse than none, and
     /// the way to stop that recurring is to leave nowhere else to apply one.
     fn push_offset(&self, playback: &Playback, role: &str) {
-        playback.set_offset_ms(role, self.offset_for(role));
+        playback.set_offset_ms(role, self.offset_for(playback, role));
     }
 
     /// Sends an output's level to the pipeline: what that output is set to,
