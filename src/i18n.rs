@@ -1145,6 +1145,40 @@ mod tests {
         }
     }
 
+    /// A catalog with Windows line endings, which is not a hypothetical: this
+    /// repository is checked out with `core.autocrlf` on Windows, and
+    /// `.gitattributes` pins only `*.sh` to LF. So a contributor cloning here
+    /// gets CRLF in every `.po`, and a translator editing one in Notepad saves
+    /// CRLF whatever the file had.
+    ///
+    /// The endings are pinned in `.gitattributes` now, which is the real fix
+    /// and covers Weblate and Poedit as well as this. This is the guard for
+    /// the file that arrives with them anyway.
+    #[test]
+    fn a_catalog_with_windows_line_endings_still_reads() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("po")
+            .join("de.po");
+        let text = std::fs::read_to_string(&source).expect("po/de.po is readable");
+        let crlf = text.replace('\n', "\r\n");
+
+        let path = std::env::temp_dir().join("tineplayer-crlf-catalog.po");
+        std::fs::write(&path, &crlf).expect("the temporary directory is writable");
+        let loaded = load(&path);
+        let _ = std::fs::remove_file(&path);
+
+        let loaded = loaded.expect("a catalog with CRLF endings is still a catalog");
+        assert_eq!(loaded.code, "de");
+        assert_eq!(
+            loaded
+                .singular
+                .get("Interface Language")
+                .map(String::as_str),
+            Some("Sprache der Oberfläche"),
+            "a translation came back with a stray carriage return in it"
+        );
+    }
+
     /// The `TINEPLAYER_PO` path, against a real catalog in this repository.
     ///
     /// Worth a test of its own because it is the one route through this module

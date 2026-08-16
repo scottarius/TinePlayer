@@ -308,7 +308,13 @@ msgstr ""
         body.append("\n".join(block))
 
     TEMPLATE.parent.mkdir(exist_ok=True)
-    TEMPLATE.write_text(header + "\n" + "\n\n".join(body) + "\n", encoding="utf-8")
+    # newline="" so Python does not translate to the platform's endings on the
+    # way out. Without it this writes CRLF on Windows and LF on Linux, and CI
+    # asks whether the template is up to date by running it and looking for a
+    # diff - a question that cannot be answered if the answer depends on who
+    # ran it last. `.gitattributes` pins the checked-out file to match.
+    with open(TEMPLATE, "w", encoding="utf-8", newline="") as out:
+        out.write(header + "\n" + "\n\n".join(body) + "\n")
 
     plurals = sum(1 for entry in messages.values() if entry["plural"])
     contexts = sum(1 for key in messages if key[0] is not None)
