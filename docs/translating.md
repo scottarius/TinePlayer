@@ -85,22 +85,26 @@ English only because English does that; use whatever your language does.
   in bug reports, and a bug report is more use in the language the issue
   tracker is written in.
 
-## If your language is not written in Latin, Greek or Cyrillic
+## Fonts
 
-TinePlayer bundles its own fonts, cut down to only the characters it can
-actually draw, so that the same text looks the same on Windows, macOS and a
-Raspberry Pi. Until now that meant the interface in English plus each
-language's own name in the language menu - so the Arabic font carries twelve
-characters and the Japanese one six.
+TinePlayer bundles its own fonts so that text looks the same on Windows, macOS
+and a Raspberry Pi rather than depending on what each machine happens to have.
 
-**A translation into one of those scripts needs the fonts rebuilt**, or it will
-draw as boxes. CI checks this and will tell you, so nothing ships broken, but
-it is not something you can do from Weblate. Say so on the pull request and it
-will be handled here.
+**For almost every language this needs nothing from you.** The Latin, Greek,
+Cyrillic, Arabic, Hebrew, Thai, Devanagari, Bengali, Tamil, Telugu, Malayalam,
+Gurmukhi, Georgian and Armenian faces are all bundled whole.
 
-Latin, Greek and Cyrillic need nothing: those fonts keep whole Unicode ranges
-rather than a counted set, so German, Polish, Czech, Turkish, Vietnamese,
-Greek, Russian and Ukrainian all work with no font change at all.
+**Chinese, Japanese and Korean are the exception.** Those faces are 10 MB each
+whole, which would roughly double every download, so they are bundled cut down
+to the characters the interface actually uses. That includes your translation -
+but only once the fonts have been rebuilt here, which is a manual step needing
+the network and is not something Weblate can do. CI will catch it, so nothing
+ships broken; mention it on the pull request and it will be handled.
+
+Even then, a film *title* in Chinese or Japanese coming from a media library
+falls back to the system font, since there is no way to know in advance what
+characters a library contains. Windows and macOS both ship CJK fonts, so this
+only affects Linux machines without one installed.
 
 ## For maintainers
 
