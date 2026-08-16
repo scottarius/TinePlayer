@@ -7798,7 +7798,7 @@ impl App {
     fn browser_page(self: &Rc<Self>, directory: &std::path::Path, mode: Browse) -> BrowserPage {
         let (crumbs, crumb_buttons) = self.breadcrumbs(directory, mode.folders_only());
 
-        let (page, list, _back, slot) = list_page_with(&crumbs, false);
+        let (page, list, _back, slot) = list_page_with(&crumbs, false, self.scale.get());
         // The arrow's slot holds a fixed width for every screen to line up
         // against. With no arrow in it, that is just a gap before the trail.
         slot.set_visible(false);
@@ -9120,7 +9120,7 @@ impl App {
     fn show_settings(self: &Rc<Self>) {
         let scale = self.scale.get();
         let px = |base: f64| (base * scale).round() as i32;
-        let (page, list, back, slot) = list_page("Settings", true);
+        let (page, list, back, slot) = list_page("Settings", true, self.scale.get());
 
         // What the window has to spend. The monitor stands in before the
         // window has been given a size.
@@ -12294,6 +12294,7 @@ impl App {
                     self.window.is_fullscreen(),
                     self.locked_fullscreen,
                     &outputs,
+                    self.external,
                 );
                 controls.set_levels(&levels);
                 // The pipeline built each output's level from that output's own
@@ -12428,7 +12429,7 @@ impl App {
                 }
                 {
                     let app = self.clone();
-                    controls.connect_settings(move || app.leave_playback());
+                    controls.connect_back(move || app.leave_playback());
                 }
                 {
                     // The same step the arrow keys take, through the same
@@ -12728,10 +12729,14 @@ impl App {
 /// back to, where it's made invisible instead of omitted. Leaving it out
 /// changes the header's height, which shifted the heading and the whole
 /// list every time the user moved between the menu and a chooser.
-fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
+fn list_page(
+    title: &str,
+    show_back: bool,
+    scale: f64,
+) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let heading = heading_label(title);
     heading.set_xalign(0.0);
-    let page = list_page_with(&heading, show_back);
+    let page = list_page_with(&heading, show_back, scale);
     // The list carries the page's title, so arriving on one says where you
     // are before it says what row you are on. A reader gives the container's
     // name, then the position, then the row - which is the whole context in
@@ -12745,6 +12750,7 @@ fn list_page(title: &str, show_back: bool) -> (gtk::Box, gtk::ListBox, gtk::Butt
 fn list_page_with(
     heading: &impl IsA<gtk::Widget>,
     show_back: bool,
+    scale: f64,
 ) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let page = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -12770,7 +12776,7 @@ fn list_page_with(
         .css_classes(["tp-leading"])
         .build();
 
-    let back = back_button();
+    let back = back_button(scale);
     if !show_back {
         // Kept in the layout so it still occupies its space, but invisible
         // and skipped by focus.
@@ -13090,6 +13096,29 @@ pub fn settings_image(size: f64) -> gtk::Image {
     marked_image(ICON, size)
 }
 
+/// The mark on every Back button: the one in a page header, and the one that
+/// leaves playback.
+///
+/// A bundled mark rather than `go-previous-symbolic`, which is what these used
+/// to be. Two reasons, and the second is the one that matters. A themed icon
+/// takes its size from the theme, which knows nothing about `ui_scale`, so the
+/// arrow stayed put while everything around it doubled on a television. And
+/// the control strip already spends that same glyph on skipping back, so the
+/// two would have sat on one bar meaning different things.
+///
+/// `size` is in real pixels and is the caller's to decide, because it appears
+/// at two sizes: in a header, where it answers to the slot it sits in, and
+/// among the transport icons, where it has to agree with those.
+pub fn back_image(size: f64) -> gtk::Image {
+    const ICON: &[u8] = include_bytes!("../data/ui/back.png");
+
+    marked_image(ICON, size)
+}
+
+/// How large the back mark is drawn in a page header, before scaling. Set
+/// against the slot it sits in rather than against the transport icons.
+const BACK_MARK_PX: f64 = 22.0;
+
 /// How large the two marks in the media page's corner are drawn, before
 /// scaling. One number for both, so they cannot drift apart.
 const CORNER_MARK_PX: f64 = 26.0;
@@ -13338,11 +13367,13 @@ fn name_it(widget: &impl IsA<gtk::Accessible>, name: &str) {
     widget.update_property(&[gtk::accessible::Property::Label(name)]);
 }
 
-fn back_button() -> gtk::Button {
-    // An icon rather than a text glyph: a "‹" character sits off the
+fn back_button(scale: f64) -> gtk::Button {
+    // A mark rather than a text glyph: a "‹" character sits off the
     // vertical center because it's positioned by font metrics rather than
-    // by the icon's own bounding box.
-    let button = gtk::Button::from_icon_name("go-previous-symbolic");
+    // by the icon's own bounding box. Sized here rather than left to the
+    // theme - see [`back_image`].
+    let button = gtk::Button::new();
+    button.set_child(Some(&back_image(BACK_MARK_PX * scale)));
     button.add_css_class("tp-back");
     name_it(&button, "Back");
     button.set_valign(gtk::Align::Center);

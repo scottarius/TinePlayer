@@ -398,7 +398,9 @@ pub struct Controls {
     stop: gtk::Button,
     skip_back: gtk::Button,
     skip_forward: gtk::Button,
-    settings: gtk::Button,
+    /// Leaves playback for the page the film was started from. Present
+    /// whatever launched us; [`Self::stop`] beside it is not.
+    back: gtk::Button,
     elapsed: gtk::Label,
     duration: gtk::Label,
     /// Whether the right-hand readout counts down instead of naming the
@@ -536,6 +538,10 @@ impl Controls {
         fullscreen_now: bool,
         lock_fullscreen: bool,
         outputs: &[(&'static str, String)],
+        // Whether something else chose this video and is waiting for the
+        // playback, which is the only case where Stop means anything Back
+        // does not.
+        external: bool,
     ) -> Rc<Self> {
         // Pause, because playback begins playing. The readout corrects this
         // on its first tick anyway, but half a second of the wrong icon is
@@ -943,15 +949,19 @@ impl Controls {
             .halign(gtk::Align::End)
             .build();
 
-        // Away from the transport controls, beside the other things that are
+        // Away from the transport controls, being the one thing here that is
         // not about what playback is doing: it leaves playback rather than
-        // changing it.
-        let settings_icon = crate::app::settings_image(crate::app::ICON_PX * scale);
-        settings_icon.add_css_class("tp-transport");
-        let settings = gtk::Button::new();
-        settings.set_child(Some(&settings_icon));
-        settings.add_css_class("tp-transport-button");
-        name_it(&settings, "Settings");
+        // changing it, landing back on the page the film was started from.
+        //
+        // It wore the gear until 2026-08-17, which promised the settings
+        // screen and went somewhere else. The same mark as every other Back
+        // button in the application, so that one picture means one thing.
+        let back_mark = crate::app::back_image(crate::app::ICON_PX * scale);
+        back_mark.add_css_class("tp-transport");
+        let back = gtk::Button::new();
+        back.set_child(Some(&back_mark));
+        back.add_css_class("tp-transport-button");
+        name_it(&back, "Back");
 
         // Two rows: where playback is, and what can be done to it. Separating
         // them is what lets a controller treat them differently - left and
@@ -968,16 +978,21 @@ impl Controls {
 
         // Play sits in the middle and larger than the rest, because it is the
         // one control anybody reaches for and the one a controller lands on
-        // first. Stop keeps beside it, being the other thing that acts on
-        // playback itself. What is left goes to the edges: the two that change
-        // how the video is presented on the left, the one that changes how
-        // much of the screen it takes on the right.
+        // first. What is left goes to the edges: leaving playback on the left,
+        // and on the right the things that change how the video reaches you.
         let left = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(16)
             .build();
-        left.append(&settings);
-        left.append(&stop);
+        left.append(&back);
+        // Only under a launcher, where it is the one button here that does
+        // something Back does not: there is no page of ours to return to, so
+        // it finishes the playback the launcher is waiting on and closes the
+        // window. Everywhere else the two ran the same code, which is two
+        // buttons offering one thing and no way to tell which was which.
+        if external {
+            left.append(&stop);
+        }
 
         // Skipping either side of play, which balances the group and gives a
         // pointer a way to skip at all: until now that was keyboard and
@@ -1121,16 +1136,18 @@ impl Controls {
         root.add_overlay(&shortcuts);
 
         // The order a controller steps through, which has to match the order
-        // they are drawn in above - including one button per output, however
-        // many there are.
-        let mut order = vec![
-            settings.clone(),
-            stop.clone(),
+        // they are drawn in above - including Stop only where it was drawn,
+        // and one button per output, however many there are.
+        let mut order = vec![back.clone()];
+        if external {
+            order.push(stop.clone());
+        }
+        order.extend([
             skip_back.clone(),
             play.clone(),
             skip_forward.clone(),
             subtitles.clone(),
-        ];
+        ]);
         order.extend(rows.iter().map(|output| output.button.clone()));
         order.push(volume_button.clone());
         order.push(fullscreen.clone());
@@ -1147,7 +1164,7 @@ impl Controls {
             stop,
             skip_back,
             skip_forward,
-            settings,
+            back,
             elapsed,
             duration,
             remaining,
@@ -2673,8 +2690,8 @@ impl Controls {
         self.stop.connect_clicked(move |_| handler());
     }
 
-    pub fn connect_settings(&self, handler: impl Fn() + 'static) {
-        self.settings.connect_clicked(move |_| handler());
+    pub fn connect_back(&self, handler: impl Fn() + 'static) {
+        self.back.connect_clicked(move |_| handler());
     }
 
     pub fn connect_fullscreen(&self, handler: impl Fn() + 'static) {
