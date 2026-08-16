@@ -1022,11 +1022,27 @@ impl Playback {
     /// afterwards would leave the pad to arrive at a routing that had never
     /// heard of it, which is the shape of the subtitle bug in `de2e116`.
     pub fn set_audio(&self, role: &str, playing: Option<Playing>) -> Result<(), String> {
+        // Nothing is seeked here, deliberately. An external file's chain is
+        // kept walking by a branch of its own for as long as no output is
+        // drawing from it - see `pipeline::attach_pacer` - so coming back to
+        // it is a plain relink, and it is already where the film is. Seeking
+        // it instead was tried and froze the picture for as long as the file
+        // took to refill.
         let tracks = {
             let mut routing = self.routing.lock().unwrap();
             routing.want(role, playing);
+            // Before the selection rather than after it, and this is what
+            // makes a switch the selection cannot answer take effect at all -
+            // see `AudioRouting::settle` for the three of them. It is also
+            // what links the branch the seek below has to pass through.
+            routing.settle(role);
             routing.wanted_tracks()
         };
+
+        crate::pipeline::trace(format_args!(
+            "set_audio {role}: position={:?}",
+            self.position()
+        ));
 
         // Everything that carries on playing, plus every audio track some
         // output now wants. Built from the outputs rather than from
