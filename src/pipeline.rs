@@ -81,6 +81,10 @@ pub enum Playing {
 /// had moved elsewhere. What each pad is carrying is therefore followed
 /// through the stream-start event, which does fire.
 ///
+/// **By pad, and a pad is not its name** - see [`hub_key`]. Names are unique
+/// only within an element, and every external audio file brings a decoder of
+/// its own that numbers its pads from zero exactly as the video's does.
+///
 /// Locked rather than borrowed because it is reached from two directions:
 /// `pad-added` and the stream-start probe arrive on streaming threads, while a
 /// viewer choosing a soundtrack arrives on the main one.
@@ -739,6 +743,28 @@ fn build_output_chain(
     Ok(queue)
 }
 
+/// How a decoded audio pad is keyed in the routing.
+///
+/// **The element's name as well as the pad's, because a pad name is unique
+/// only within its own element.** Every `decodebin3` in the pipeline calls its
+/// first audio pad `audio_0`, and there is one per external audio file besides
+/// the video's own - so a bare pad name had the video's audio pad and an
+/// external soundtrack's sharing a key, and the second to arrive quietly
+/// replaced the first.
+///
+/// Measured 2026-08-16, from a trace of the routing's own state: after
+/// switching an output from a separate soundtrack to a track inside the film,
+/// `carrying` held `audio_0=Track(0)` and nothing at all knew where the file
+/// was. Switching back then found nothing carrying it, unlinked the output and
+/// linked it to nothing - silence, and a picture that froze at the next seek,
+/// because a sink with no branch never prerolls and the seek waits for it.
+fn hub_key(pad: &gst::Pad) -> String {
+    match pad.parent() {
+        Some(element) => format!("{}:{}", element.name(), pad.name()),
+        None => pad.name().to_string(),
+    }
+}
+
 /// Puts a `tee` on a decoded audio stream and hands it to the routing, which
 /// connects whichever outputs are waiting for that stream.
 ///
@@ -752,7 +778,7 @@ fn add_audio_hub(
     pad: &gst::Pad,
     playing: Playing,
 ) {
-    let name = pad.name().to_string();
+    let name = hub_key(pad);
     let Ok(tee) = gst::ElementFactory::make("tee").build() else {
         eprintln!("Missing GStreamer element \"tee\". Check the install.");
         return;
@@ -809,7 +835,7 @@ fn follow_stream_changes(routing: &Arc<Mutex<AudioRouting>>, pad: &gst::Pad) {
         }
         let mut routing = routing.lock().unwrap();
         if let Some(playing) = routing.track_on(pad) {
-            let name = pad.name().to_string();
+            let name = hub_key(pad);
             routing.now_carrying(&name, playing);
         }
         gst::PadProbeReturn::Ok
@@ -819,9 +845,10 @@ fn follow_stream_changes(routing: &Arc<Mutex<AudioRouting>>, pad: &gst::Pad) {
 /// Takes away the hub on a pad that has gone, once whatever was drawing from
 /// it has been let go.
 fn remove_audio_hub(pipeline: &gst::Pipeline, routing: &Arc<Mutex<AudioRouting>>, pad: &gst::Pad) {
-    let name = pad.name().to_string();
+    let name = hub_key(pad);
     let tee = {
         let mut routing = routing.lock().unwrap();
+        trace(format_args!("hub removed on {name}"));
         routing.carrying.remove(&name);
         let Some(tee) = routing.hubs.remove(&name) else {
             return;
