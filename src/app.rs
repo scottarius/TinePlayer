@@ -1828,23 +1828,12 @@ impl App {
                     app.leave_controls();
                     glib::Propagation::Stop
                 }
-                // Straight out, whatever the strip happens to be doing. A
-                // keyboard already has Down for putting the strip away, so
-                // spending Escape on it as well made leaving a film two
-                // presses when it reads as one.
-                //
-                // With one exception, added because the menus made it one: an
-                // open chooser is closed first, exactly as the gamepad's B
-                // does. A list of soundtracks laid over the film is something
-                // you are inside of, and Escape is the key for getting out of
-                // what you are inside of - leaving the film outright from
-                // there is a much bigger step than the press suggests.
-                //
-                // Only for an open chooser. With nothing open, Escape still
-                // goes straight out rather than putting the strip away, which
-                // is what Down is for on a keyboard.
+                // One step back per press, down the ladder in `back_out`: a
+                // chooser, then the strip, then the film. The same rung the
+                // gamepad's B takes, through the same code, because the key
+                // list on `F1` promises they are the same thing.
                 gdk::Key::Escape => {
-                    app.close_chooser_or_go_back();
+                    app.back_out();
                     glib::Propagation::Stop
                 }
                 // Ours rather than GTK's, which cannot see the lists at all.
@@ -3008,13 +2997,23 @@ impl App {
         }
     }
 
-    /// Escape: shuts an open chooser, or leaves whatever is on screen.
+    /// Escape, and the gamepad's B: back out by one step, whatever the
+    /// outermost thing on screen happens to be.
     ///
-    /// Back to the buttons rather than off the strip entirely, so the icon the
-    /// chooser came out of is highlighted and can be seen to have changed -
-    /// the same landing choosing a row gives, and the same the gamepad's B
-    /// gives.
-    fn close_chooser_or_go_back(self: &Rc<Self>) {
+    /// The ladder, from the top: the key list, then an open chooser, then the
+    /// strip itself, and only once all of that is gone does it leave the film.
+    /// Each press is rid of the last thing that appeared, which is what "back"
+    /// means everywhere else in the application.
+    ///
+    /// **Leaving the film is the last rung and never a shortcut past the
+    /// others.** It used to be the first: Escape went straight out whatever the
+    /// strip was doing, reasoning that Down already put the strip away and
+    /// spending Escape on it too would make leaving a film two presses. That is
+    /// the wrong way round in practice. The strip is on screen because you just
+    /// did something, so the key for getting out of what you are in should get
+    /// you out of *that* - and a film ended by a stray Escape costs far more
+    /// than a second press does.
+    fn back_out(self: &Rc<Self>) {
         use crate::controls::Row;
         // The key list first, wherever it is: it is laid over everything else
         // and has to be got rid of before "back" can mean anything else.
@@ -3028,14 +3027,24 @@ impl App {
         // other caller here does it: `set_row` runs the strip's own handlers,
         // and holding the cell open across them is how a re-entrant borrow
         // panic gets written.
-        let controls = self.controls.borrow().clone();
-        match controls {
-            Some(controls)
-                if matches!(controls.row(), Row::Volume | Row::Audio | Row::Subtitles) =>
-            {
-                controls.set_row(Row::Buttons);
-            }
-            _ => self.go_back(),
+        let Some(controls) = self.controls.borrow().clone() else {
+            // Not playing at all, so the strip is not the thing being backed
+            // out of - the screen is.
+            self.go_back();
+            return;
+        };
+        match controls.row() {
+            // Back to the buttons rather than off the strip entirely, so the
+            // icon the chooser came out of is highlighted and can be seen to
+            // have changed - the same landing choosing a row gives.
+            Row::Volume | Row::Audio | Row::Subtitles => controls.set_row(Row::Buttons),
+            // The strip is being driven, so letting go of it is the step.
+            Row::Buttons | Row::Timeline => controls.set_row(Row::None),
+            // Nothing is being driven, but the strip may still be up from a
+            // moved pointer or a seek, and that is what is on screen to lose.
+            Row::None if controls.is_showing() => controls.hide(),
+            // Nothing left over the film. Now it means the film.
+            Row::None => self.go_back(),
         }
     }
 
@@ -3488,20 +3497,12 @@ impl App {
             // Whatever is on screen goes away first, whether it is being
             // driven or simply lingering: backing out of the film while the
             // strip is up would be a surprise either way.
-            Action::Back => {
-                let showing = self
-                    .controls
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|controls| controls.is_showing());
-                if showing {
-                    if let Some(controls) = self.controls.borrow().as_ref() {
-                        controls.hide();
-                    }
-                } else {
-                    self.go_back();
-                }
-            }
+            //
+            // Through the same ladder Escape takes rather than a copy of half
+            // of it, which is what this was - it took the strip down whole,
+            // open chooser and all, where Escape stepped out of the chooser
+            // first. One press, one rung, on both.
+            Action::Back => self.back_out(),
             Action::Fullscreen => self.toggle_fullscreen(),
             // Ignored outside playback, matching the keyboard: there is
             // nothing to turn off from a menu.
