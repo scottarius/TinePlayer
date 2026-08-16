@@ -161,44 +161,22 @@ pub fn chosen_file(path: &Path) -> Subtitle {
 /// optional extra tags such as `.hi` for hearing-impaired versions. Whatever
 /// sits between the video's name and the extension is shown as the label,
 /// since that is where the language ended up.
+///
+/// Found by [`crate::beside`], which is the one place that convention is
+/// written down: separate soundtracks are named the same way and are found by
+/// the same code, so the two lists cannot drift apart.
 fn external(video: &Path) -> Vec<Subtitle> {
-    let Some(directory) = video.parent() else {
-        return Vec::new();
-    };
-    let Some(stem) = video.file_stem().map(|s| s.to_string_lossy().to_string()) else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return Vec::new();
-    };
-
-    let mut found: Vec<Subtitle> = entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            let extension = path.extension()?.to_string_lossy().to_lowercase();
-            if !EXTENSIONS.contains(&extension.as_str()) {
-                return None;
-            }
-
-            // Compared without the extension, so that an upper-case one
-            // doesn't defeat the trimming.
-            let without_extension = path.file_stem()?.to_string_lossy().to_string();
-            // A file named exactly after the video leaves nothing between the
-            // two, and falls through to the generic label below.
-            let label = without_extension
-                .strip_prefix(&stem)?
-                .trim_matches('.')
-                .to_string();
-
-            Some(Subtitle::External {
-                name: path.file_name()?.to_string_lossy().to_string(),
-                label: if label.is_empty() {
-                    "External".to_string()
-                } else {
-                    label
-                },
-            })
+    let mut found: Vec<Subtitle> = crate::beside::files(video, &EXTENSIONS[..])
+        .into_iter()
+        .map(|file| Subtitle::External {
+            // A file named exactly after the video says nothing about itself,
+            // and falls through to the generic label.
+            label: if file.tag.is_empty() {
+                "External".to_string()
+            } else {
+                file.tag
+            },
+            name: file.name,
         })
         .collect();
 
