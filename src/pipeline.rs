@@ -108,21 +108,161 @@ pub struct AudioRouting {
     /// The file's streams, needed to say which track a stream id is. Caught
     /// from the bus, since an element will not hand it over on request.
     collection: Option<gst::StreamCollection>,
+    /// The pipeline these live in, so a chain nobody is drawing from can be
+    /// given something that does - see [`attach_pacer`].
+    ///
+    /// **Weak, or a film is never freed.** The handlers holding this routing
+    /// belong to elements inside that pipeline, so a strong reference here
+    /// closes a cycle and every film ever played stays in memory holding its
+    /// audio devices open.
+    pipeline: Option<gst::glib::WeakRef<gst::Pipeline>>,
 }
 
 impl AudioRouting {
     /// Says what an output should be playing from now on. Takes effect at the
     /// next [`Self::reconcile`].
     pub fn want(&mut self, role: &str, playing: Option<Playing>) {
+        trace(format_args!("want {role} = {playing:?}"));
         match playing {
             Some(playing) => self.wanted.insert(role.into(), playing),
             None => self.wanted.remove(role),
         };
     }
 
+    /// Everything this holds, for the trace. Printed rather than reasoned
+    /// about, because the pipeline's account of itself is not evidence.
+    fn trace_state(&self, what: &str) {
+        if !tracing_audio() {
+            return;
+        }
+        let list = |pairs: &HashMap<String, Playing>| {
+            let mut out: Vec<String> = pairs
+                .iter()
+                .map(|(key, playing)| format!("{key}={playing:?}"))
+                .collect();
+            out.sort();
+            out.join(", ")
+        };
+        let mut links: Vec<String> = self
+            .links
+            .iter()
+            .map(|(role, pad)| {
+                format!(
+                    "{role}<-{}:{}",
+                    pad.parent()
+                        .map(|tee| tee.name().to_string())
+                        .unwrap_or_default(),
+                    pad.name()
+                )
+            })
+            .collect();
+        links.sort();
+        let mut hubs: Vec<String> = self.hubs.keys().cloned().collect();
+        hubs.sort();
+        eprintln!(
+            "[audio] {what}\n  wanted:   {}\n  carrying: {}\n  links:    {}\n  hubs:     {}",
+            list(&self.wanted),
+            list(&self.carrying),
+            links.join(", "),
+            hubs.join(", ")
+        );
+    }
+
     /// What an output is meant to be playing.
     pub fn wanted_by(&self, role: &str) -> Option<&Playing> {
         self.wanted.get(role)
+    }
+
+    /// Whether what an output now wants can be settled without waiting for the
+    /// decoder: it is already being carried, or it is nothing at all.
+    fn can_settle(&self, role: &str) -> bool {
+        match self.wanted.get(role) {
+            None => true,
+            Some(wanted) => self.carrying.values().any(|playing| playing == wanted),
+        }
+    }
+
+    /// Points an output at what it now wants, when that needs nothing to
+    /// arrive first.
+    ///
+    /// **Every other [`Self::reconcile`] is driven by a pad**, and that covers
+    /// a switch between two of the film's own tracks, because the stream
+    /// selection answering it always moves one. Three switches move no pad at
+    /// all: onto a separate audio file, whose chain has been carrying it since
+    /// the pipeline was built; onto nothing; and onto a track the *other*
+    /// output is already playing, which is a selection the decoder has already
+    /// satisfied. Each of those was recorded and then never acted on, so the
+    /// output carried on playing what it had.
+    ///
+    /// Deliberately does nothing when what is wanted is not carried yet. That
+    /// is a stream on its way, and disconnecting to wait for it would turn a
+    /// handover into a gap - the output keeps what it has until the pad
+    /// arrives, which is what it has always done.
+    pub fn settle(&mut self, role: &str) {
+        let can = self.can_settle(role);
+        self.trace_state(&format!("settle {role}, can_settle={can}"));
+        if can {
+            self.reconcile();
+        }
+    }
+
+    /// Remembers the pipeline, weakly. Called once, as it is built.
+    pub fn watch(&mut self, pipeline: &gst::Pipeline) {
+        self.pipeline = Some(pipeline.downgrade());
+    }
+
+    /// Gives a branch of its own to any external chain nothing is drawing
+    /// from, so it keeps step instead of running to the end of the file.
+    ///
+    /// **Called from [`Self::reconcile`], which is the only place links
+    /// change.** Doing it from `set_audio` instead looked equivalent and was
+    /// not: an output moving to a track that has yet to be decoded is still
+    /// linked to its old hub at that point, and only lets go later, on the
+    /// streaming thread, when the new pad arrives. So nothing ever looked
+    /// unattended and the chain raced away exactly as before.
+    fn mind_unattended_files(&self) {
+        let Some(pipeline) = self.pipeline.as_ref().and_then(|weak| weak.upgrade()) else {
+            return;
+        };
+        for (hub, attended) in self.external_hubs() {
+            // The pacer is named after the hub it hangs off, so asking the
+            // pipeline for it by name is the whole record of whether one is
+            // there already.
+            let pacer = pipeline.by_name(&format!("pacer_{}", hub.name()));
+            match (attended, pacer) {
+                (false, None) => attach_pacer(&pipeline, &hub),
+                // **Taken off again the moment an output comes back**, and
+                // that is not tidiness either. Left on, it shares the hub with
+                // the output's own branch, and the next flushing seek has it
+                // waiting on a clock that has stopped because that very output
+                // is prerolling - the startup deadlock again, from the other
+                // direction. Seeking after a couple of switches locked the
+                // picture solid.
+                (true, Some(_)) => detach_pacer(&pipeline, &hub),
+                _ => {}
+            }
+        }
+    }
+
+    /// Every hub carrying an external file, and whether an output is drawing
+    /// from it.
+    ///
+    /// Answered from the links rather than from `wanted`, because what matters
+    /// is what is *connected* right now, not what has been asked for and is
+    /// still on its way.
+    fn external_hubs(&self) -> Vec<(gst::Element, bool)> {
+        self.carrying
+            .iter()
+            .filter(|(_, playing)| matches!(playing, Playing::File(_)))
+            .filter_map(|(pad, _)| self.hubs.get(pad))
+            .map(|hub| {
+                let attended = self
+                    .links
+                    .values()
+                    .any(|pad| pad.parent().as_ref() == Some(hub.upcast_ref()));
+                (hub.clone(), attended)
+            })
+            .collect()
     }
 
     /// The tracks inside the video that some output is waiting for, which is
@@ -186,8 +326,15 @@ impl AudioRouting {
                     .and_then(|(pad, _)| self.hubs.get(pad))
                     .cloned()
             });
+            trace(format_args!(
+                "reconcile {role} -> {}",
+                hub.as_ref()
+                    .map(|hub| hub.name().to_string())
+                    .unwrap_or_else(|| "nothing".into())
+            ));
             self.point(&role, hub.as_ref());
         }
+        self.mind_unattended_files();
     }
 
     /// Feeds one output's chain from `hub`, or from nothing when it is `None`.
@@ -208,6 +355,7 @@ impl AudioRouting {
         if let (Some(current), Some(hub)) = (self.links.get(role), hub)
             && current.parent().as_ref() == Some(hub.upcast_ref())
         {
+            trace(format_args!("point {role}: already fed by {}", hub.name()));
             return;
         }
 
@@ -216,6 +364,7 @@ impl AudioRouting {
             if let Some(tee) = pad.parent_element() {
                 tee.release_request_pad(&pad);
             }
+            trace(format_args!("point {role}: released its old branch"));
         }
 
         let Some(hub) = hub else { return };
@@ -228,7 +377,32 @@ impl AudioRouting {
             hub.release_request_pad(&src);
             return;
         }
+        trace(format_args!(
+            "point {role}: linked {}:{} -> {}, pad is {}",
+            hub.name(),
+            src.name(),
+            sink.name(),
+            if src.pad_flags().contains(gst::PadFlags::EOS) {
+                "already EOS"
+            } else {
+                "flowing"
+            }
+        ));
         self.links.insert(role.into(), src);
+    }
+}
+
+/// Whether to say what the audio routing is doing, on stderr. Set
+/// `TINEPLAYER_TRACE_AUDIO=1` to turn it on; it is silent otherwise.
+pub fn tracing_audio() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("TINEPLAYER_TRACE_AUDIO").is_ok_and(|on| on != "0"))
+}
+
+/// One line of that trace.
+pub fn trace(what: std::fmt::Arguments<'_>) {
+    if tracing_audio() {
+        eprintln!("[audio] {what}");
     }
 }
 
@@ -393,6 +567,7 @@ pub fn build_pipeline(
     let routing = Arc::new(Mutex::new(AudioRouting::default()));
     {
         let mut routing = routing.lock().unwrap();
+        routing.watch(&pipeline);
         for (role, audio) in [("primary", primary_audio), ("secondary", secondary_audio)] {
             // A chain for every output the configuration names a device for,
             // whether or not it starts with anything to play. An output set to
@@ -807,11 +982,109 @@ fn add_audio_hub(
 
     {
         let mut routing = routing.lock().unwrap();
-        routing.hubs.insert(name.clone(), tee);
+        trace(format_args!("hub added on {name} carrying {playing:?}"));
+        routing.hubs.insert(name.clone(), tee.clone());
         routing.carrying.insert(name, playing);
         routing.reconcile();
     }
+    // A separate file needs somebody drawing from it at all times; a track
+    // inside the video does not, since its demuxer is paced by the picture.
+    //
+    // **After the routing has linked whatever wanted this hub, never before.**
+    // A `tee` pushes to its branches one after another, and a branch that
+    // blocks holds up the rest - so a pacer attached while it was the only
+    // branch filled its queue, blocked the tee, and left the output's sink
+    // waiting for the one buffer it needs to preroll. The pipeline then never
+    // reached PLAYING at all: one frame, in silence, going nowhere.
+    // No pacer here, deliberately: a hub exists because an output asked for
+    // what it carries, so somebody is drawing from it already. See
+    // `attach_pacer` for why attaching one now would deadlock the startup.
     follow_stream_changes(routing, pad);
+}
+
+/// Keeps an external file's chain walking in step with the film while no
+/// output is drawing from it.
+///
+/// **Nothing else paces it.** That chain has a source of its own, and the
+/// `tee` it feeds drops what it pushes rather than blocking - so the moment
+/// the last output leaves, it decodes the whole file as fast as it can and
+/// stops at the end. Measured in `harness`: ten seconds of audio consumed in
+/// under two, against seventy-seven buffers with this branch attached.
+///
+/// The alternative was to seek it back on return, and that is worse. A
+/// flushing seek makes the output's sink preroll again, and against a file on
+/// a network share that is seconds of frozen picture, after which the audio
+/// carries on from the seek and the picture is behind it. A chain that never
+/// ran away needs no seek at all.
+///
+/// **Attached only once the output has gone, never while one is connected**,
+/// and that is not a tidiness point - it is a deadlock. On Windows the
+/// pipeline's clock comes from an audio sink, and that clock reads zero until
+/// the sink's ringbuffer starts. A pacer waiting for the clock to advance
+/// fills its queue, a full branch blocks the `tee` it hangs off, and the sink
+/// being starved is the one that would have started the clock. Measured: with
+/// a pacer attached at startup the film sat on one frame indefinitely; with it
+/// attached and not syncing, or not attached, it played. Once an output has
+/// moved to a track inside the film, that same sink is running off the film's
+/// own audio and the clock is live, so there is nothing left to deadlock.
+///
+/// Deliberately not counted as a sink. It must not gate the pipeline's preroll
+/// (`async`), and it must not gate the *end of the film* either: EOS is posted
+/// once every sink has seen it, and a soundtrack longer than the picture would
+/// otherwise hold the film open after it had plainly finished.
+fn attach_pacer(pipeline: &gst::Pipeline, tee: &gst::Element) {
+    let (Ok(queue), Ok(sink)) = (
+        gst::ElementFactory::make("queue").build(),
+        gst::ElementFactory::make("fakesink").build(),
+    ) else {
+        eprintln!("Could not build the pacing branch for an external audio file");
+        return;
+    };
+    queue.set_property("name", format!("pacerq_{}", tee.name()));
+    sink.set_property("name", format!("pacer_{}", tee.name()));
+    sink.set_property("sync", true);
+    sink.set_property("async", false);
+    sink.unset_element_flags(gst::ElementFlags::SINK);
+    if pipeline.add_many([&queue, &sink]).is_err() {
+        eprintln!("Failed to add the pacing branch for an external audio file");
+        return;
+    }
+    if gst::Element::link_many([tee, &queue, &sink]).is_err() {
+        eprintln!("Failed to link the pacing branch for an external audio file");
+        return;
+    }
+    for element in [&queue, &sink] {
+        if element.sync_state_with_parent().is_err() {
+            eprintln!("Failed to start the pacing branch for an external audio file");
+            return;
+        }
+    }
+    trace(format_args!("pacing branch attached to {}", tee.name()));
+}
+
+/// Takes the pacing branch off again, once an output is drawing from the hub
+/// itself. The counterpart of [`attach_pacer`], and see there for why leaving
+/// it on is a deadlock rather than a waste.
+fn detach_pacer(pipeline: &gst::Pipeline, tee: &gst::Element) {
+    let (Some(queue), Some(sink)) = (
+        pipeline.by_name(&format!("pacerq_{}", tee.name())),
+        pipeline.by_name(&format!("pacer_{}", tee.name())),
+    ) else {
+        return;
+    };
+    // The tee lets go first, so nothing is pushed into elements on their way
+    // out - and the request pad is released rather than merely unlinked, since
+    // a tee goes on feeding a branch nobody is draining.
+    if let Some(pad) = queue.static_pad("sink")
+        && let Some(src) = pad.peer()
+    {
+        let _ = src.unlink(&pad);
+        tee.release_request_pad(&src);
+    }
+    let _ = queue.set_state(gst::State::Null);
+    let _ = sink.set_state(gst::State::Null);
+    let _ = pipeline.remove_many([&queue, &sink]);
+    trace(format_args!("pacing branch taken off {}", tee.name()));
 }
 
 /// Follows what a decoded pad is carrying for as long as it exists.
@@ -1158,4 +1431,434 @@ pub fn ordinal(collection: &gst::StreamCollection, id: &str, kind: gst::StreamTy
         position += 1;
     }
     None
+}
+
+#[cfg(test)]
+mod harness {
+    //! What an external audio chain does with nothing drawing from it.
+    //!
+    //! Built because the same symptom was diagnosed twice by reading and both
+    //! answers were wrong. The topology here is the real one in miniature: a
+    //! file with a source of its own, decoded into a `tee` that nothing is
+    //! linked to, exactly as an external soundtrack is while the output that
+    //! was playing it is listening to a track inside the film instead.
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// One at a time. Each of these runs a live pipeline and judges it by what
+    /// arrives within a couple of seconds, so two at once on the same machine
+    /// measure each other rather than the thing under test - which is exactly
+    /// how they first failed, having passed individually.
+    fn alone() -> std::sync::MutexGuard<'static, ()> {
+        static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+        ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Ten seconds of tone, written where the test can open it.
+    fn tone(path: &std::path::Path) {
+        let pipeline = gst::parse::launch(&format!(
+            "audiotestsrc num-buffers=430 ! audioconvert ! wavenc ! filesink location=\"{}\"",
+            path.display().to_string().replace('\\', "/")
+        ))
+        .expect("the writing pipeline parses");
+        pipeline.set_state(gst::State::Playing).expect("it starts");
+        let bus = pipeline.bus().expect("it has a bus");
+        bus.timed_pop_filtered(
+            gst::ClockTime::from_seconds(10),
+            &[gst::MessageType::Eos, gst::MessageType::Error],
+        );
+        let _ = pipeline.set_state(gst::State::Null);
+    }
+
+    #[test]
+    #[ignore = "runs a live pipeline for a few seconds"]
+    fn an_unlinked_chain_races_to_the_end_and_a_seek_brings_it_back() {
+        let _alone = alone();
+        gst::init().expect("GStreamer initialises");
+        let dir = std::env::temp_dir().join("tineplayer-harness");
+        std::fs::create_dir_all(&dir).expect("the directory is made");
+        let audio = dir.join("tone.wav");
+        tone(&audio);
+
+        let pipeline = gst::Pipeline::new();
+        let src = make("urisourcebin").expect("urisourcebin");
+        src.set_property(
+            "uri",
+            glib::filename_to_uri(&audio, None)
+                .expect("the path is a uri")
+                .to_string(),
+        );
+        let decode = make("decodebin3").expect("decodebin3");
+        decode.set_property("name", format!("{EXTERNAL_AUDIO_DECODER}0"));
+        pipeline.add_many([&src, &decode]).expect("both go in");
+        {
+            let decode = decode.clone();
+            src.connect_pad_added(move |_, pad| {
+                let sink = decode
+                    .request_pad_simple("sink_%u")
+                    .or_else(|| decode.static_pad("sink"))
+                    .expect("a decoder sink pad");
+                pad.link(&sink).expect("the source links");
+            });
+        }
+
+        // The counters the whole question turns on: how much the chain pushes
+        // when nobody is drawing, and whether it ends.
+        let buffers = Arc::new(AtomicU32::new(0));
+        let eos = Arc::new(AtomicU32::new(0));
+        {
+            let pipeline = pipeline.clone();
+            let buffers = buffers.clone();
+            let eos = eos.clone();
+            decode.connect_pad_added(move |_, pad| {
+                if pad.direction() != gst::PadDirection::Src {
+                    return;
+                }
+                let tee = make("tee").expect("tee");
+                tee.set_property("allow-not-linked", true);
+                pipeline.add(&tee).expect("the tee goes in");
+                tee.sync_state_with_parent().expect("the tee starts");
+                pad.link(&tee.static_pad("sink").expect("a tee sink pad"))
+                    .expect("the decoder links to the tee");
+                let counted = buffers.clone();
+                let ended = eos.clone();
+                pad.add_probe(
+                    gst::PadProbeType::BUFFER | gst::PadProbeType::EVENT_DOWNSTREAM,
+                    move |_, info| {
+                        match info.data {
+                            Some(gst::PadProbeData::Buffer(_)) => {
+                                counted.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Some(gst::PadProbeData::Event(ref event))
+                                if event.type_() == gst::EventType::Eos =>
+                            {
+                                ended.fetch_add(1, Ordering::Relaxed);
+                            }
+                            _ => {}
+                        }
+                        gst::PadProbeReturn::Ok
+                    },
+                );
+            });
+        }
+
+        pipeline.set_state(gst::State::Playing).expect("it plays");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let raced = buffers.load(Ordering::Relaxed);
+        let ended = eos.load(Ordering::Relaxed);
+        println!("unlinked for 2s: {raced} buffers pushed, EOS seen {ended} time(s)");
+
+        // Now the return: the seek `seek_external_audio` sends, by hand.
+        let decoder = pipeline
+            .by_name(&format!("{EXTERNAL_AUDIO_DECODER}0"))
+            .expect("the decoder is findable by name");
+        let taken = decoder.send_event(seek_to(2));
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let after = buffers.load(Ordering::Relaxed);
+        println!("seek accepted: {taken}; buffers after the seek: {after} (was {raced})");
+
+        let _ = pipeline.set_state(gst::State::Null);
+        assert!(ended > 0, "the chain should have run to the end unattended");
+        assert!(taken, "the decoder should take a seek by name");
+        assert!(after > raced, "the seek should start it flowing again");
+    }
+
+    fn seek_to(seconds: u64) -> gst::Event {
+        gst::event::Seek::new(
+            1.0,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            gst::SeekType::Set,
+            gst::ClockTime::from_seconds(seconds),
+            gst::SeekType::None,
+            gst::ClockTime::NONE,
+        )
+    }
+
+    /// What an output hears after it comes back to a file that has run away.
+    ///
+    /// Counts buffers and EOS arriving at the far end of a branch requested
+    /// from the `tee` *after* the chain has already finished, which is the
+    /// whole of what "switching back is silent" is about.
+    fn returning(order: &str) -> (u32, u32) {
+        gst::init().expect("GStreamer initialises");
+        let dir = std::env::temp_dir().join("tineplayer-harness");
+        std::fs::create_dir_all(&dir).expect("the directory is made");
+        let audio = dir.join("tone.wav");
+        if !audio.exists() {
+            tone(&audio);
+        }
+
+        let pipeline = gst::Pipeline::new();
+        let src = make("urisourcebin").expect("urisourcebin");
+        src.set_property(
+            "uri",
+            glib::filename_to_uri(&audio, None)
+                .expect("the path is a uri")
+                .to_string(),
+        );
+        let decode = make("decodebin3").expect("decodebin3");
+        decode.set_property("name", format!("{EXTERNAL_AUDIO_DECODER}0"));
+        pipeline.add_many([&src, &decode]).expect("both go in");
+        {
+            let decode = decode.clone();
+            src.connect_pad_added(move |_, pad| {
+                let sink = decode
+                    .request_pad_simple("sink_%u")
+                    .or_else(|| decode.static_pad("sink"))
+                    .expect("a decoder sink pad");
+                pad.link(&sink).expect("the source links");
+            });
+        }
+        let hub: Arc<Mutex<Option<gst::Element>>> = Arc::new(Mutex::new(None));
+        {
+            let pipeline = pipeline.clone();
+            let hub = hub.clone();
+            decode.connect_pad_added(move |_, pad| {
+                if pad.direction() != gst::PadDirection::Src {
+                    return;
+                }
+                let tee = make("tee").expect("tee");
+                tee.set_property("allow-not-linked", true);
+                pipeline.add(&tee).expect("the tee goes in");
+                tee.sync_state_with_parent().expect("the tee starts");
+                pad.link(&tee.static_pad("sink").expect("a tee sink pad"))
+                    .expect("the decoder links to the tee");
+                *hub.lock().unwrap() = Some(tee);
+            });
+        }
+
+        pipeline.set_state(gst::State::Playing).expect("it plays");
+        // Long enough for the chain to finish the file with nobody drawing.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let decoder = pipeline
+            .by_name(&format!("{EXTERNAL_AUDIO_DECODER}0"))
+            .expect("the decoder is findable by name");
+        let tee = hub.lock().unwrap().clone().expect("a hub by now");
+
+        // The output's chain, built the way `point` links one: a request pad
+        // on the tee feeding a queue and a sink.
+        let heard = Arc::new(AtomicU32::new(0));
+        let ended = Arc::new(AtomicU32::new(0));
+        let link = || {
+            let queue = make("queue").expect("queue");
+            let sink = make("fakesink").expect("fakesink");
+            sink.set_property("sync", false);
+            pipeline.add_many([&queue, &sink]).expect("both go in");
+            gst::Element::link_many([&queue, &sink]).expect("they link");
+            let pad = queue.static_pad("sink").expect("a queue sink pad");
+            let heard = heard.clone();
+            let ended = ended.clone();
+            pad.add_probe(
+                gst::PadProbeType::BUFFER | gst::PadProbeType::EVENT_DOWNSTREAM,
+                move |_, info| {
+                    match info.data {
+                        Some(gst::PadProbeData::Buffer(_)) => {
+                            heard.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Some(gst::PadProbeData::Event(ref event))
+                            if event.type_() == gst::EventType::Eos =>
+                        {
+                            ended.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+                    gst::PadProbeReturn::Ok
+                },
+            );
+            let src = tee.request_pad_simple("src_%u").expect("a tee src pad");
+            src.link(&pad).expect("the branch links");
+            queue.sync_state_with_parent().expect("the queue starts");
+            sink.sync_state_with_parent().expect("the sink starts");
+        };
+
+        match order {
+            // What the application does now: seek, then link at once.
+            "seek then link" => {
+                decoder.send_event(seek_to(2));
+                link();
+            }
+            // Link first and let the flush pass through the new branch.
+            "link then seek" => {
+                link();
+                decoder.send_event(seek_to(2));
+            }
+            // Seek, wait for it to settle, and only then link.
+            _ => {
+                decoder.send_event(seek_to(2));
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                link();
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _ = pipeline.set_state(gst::State::Null);
+        (heard.load(Ordering::Relaxed), ended.load(Ordering::Relaxed))
+    }
+
+    /// Whether a branch of its own keeps the chain at walking pace.
+    ///
+    /// The alternative to seeking it back on return, and better than seeking
+    /// if it holds: a chain that never ran away needs no flush, and a flush is
+    /// what makes the whole pipeline wait for a sink to preroll again.
+    fn paced() -> u32 {
+        gst::init().expect("GStreamer initialises");
+        let dir = std::env::temp_dir().join("tineplayer-harness");
+        std::fs::create_dir_all(&dir).expect("the directory is made");
+        let audio = dir.join("tone.wav");
+        if !audio.exists() {
+            tone(&audio);
+        }
+
+        let pipeline = gst::Pipeline::new();
+        let src = make("urisourcebin").expect("urisourcebin");
+        src.set_property(
+            "uri",
+            glib::filename_to_uri(&audio, None)
+                .expect("the path is a uri")
+                .to_string(),
+        );
+        let decode = make("decodebin3").expect("decodebin3");
+        pipeline.add_many([&src, &decode]).expect("both go in");
+        {
+            let decode = decode.clone();
+            src.connect_pad_added(move |_, pad| {
+                let sink = decode
+                    .request_pad_simple("sink_%u")
+                    .or_else(|| decode.static_pad("sink"))
+                    .expect("a decoder sink pad");
+                pad.link(&sink).expect("the source links");
+            });
+        }
+        let counted = Arc::new(AtomicU32::new(0));
+        {
+            let pipeline = pipeline.clone();
+            let counted = counted.clone();
+            decode.connect_pad_added(move |_, pad| {
+                if pad.direction() != gst::PadDirection::Src {
+                    return;
+                }
+                let tee = make("tee").expect("tee");
+                tee.set_property("allow-not-linked", true);
+                // The pacing branch: nothing listens to it, and holding each
+                // buffer until its time is the whole of its job.
+                let queue = make("queue").expect("queue");
+                let sink = make("fakesink").expect("fakesink");
+                sink.set_property("sync", true);
+                sink.set_property("async", false);
+                pipeline
+                    .add_many([&tee, &queue, &sink])
+                    .expect("all three go in");
+                gst::Element::link_many([&tee, &queue, &sink]).expect("they link");
+                for element in [&tee, &queue, &sink] {
+                    element.sync_state_with_parent().expect("it starts");
+                }
+                pad.link(&tee.static_pad("sink").expect("a tee sink pad"))
+                    .expect("the decoder links to the tee");
+                let counted = counted.clone();
+                pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    gst::PadProbeReturn::Ok
+                });
+            });
+        }
+
+        pipeline.set_state(gst::State::Playing).expect("it plays");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let pushed = counted.load(Ordering::Relaxed);
+        let _ = pipeline.set_state(gst::State::Null);
+        pushed
+    }
+
+    /// Ten seconds of tone is 430 buffers, so two seconds of it is about 86.
+    /// Unpaced, the same chain pushes all 430 and stops at the end - which is
+    /// what makes coming back to it silence.
+    #[test]
+    #[ignore = "runs live pipelines for several seconds"]
+    fn a_branch_of_its_own_keeps_the_chain_at_walking_pace() {
+        let _alone = alone();
+        let pushed = paced();
+        println!("paced: {pushed} buffers in 2s (the whole file is 430)");
+        assert!(
+            (40..200).contains(&pushed),
+            "should be about two seconds' worth, got {pushed}"
+        );
+    }
+
+    /// **The order the application has to use, and the two that are silent.**
+    ///
+    /// Measured 2026-08-16, after the same symptom had been diagnosed twice by
+    /// reading and answered wrongly both times. A branch requested from the
+    /// `tee` once the chain has finished receives nothing at all, and waiting
+    /// for the seek to settle first does not help - what matters is that the
+    /// branch is already there when the flush passes through it.
+    #[test]
+    #[ignore = "runs live pipelines for several seconds"]
+    fn coming_back_to_a_chain_that_has_run_away() {
+        let _alone = alone();
+        let (heard, _) = returning("link then seek");
+        assert!(heard > 0, "linking before the seek should play: {heard}");
+
+        for silent in ["seek then link", "seek, settle, link"] {
+            let (heard, _) = returning(silent);
+            assert_eq!(heard, 0, "\"{silent}\" is the order that loses the audio");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A routing that wants and carries the given things, with no pipeline
+    /// behind it. Enough to ask what [`AudioRouting::settle`] would decide,
+    /// which is the whole of what is worth testing without elements.
+    fn routing(wanted: &[(&str, Playing)], carrying: &[(&str, Playing)]) -> AudioRouting {
+        let mut routing = AudioRouting::default();
+        for (role, playing) in wanted {
+            routing.wanted.insert((*role).into(), playing.clone());
+        }
+        for (pad, playing) in carrying {
+            routing.carrying.insert((*pad).into(), playing.clone());
+        }
+        routing
+    }
+
+    #[test]
+    fn an_external_file_is_settled_at_once() {
+        let file = Playing::File("file:///described.mp3".into());
+        let routing = routing(&[("primary", file.clone())], &[("extaudio", file)]);
+        assert!(routing.can_settle("primary"));
+    }
+
+    #[test]
+    fn a_track_the_other_output_already_plays_is_settled_at_once() {
+        let routing = routing(
+            &[
+                ("primary", Playing::Track(1)),
+                ("secondary", Playing::Track(1)),
+            ],
+            &[("audio_0", Playing::Track(1))],
+        );
+        assert!(routing.can_settle("secondary"));
+    }
+
+    #[test]
+    fn an_output_turned_off_is_settled_at_once() {
+        let routing = routing(&[], &[("audio_0", Playing::Track(0))]);
+        assert!(routing.can_settle("secondary"));
+    }
+
+    /// The case that must *not* settle: a stream has been asked for and is on
+    /// its way, and the output keeps what it has until the pad arrives.
+    #[test]
+    fn a_track_not_yet_decoded_waits_for_its_pad() {
+        let routing = routing(
+            &[("primary", Playing::Track(2))],
+            &[("audio_0", Playing::Track(0))],
+        );
+        assert!(!routing.can_settle("primary"));
+    }
 }

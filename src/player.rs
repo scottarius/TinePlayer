@@ -277,7 +277,20 @@ impl Playback {
                     // Posted when a flushing seek has finished settling.
                     // Also fires after the initial preroll, which harmlessly
                     // finds nothing queued.
+                    // Traced because a seek that never settles is what a dead
+                    // branch looks like from the outside: a sink that cannot
+                    // preroll holds the whole pipeline, and the picture stops.
+                    MessageView::Buffering(buffering) => {
+                        crate::pipeline::trace(format_args!(
+                            "buffering {}% from {}",
+                            buffering.percent(),
+                            msg.src()
+                                .map(|src| src.name().to_string())
+                                .unwrap_or_default()
+                        ));
+                    }
                     MessageView::AsyncDone(_) => {
+                        crate::pipeline::trace(format_args!("async done"));
                         playback.seeking.set(false);
                         if playback.seek_queued.replace(false) {
                             playback.run_seek();
@@ -633,6 +646,9 @@ impl Playback {
             let name = format!("{}{index}", crate::pipeline::EXTERNAL_AUDIO_DECODER);
             let Some(source) = self.pipeline.by_name(&name) else {
                 // Numbered from zero without gaps, so the first miss is the end.
+                crate::pipeline::trace(format_args!(
+                    "seek: {index} external chain(s) seeked to {target}"
+                ));
                 break;
             };
             let seek = gst::event::Seek::new(
@@ -643,7 +659,9 @@ impl Playback {
                 gst::SeekType::None,
                 gst::ClockTime::NONE,
             );
-            if !source.send_event(seek) {
+            let taken = source.send_event(seek);
+            crate::pipeline::trace(format_args!("seek: {name} to {target} -> taken={taken}"));
+            if !taken {
                 eprintln!("Failed to seek the external audio source {name}");
             }
         }
@@ -1051,6 +1069,7 @@ impl Playback {
             .by_name(crate::pipeline::VIDEO_DECODER)
             .ok_or("The pipeline has no video decoder to select streams on")?;
         let ids: Vec<&str> = keep.iter().map(String::as_str).collect();
+        crate::pipeline::trace(format_args!("select_streams {ids:?}"));
         if !decoder.send_event(gst::event::SelectStreams::new(&ids)) {
             return Err("The decoder refused the stream selection".into());
         }
