@@ -17,7 +17,10 @@
 //! would undo that. Removal cuts out our entry and leaves everything else.
 
 use gtk::glib;
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+
+use crate::tr;
 
 /// The template that ships with the source, used whole when there is no file
 /// yet and mined for its `<player>` element when there is. Embedded rather
@@ -50,11 +53,11 @@ pub enum Registration {
 impl Registration {
     /// What this state is called where it is read rather than chosen: the
     /// value against the Player Type row.
-    pub fn describe(self) -> &'static str {
+    pub fn describe(self) -> Cow<'static, str> {
         match self {
-            Registration::Absent => "Not configured",
-            Registration::Offered => "Additional Player",
-            Registration::Default => "Default Player",
+            Registration::Absent => tr!("Not configured"),
+            Registration::Offered => tr!("Additional Player"),
+            Registration::Default => tr!("Default Player"),
         }
     }
 
@@ -67,9 +70,9 @@ impl Registration {
     /// way, keep their names.
     ///
     /// [`describe`]: Registration::describe
-    pub fn choice(self, configured: bool) -> &'static str {
+    pub fn choice(self, configured: bool) -> Cow<'static, str> {
         match (self, configured) {
-            (Registration::Absent, true) => "Remove configuration",
+            (Registration::Absent, true) => tr!("Remove configuration"),
             _ => self.describe(),
         }
     }
@@ -115,8 +118,8 @@ impl Confinement {
     }
 
     /// Why not, for the one case where it is not.
-    pub fn unsupported_reason(self) -> Option<&'static str> {
-        (!self.supported()).then_some("Snap installs do not support external players.")
+    pub fn unsupported_reason(self) -> Option<Cow<'static, str>> {
+        (!self.supported()).then(|| tr!("Snap installs do not support external players."))
     }
 
     /// What to add after the version to tell one Kodi from another.
@@ -130,11 +133,12 @@ impl Confinement {
     ///
     /// Note this is not the whole qualifier: a folder named by hand is called
     /// "custom" whatever it holds, which [`Setup::label`] decides.
-    pub fn describe(self) -> &'static str {
+    pub fn describe(self) -> Cow<'static, str> {
         match self {
-            Confinement::None => "Default Installation",
-            Confinement::Flatpak => "Flatpak",
-            Confinement::Snap => "Snap",
+            Confinement::None => tr!("Default Installation"),
+            // Product names, so they read the same in every language.
+            Confinement::Flatpak => Cow::Borrowed("Flatpak"),
+            Confinement::Snap => Cow::Borrowed("Snap"),
         }
     }
 }
@@ -264,7 +268,7 @@ impl Setup {
         // "standard", or a hand-named folder would claim to be one of the
         // places TinePlayer looks by itself.
         let qualifier = match self.confinement {
-            Confinement::None if !self.is_standard_location() => "Custom",
+            Confinement::None if !self.is_standard_location() => tr!("Custom"),
             confinement => confinement.describe(),
         };
         label.push_str(&format!(" ({qualifier})"));
@@ -655,14 +659,17 @@ fn escape_from(launch: Launch, confinement: Confinement) -> Launch {
 /// can do, and that is not a choice to make for somebody without telling them.
 pub struct ManualStep {
     /// One line: what still has to happen.
-    pub what: &'static str,
+    pub what: Cow<'static, str>,
     /// Why it is needed, in terms of what is actually going on.
-    pub why: &'static str,
+    pub why: Cow<'static, str>,
     /// The command to run, if there is one. Shown to be copied.
+    ///
+    /// **Not translated, and neither is `undo`.** Both are shell commands to
+    /// be typed exactly as written, and a translated command is a broken one.
     pub command: Option<&'static str>,
     /// What it costs, so consent is informed rather than assumed.
-    pub cost: &'static str,
-    /// How to undo it afterwards.
+    pub cost: Cow<'static, str>,
+    /// How to undo it afterwards. A command, so not translated - see above.
     pub undo: Option<&'static str>,
 }
 
@@ -672,16 +679,19 @@ pub fn manual_step(confinement: Confinement) -> Option<ManualStep> {
     match confinement {
         Confinement::None => None,
         Confinement::Flatpak => Some(ManualStep {
-            what: "Allow Kodi to start programs outside its sandbox",
-            why: "Kodi is installed as a Flatpak. It starts an external player \
-                  inside its own sandbox, where TinePlayer is not installed and \
-                  your files are not visible, so it has to be allowed to run the \
-                  command on the machine instead.",
+            what: tr!("Allow Kodi to start programs outside its sandbox"),
+            why: tr!(
+                "Kodi is installed as a Flatpak. It starts an external player inside its own \
+                 sandbox, where TinePlayer is not installed and your files are not visible, \
+                 so it has to be allowed to run the command on the machine instead."
+            ),
             command: Some(
                 "flatpak override --user --talk-name=org.freedesktop.Flatpak tv.kodi.Kodi",
             ),
-            cost: "This lets Kodi run anything on this machine, not only \
-                   TinePlayer. TinePlayer will not run it for you.",
+            cost: tr!(
+                "This lets Kodi run anything on this machine, not only TinePlayer. TinePlayer \
+                 will not run it for you."
+            ),
             undo: Some("flatpak override --user --reset tv.kodi.Kodi"),
         }),
         // A Snap cannot be configured at all, so there is no step to

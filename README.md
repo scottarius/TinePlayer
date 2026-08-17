@@ -125,6 +125,8 @@ from a single pipeline, staying in sync because it is all one clock.
   players and libraries
 - **[Troubleshooting](docs/troubleshooting.md)** - when something does not
   start, play, or hand over
+- **[Translating](docs/translating.md)** - adding a language, and seeing your
+  work in the application without building it
 
 ## Install
 

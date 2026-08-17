@@ -15,13 +15,17 @@ across scripts is where Indic shaping quietly breaks, and a mis-shaped
 Each font keeps its own layout tables, and fontconfig picks between them by
 coverage, which is the arrangement Noto is designed for.
 
-Each font is cut down to only the characters TinePlayer actually draws, which
-is why the whole set is a few hundred kilobytes rather than a few hundred
-megabytes. The Latin font keeps whole ranges, because file names and device
-names are not ours to predict; every other script keeps only the exact
-characters in the language table.
+Most of these ship whole. Three do not - see SUBSET_ONLY, which carries the
+measurements and the decision. The short version is that cutting a font to a
+counted set only works when the text is known in advance, and it is not: the
+interface draws film titles and plots out of `.nfo` files and out of a Jellyfin
+library, in whatever script the film is from. The whole non-CJK set is 2.4 MB.
+CJK and Korean whole would be another 31 MB, so those two stay cut down to the
+language menu plus whatever the translation catalogs use, and CJK metadata
+falls back to the system font.
 
-Run it after changing the language table:
+Run it after changing the language table, or after a translation lands in a
+script that is still cut down:
 
     python packaging/fonts/build-fonts.py
 
@@ -29,10 +33,19 @@ Needs fonttools:  pip install fonttools brotli
 """
 
 import re
+import shutil
 import sys
 import unicodedata
 import urllib.request
 from pathlib import Path
+
+# This script prints the characters it is subsetting to, which are by
+# definition not Latin - and a Windows console is cp1252, where writing 日本語
+# raises UnicodeEncodeError and kills the run partway through, leaving half the
+# fonts rebuilt. Errors are replaced rather than raised: a console that cannot
+# draw a character is a fact about the console, not a reason to stop.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "fonts"
@@ -67,6 +80,9 @@ ELSEWHERE = {
 # offers, and the result is a line of letters with gaps between them. It
 # looked fine on Windows, which has good Cyrillic to fall back to, and wrong
 # on macOS, which does not.
+# Kept for reference rather than used. The Latin face now ships whole - see
+# SUBSET_ONLY below - and this is what it was cut to for the first year, in
+# case a reason to go back to cutting it ever appears.
 LATIN_RANGES = (
     "U+0000-00FF,U+0100-017F,U+0180-024F,U+0250-02AF,U+0370-03FF,U+0400-04FF,"
     "U+1E00-1EFF,U+2000-206F,U+20A0-20BF,U+2190-21FF,U+25A0-25FF,U+2600-26FF"
@@ -116,6 +132,31 @@ SCRIPTS = {
     "THAI": "NotoSansThai",
 }
 
+# The three faces that are still cut down. Everything else ships whole.
+#
+# WHY WHOLE, since this file spent a year arguing the opposite. Cutting a font
+# to a counted set only works when the text is known in advance, and it is not.
+# The interface draws film titles, plots and genres out of `.nfo` files and out
+# of a Jellyfin library - arbitrary text in whatever script the film is from -
+# and on top of that the interface itself is now translated. Neither is
+# predictable, so the counted set was answering a question nobody was asking.
+# Measured 2026-08-17: the whole non-CJK set weighs 2.4 MB against 655 KB cut
+# down, which is 6% of a 31 MB installer for a whole class of problem.
+#
+# WHY THESE THREE ARE STILL CUT. The CJK and Korean faces are 11 MB and 10 MB
+# whole - bundling them would roughly double every package on every platform,
+# to fix a gap that only Linux has, since Windows and macOS both ship CJK
+# already. They are kept at exactly the characters the language menu names
+# itself with - 日本語, 한국어, 中文, 粵語 - so that menu is right everywhere,
+# and CJK text from anywhere else falls back to the system font. Decided
+# 2026-08-17, deliberately and knowing what it costs: a Linux machine with no
+# CJK font shows boxes for a Japanese film title, and the alternative was 31 MB
+# on every download for everybody.
+#
+# Symbols is here for a different reason: the interface wants one star out of a
+# 656 KB face, and there is no metadata that draws from it.
+SUBSET_ONLY = {"CJK", "HANGUL", "SYMBOLS"}
+
 
 def native_names():
     """Every native language name in the table, read from the source itself.
@@ -131,6 +172,33 @@ def native_names():
     if not table:
         sys.exit("No language table found in src/languages.rs")
     return table
+
+
+def translated_text():
+    """Every translated string in po/, as one blob to take characters from.
+
+    THE LANGUAGE TABLE IS NOT ENOUGH, and assuming it was is how this went
+    wrong. Those names cost a handful of characters per script - enough to
+    draw the word for the language and nothing else - so the Japanese font
+    shipped with six characters in it and the Arabic one with twelve. That is
+    exactly right for a menu of language names and useless for an interface
+    translated into either: every other word would have drawn as a box.
+
+    Every `.po` in the folder, not only the ones in LINGUAS. A catalog that
+    does not ship yet is one somebody is working on with TINEPLAYER_PO, which
+    is the moment they most need to see their own language rather than boxes.
+
+    Read as raw text rather than parsed. This wants the characters, and a
+    msgid, a msgstr, a translator's name and a comment are all equally good
+    sources of them - over-inclusion here costs a few glyphs and prevents the
+    failure that matters.
+    """
+    catalogs = sorted((ROOT / "po").glob("*.po"))
+    if not catalogs:
+        print("  no catalogs in po/ - fonts will cover the language table only")
+        return ""
+    print(f"  {len(catalogs)} catalog(s): {', '.join(c.stem for c in catalogs)}")
+    return "".join(c.read_text(encoding="utf-8") for c in catalogs)
 
 
 def script_of(character):
@@ -239,51 +307,176 @@ def finish(path, family, weight):
     font.close()
 
 
-def main():
-    OUT.mkdir(parents=True, exist_ok=True)
+def needed():
+    """Every character the interface can be asked to draw, sorted by script.
+
+    Two sources, and both matter: the language table, which names each language
+    in its own script, and the translation catalogs, which are the interface
+    itself in somebody else's language.
+
+    The two are kept apart, because what is promised of each differs. The
+    language menu has to be right on every platform, so its characters are
+    required of every bundled face including the three that are still cut down.
+    Translated text is required of the faces that ship whole, and for CJK it is
+    knowingly left to the system font - see SUBSET_ONLY.
+
+    Returns `(menu, translated, unknown)`, the first two as `{script: chars}`
+    with Latin under "LATIN".
+    """
     names = native_names()
     print(f"{len(names)} language names in the table")
+    catalogs = translated_text()
 
-    # Seeded rather than discovered, being the one set of characters that
-    # comes from the interface rather than from the language table.
-    wanted = {"SYMBOLS": set(INTERFACE_SYMBOLS)}
     unknown = set()
-    for name in names:
-        for character in name:
+
+    def sort(text, into):
+        for character in text:
             if character.isspace():
                 continue
             script = script_of(character)
             if script is None:
                 unknown.add(character)
-            elif script != "LATIN":
-                wanted.setdefault(script, set()).add(character)
+            else:
+                into.setdefault(script, set()).add(character)
+
+    # Seeded rather than discovered, being the one set of characters that comes
+    # from the interface itself rather than from either source below.
+    menu = {"SYMBOLS": set(INTERFACE_SYMBOLS)}
+    sort("".join(names), menu)
+
+    translated = {}
+    sort(catalogs, translated)
+
+    return menu, translated, unknown
+
+
+def check():
+    """Whether the fonts in data/fonts can draw everything the interface has.
+
+    Reads only what is already in the tree, so it needs no network and can run
+    in CI - which is the point. Rebuilding the fonts is a manual step, and the
+    failure it guards against is quiet: a translation is added or extended, the
+    fonts are not rebuilt, and that language ships as a screen of boxes for
+    everybody except the person who tested it on a machine that happened to
+    have the font installed anyway.
+    """
+    from fontTools.ttLib import TTFont
+
+    menu, translated, unknown = needed()
+    if unknown:
+        report_unknown(unknown)
+
+    def coverage(path):
+        if not path.exists():
+            return None
+        font = TTFont(path, lazy=True)
+        found = set()
+        for table in font["cmap"].tables:
+            found |= set(table.cmap.keys())
+        font.close()
+        return found
+
+    def file_for(script):
+        if script == "LATIN":
+            return "TinePlayerSans-Regular.ttf"
+        return f"TinePlayerSans{script.title()}-Regular.ttf"
+
+    # Every script is checked the same way, cut down or not. The cut-down faces
+    # are cut to exactly this - the language menu plus whatever the catalogs
+    # use - so anything missing here means the fonts have not been rebuilt
+    # since the text changed, which a rebuild fixes.
+    #
+    # What this cannot check is metadata: a film's title arrives from a library
+    # at run time and is not in this repository to be counted. That is the gap
+    # the whole-face bundling closes for every script except CJK, and the one
+    # SUBSET_ONLY knowingly leaves to the system font.
+    problems = []
+    for script in sorted(set(menu) | set(translated)):
+        name = file_for(script)
+        covered = coverage(OUT / name)
+        if covered is None:
+            problems.append(f"{name} is missing")
+            continue
+
+        characters = menu.get(script, set()) | translated.get(script, set())
+        missing = {c for c in characters if ord(c) not in covered}
+        if missing:
+            problems.append(
+                f"{name} cannot draw {len(missing)} of {len(characters)}: "
+                + " ".join(sorted(missing))
+            )
+
+    if problems:
+        print("\nThe bundled fonts are out of date:\n", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        print(
+            "\nRebuild them:  python packaging/fonts/build-fonts.py"
+            "\n(needs network and `pip install fonttools brotli`)",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("\nThe bundled fonts cover every character the interface can draw.")
+    return 0
+
+
+def report_unknown(unknown):
+    detail = ", ".join(
+        f"{c!r} U+{ord(c):04X} ({unicodedata.name(c, 'unnamed')})"
+        for c in sorted(unknown)
+    )
+    sys.exit(
+        "These characters belong to no font this script knows about:\n  "
+        + detail
+        + "\nAdd the script to SCRIPTS and script_of() before shipping."
+    )
+
+
+def main():
+    OUT.mkdir(parents=True, exist_ok=True)
+    menu, translated, unknown = needed()
 
     if unknown:
-        detail = ", ".join(
-            f"{c!r} U+{ord(c):04X} ({unicodedata.name(c, 'unnamed')})" for c in sorted(unknown)
-        )
-        sys.exit(
-            "These characters belong to no font this script knows about:\n  "
-            + detail
-            + "\nAdd the script to SCRIPTS and script_of() before shipping."
-        )
+        report_unknown(unknown)
+
+    # What the cut-down faces are cut to. Both sources, so a CJK translation
+    # that somebody has begun is carried as far as it can be - the face is
+    # already being built, and the characters cost bytes rather than megabytes.
+    wanted = {
+        script: characters | translated.get(script, set())
+        for script, characters in menu.items()
+    }
 
     built = []
     for weight in ("Regular", "Bold"):
         source = fetch("NotoSans", weight)
         target = OUT / f"TinePlayerSans-{weight}.ttf"
-        print(f"  {target.name}: full Latin, Greek, Cyrillic and punctuation")
-        subset(source, target, weight, ranges=LATIN_RANGES)
+        print(f"  {target.name}: whole - Latin, Greek and Cyrillic")
+        shutil.copyfile(source, target)
         finish(target, "TinePlayer Sans", weight)
         built.append(target)
 
-    for script, characters in sorted(wanted.items()):
+    # Every script the interface can meet, not only the ones some character
+    # currently asks for. A film's title arrives from a library rather than
+    # from this repository, so a face is worth shipping whether or not anything
+    # here happens to name a language written in it.
+    for script in sorted(SCRIPTS):
         family = SCRIPTS[script]
         source = fetch(family, "Regular")
         target = OUT / f"TinePlayerSans{script.title()}-Regular.ttf"
-        text = "".join(sorted(characters))
-        print(f"  {target.name}: {len(characters)} characters  {text}")
-        subset(source, target, "Regular", unicodes=characters)
+
+        if script in SUBSET_ONLY:
+            characters = wanted.get(script, set())
+            if not characters:
+                continue
+            text = "".join(sorted(characters))
+            print(f"  {target.name}: {len(characters)} characters  {text}")
+            subset(source, target, "Regular", unicodes=characters)
+        else:
+            print(f"  {target.name}: whole")
+            shutil.copyfile(source, target)
+
         finish(target, f"TinePlayer Sans {script.title()}", "Regular")
         built.append(target)
 
@@ -292,4 +485,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--check" in sys.argv:
+        sys.exit(check())
     main()

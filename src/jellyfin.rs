@@ -1169,7 +1169,7 @@ impl Streams {
                     (false, false) => format!("{} — {}", stream.language, stream.title),
                     (false, true) => stream.language.clone(),
                     (true, false) => stream.title.clone(),
-                    (true, true) => "Subtitles".to_string(),
+                    (true, true) => crate::trc!("subtitle track", "Subtitles").into_owned(),
                 },
             })
             .collect()

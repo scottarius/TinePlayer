@@ -11,113 +11,142 @@
 //! `docs/usage.md` already lives under, and this list is the one people
 //! actually read, being the only one on the television.
 
+use std::borrow::Cow;
+
 use gtk::prelude::*;
+
+use crate::{tr, trc};
 
 /// One binding: what to press, on either kind of control, and what it does.
 ///
 /// The pad column is often empty, and deliberately so. Saying "-" in it would
 /// read as a binding rather than as an absence.
 struct Binding {
-    keys: &'static str,
-    pad: &'static str,
-    means: &'static str,
+    keys: Cow<'static, str>,
+    pad: Cow<'static, str>,
+    means: Cow<'static, str>,
 }
 
 /// A heading and the bindings under it.
 struct Group {
-    title: &'static str,
-    bindings: &'static [Binding],
+    title: Cow<'static, str>,
+    bindings: Vec<Binding>,
+}
+
+/// Shorthand, so the table below stays a table rather than becoming a wall of
+/// `Binding { keys: ..., pad: ..., means: ... }`.
+fn binding(keys: Cow<'static, str>, pad: Cow<'static, str>, means: Cow<'static, str>) -> Binding {
+    Binding { keys, pad, means }
 }
 
 /// Two groups: what a film answers to while it is playing, and what works
 /// wherever you are.
-const GROUPS: &[Group] = &[
-    Group {
-        title: "Player Control",
-        bindings: &[
-            Binding {
-                keys: "Space",
-                pad: "A, Start",
-                means: "Toggle play/pause",
-            },
-            Binding {
-                keys: "Left, Right",
-                pad: "D-pad",
-                means: "Skip ten seconds, hold to scrub",
-            },
-            Binding {
-                keys: "Up, Down",
-                pad: "D-pad",
-                means: "Open/Close player controls",
-            },
-            Binding {
-                keys: "A, S",
-                pad: "",
-                means: "Next soundtrack on the first or second output",
-            },
-            Binding {
-                keys: "+, -",
-                pad: "",
-                means: "Adjust main volume (all outputs)",
-            },
-            Binding {
-                keys: "M",
-                pad: "Hold X",
-                means: "Toggle mute",
-            },
-            Binding {
-                keys: "C",
-                pad: "X",
-                means: "Toggle subtitles",
-            },
-            Binding {
-                keys: "Esc",
-                pad: "B",
-                means: "Back, or close menus/controls",
-            },
-        ],
-    },
-    Group {
-        title: "General",
-        bindings: &[
-            Binding {
-                keys: "Arrows",
-                pad: "D-pad",
-                means: "Navigate menus and controls",
-            },
-            Binding {
-                keys: "Tab",
-                pad: "Bumpers",
-                means: "Navigate between menu sections",
-            },
-            Binding {
-                keys: "Enter",
-                pad: "A",
-                means: "Select/Activate focused element",
-            },
-            Binding {
-                keys: "F, F11",
-                pad: "Y",
-                means: "Toggle Fullscreen",
-            },
-            Binding {
-                keys: "Ctrl+O",
-                pad: "",
-                means: "Browse for a video file to open",
-            },
-            Binding {
-                keys: "Ctrl+L",
-                pad: "",
-                means: "Open a video by URL",
-            },
-            Binding {
-                keys: "F1",
-                pad: "Select",
-                means: "Display shortcuts",
-            },
-        ],
-    },
-];
+///
+/// **A function rather than a `const`**, which every table of interface text
+/// in this project has had to become: a translated string is looked up at run
+/// time and cannot be `&'static str`. The shape is unchanged, and the `tr!`
+/// calls sit where the literals were so the extractor still finds them.
+///
+/// The key and button columns are translated too, with their own contexts.
+/// A German keyboard says Strg rather than Ctrl and Eingabe rather than Enter,
+/// and this page is the reference people actually read - it is the only one on
+/// a television. The entries that are literal key caps, `A, S` and `+, -`, are
+/// passed straight through by a translator, which costs them a glance and is
+/// better than the page being half in one language.
+fn groups() -> Vec<Group> {
+    vec![
+        Group {
+            title: tr!("Player Control"),
+            bindings: vec![
+                binding(
+                    trc!("keyboard keys", "Space"),
+                    trc!("gamepad buttons", "A, Start"),
+                    tr!("Toggle play/pause"),
+                ),
+                binding(
+                    trc!("keyboard keys", "Left, Right"),
+                    trc!("gamepad buttons", "D-pad"),
+                    tr!("Skip ten seconds, hold to scrub"),
+                ),
+                binding(
+                    trc!("keyboard keys", "Up, Down"),
+                    trc!("gamepad buttons", "D-pad"),
+                    tr!("Open/Close player controls"),
+                ),
+                binding(
+                    trc!("keyboard keys", "A, S"),
+                    Cow::Borrowed(""),
+                    tr!("Next soundtrack on the first or second output"),
+                ),
+                binding(
+                    trc!("keyboard keys", "+, -"),
+                    Cow::Borrowed(""),
+                    tr!("Adjust main volume (all outputs)"),
+                ),
+                binding(
+                    trc!("keyboard keys", "M"),
+                    trc!("gamepad buttons", "Hold X"),
+                    tr!("Toggle mute"),
+                ),
+                binding(
+                    trc!("keyboard keys", "C"),
+                    trc!("gamepad buttons", "X"),
+                    tr!("Toggle subtitles"),
+                ),
+                binding(
+                    trc!("keyboard keys", "Esc"),
+                    trc!("gamepad buttons", "B"),
+                    tr!("Back, or close menus/controls"),
+                ),
+            ],
+        },
+        Group {
+            title: tr!("General"),
+            bindings: vec![
+                binding(
+                    trc!("keyboard keys", "Arrows"),
+                    trc!("gamepad buttons", "D-pad"),
+                    tr!("Navigate menus and controls"),
+                ),
+                binding(
+                    trc!("keyboard keys", "Tab"),
+                    trc!("gamepad buttons", "Bumpers"),
+                    tr!("Navigate between menu sections"),
+                ),
+                binding(
+                    trc!("keyboard keys", "Enter"),
+                    trc!("gamepad buttons", "A"),
+                    tr!("Select/Activate focused element"),
+                ),
+                binding(
+                    trc!("keyboard keys", "F, F11"),
+                    trc!("gamepad buttons", "Y"),
+                    // Sentence case, matching the other seven rows here and
+                    // the same string in controls.rs and app.rs. It was
+                    // "Toggle Fullscreen" until the duplicate report caught
+                    // it: one capital letter, one extra string for every
+                    // translator, and two spellings on screen.
+                    tr!("Toggle fullscreen"),
+                ),
+                binding(
+                    trc!("keyboard keys", "Ctrl+O"),
+                    Cow::Borrowed(""),
+                    tr!("Browse for a video file to open"),
+                ),
+                binding(
+                    trc!("keyboard keys", "Ctrl+L"),
+                    Cow::Borrowed(""),
+                    tr!("Open a video by URL"),
+                ),
+                binding(
+                    trc!("keyboard keys", "F1"),
+                    trc!("gamepad buttons", "Select"),
+                    tr!("Display shortcuts"),
+                ),
+            ],
+        },
+    ]
+}
 
 /// The list itself, built at `scale`.
 ///
@@ -137,7 +166,7 @@ pub fn page(scale: f64) -> gtk::Box {
     let key_widths = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
     let pad_widths = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
 
-    for (index, group) in GROUPS.iter().enumerate() {
+    for (index, group) in groups().iter().enumerate() {
         // The menus' own heading, rather than one that merely resembles it:
         // capitals, the same letter spacing at this scale, and the same class.
         // Two ways of drawing one thing is how they come to differ.
@@ -145,7 +174,7 @@ pub fn page(scale: f64) -> gtk::Box {
         // Spelled back into words for a screen reader, which may otherwise
         // read capitals a letter at a time.
         heading.update_property(&[gtk::accessible::Property::Label(&crate::app::title_case(
-            group.title,
+            &group.title,
         ))]);
         page.append(&heading);
 
@@ -171,7 +200,7 @@ pub fn page(scale: f64) -> gtk::Box {
             }
 
             let keys = gtk::Label::builder()
-                .label(binding.keys)
+                .label(binding.keys.as_ref())
                 .halign(gtk::Align::Center)
                 .css_classes(["tp-shortcut-keys"])
                 .build();
@@ -179,12 +208,12 @@ pub fn page(scale: f64) -> gtk::Box {
             // stays a column. Empty rather than a dash, which would read as a
             // binding of its own.
             let pad = gtk::Label::builder()
-                .label(binding.pad)
+                .label(binding.pad.as_ref())
                 .halign(gtk::Align::Center)
                 .css_classes(["tp-shortcut-keys"])
                 .build();
             let means = gtk::Label::builder()
-                .label(binding.means)
+                .label(binding.means.as_ref())
                 .halign(gtk::Align::Start)
                 .hexpand(true)
                 .wrap(true)

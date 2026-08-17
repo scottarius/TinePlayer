@@ -13,3 +13,14 @@ dist/
 # Upstream Noto faces that build-fonts.py downloads and cuts down. Tens of
 # megabytes, fetched again on demand, and not what we ship - data/fonts is.
 packaging/fonts/.sources/
+
+# Python leaves these beside any script it imports; the extractor gets
+# imported by its own tests.
+__pycache__/
+*.pyc
+
+# Poedit compiles a .mo beside the .po every time it saves. We do not use one:
+# build.rs reads the .po directly and compiles the catalog into the binary, so
+# a .mo here is a build artifact of somebody's editor rather than anything
+# TinePlayer loads.
+*.mo

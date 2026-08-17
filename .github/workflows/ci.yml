@@ -87,6 +87,37 @@ jobs:
       - name: Clippy
         run: cargo clippy --release -- -D warnings
 
+      # A `tr!` added without regenerating the template is a string no
+      # translator is ever shown - it works perfectly in English and is missing
+      # from every other language, which is precisely the failure nobody
+      # notices. The extractor writes no timestamp, so a clean `git diff` here
+      # means the template really is current.
+      #
+      # Only on amd64: it reads the source and has no architecture to be
+      # sensitive to, and running it twice would just be twice the log.
+      - name: Translation template is up to date
+        if: matrix.arch == 'amd64'
+        run: |
+          python3 packaging/extract-strings.py
+          git diff --exit-code po/tineplayer.pot \
+            || { echo "::error::po/tineplayer.pot is out of date. Run: python3 packaging/extract-strings.py"; exit 1; }
+
+      # The bundled fonts are cut down to only the characters TinePlayer can
+      # draw, and building them is a manual step needing the network. So a
+      # translation can be added or extended without the fonts following, and
+      # the symptom is a screen of boxes in a language nobody here reads.
+      #
+      # This reads only what is already in the tree - the catalogs and the
+      # built fonts - so it needs no network and catches the gap on the commit
+      # that opens it. It is how the whole problem was found: the non-Latin
+      # fonts shipped with three to twelve characters each, enough for the
+      # language menu and nothing else.
+      - name: Bundled fonts cover the translations
+        if: matrix.arch == 'amd64'
+        run: |
+          python3 -m pip install --quiet fonttools
+          python3 packaging/fonts/build-fonts.py --check
+
   # The packaging and setup scripts, which nothing else here exercises: they
   # only run during a release, so a fault in one surfaces in the middle of
   # cutting it. Two did on 2026-08-12, and shellcheck catches the kind that

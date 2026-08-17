@@ -4,3 +4,11 @@
 # setup-mac.sh are files people download and run, so this is worth pinning
 # rather than relying on every contributor's git configuration.
 *.sh text eol=lf
+
+# Translation catalogs, for the same reason one level up: they are edited by
+# Weblate, by Poedit and by hand on three platforms, and a file that changes
+# every line each time it crosses one makes a diff unreadable and a merge
+# conflict out of nothing. polib reads CRLF perfectly well - that was measured,
+# not assumed - so this is about the tools around it rather than about us.
+*.po text eol=lf
+*.pot text eol=lf

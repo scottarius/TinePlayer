@@ -115,6 +115,124 @@ pub fn force_dark() {
     settings.set_gtk_theme_name(name.as_deref());
 }
 
+// ---------------------------------------------------------------------------
+// Reading direction
+// ---------------------------------------------------------------------------
+
+/// Whether the interface is being laid out right to left.
+///
+/// **Asked of GTK rather than of the language**, because GTK is what actually
+/// draws and the two can disagree. `main` sets the default direction when the
+/// resolved language is right-to-left, but it never sets it back - so somebody
+/// whose machine is Arabic gets a right-to-left layout from GTK's own reading
+/// of the locale even though TinePlayer has no Arabic catalog and its words
+/// are still in English. That is the correct behavior, and only asking GTK
+/// sees it.
+///
+/// The initialization check is not defensive padding: `default_direction`
+/// asserts if GTK has not started, which takes the process down. Nothing here
+/// is called before the first window in practice, but a stylesheet built one
+/// line too early would be a crash rather than a wrong margin, and the tests
+/// below have no GTK at all.
+pub fn rtl() -> bool {
+    gtk::is_initialized() && gtk::Widget::default_direction() == gtk::TextDirection::Rtl
+}
+
+/// Where text sits inside its own box when it should hug the start of the
+/// line: the left edge in English, the right edge in Arabic or Hebrew.
+///
+/// **`GtkLabel` mirrors `xalign` itself**, so this is 0.0 in both directions
+/// and the name is the whole of what it adds. The label computes its text
+/// position as `xalign` of the spare width in a left-to-right widget and
+/// `1.0 - xalign` in a right-to-left one, which means 0.0 already reads as
+/// "the edge the line starts at".
+///
+/// **This was got wrong first**, and the way it failed is worth keeping. The
+/// pass that made the interface right-to-left assumed `xalign` was absolute
+/// and flipped it here, so every bare label was flipped twice and came out on
+/// the left in a mirrored interface. It looked exactly like the direction work
+/// having no effect, which sent the search everywhere except at the one line
+/// that had caused it. What settled it was measuring: a heading 1355px wide
+/// holding 211px of text, with `xalign` reading 1.0, drawn hard against the
+/// left - a combination GTK cannot produce unless it is doing the flip.
+///
+/// Rows built as a box with a name and a value never showed the fault at all:
+/// a `GtkBox` mirrors its children, so those were right whatever `xalign`
+/// said. Only labels standing alone depend on this.
+pub fn text_start() -> f32 {
+    0.0
+}
+
+/// The opposite edge: where a value sits when its name is at the start of the
+/// row. Mirrored by the label, exactly as [`text_start`] is.
+pub fn text_end() -> f32 {
+    1.0
+}
+
+/// Which way the lines of a label are justified, in reading order.
+///
+/// **The second alignment property GTK does not mirror**, and the one that
+/// catches you after `xalign` is dealt with. `xalign` places the text block
+/// inside the label's allocation; `justify` places each *line* inside that
+/// block, defaults to `Left`, and stays `Left` in a right-to-left interface.
+/// A single-line label never shows the difference, which is why this is easy
+/// to miss - it appears only where a label wraps, and then only as text
+/// hugging the wrong edge inside a box that mirrored correctly.
+pub fn text_justify() -> gtk::Justification {
+    match rtl() {
+        true => gtk::Justification::Right,
+        false => gtk::Justification::Left,
+    }
+}
+
+/// The CSS side that begins a line, for the few rules that indent from it.
+///
+/// GTK's CSS has no logical properties - there is no `margin-inline-start` -
+/// so a stylesheet that wants to indent from the start of the line has to be
+/// told which physical side that is.
+pub fn css_start() -> &'static str {
+    match rtl() {
+        true => "right",
+        false => "left",
+    }
+}
+
+/// The side that ends a line. See [`css_start`].
+pub fn css_end() -> &'static str {
+    match rtl() {
+        true => "left",
+        false => "right",
+    }
+}
+
+#[cfg(test)]
+mod reading_direction {
+    use super::*;
+
+    /// The two edges are opposites in both directions, and a value has to sit
+    /// against the one the name does not.
+    ///
+    /// GTK's default direction cannot be set in a test - it is global to the
+    /// process and the whole test binary shares one - so what is checked is
+    /// the relationship rather than either answer. A pair that agreed would
+    /// put a row's name and its value on the same edge, on top of each other.
+    #[test]
+    fn the_two_edges_are_opposite() {
+        assert_ne!(text_start(), text_end());
+        assert_ne!(css_start(), css_end());
+    }
+
+    /// Both CSS sides have to be sides GTK will parse. A typo here is a
+    /// declaration discarded whole and silently, which is the trap the
+    /// stylesheet has fallen into before.
+    #[test]
+    fn the_css_sides_are_real_properties() {
+        for side in [css_start(), css_end()] {
+            assert!(matches!(side, "left" | "right"), "{side}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod chosen_sizes {
     use super::*;
