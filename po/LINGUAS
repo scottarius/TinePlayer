@@ -7,4 +7,4 @@
 # English is not here and never will be. It is the language the source is
 # written in, so its strings are the msgids themselves - see src/i18n.rs.
 
-de
+ru

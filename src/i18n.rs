@@ -1158,8 +1158,8 @@ mod tests {
     fn a_catalog_with_windows_line_endings_still_reads() {
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("po")
-            .join("de.po");
-        let text = std::fs::read_to_string(&source).expect("po/de.po is readable");
+            .join("ru.po");
+        let text = std::fs::read_to_string(&source).expect("po/ru.po is readable");
         let crlf = text.replace('\n', "\r\n");
 
         let path = std::env::temp_dir().join("tineplayer-crlf-catalog.po");
@@ -1168,13 +1168,13 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let loaded = loaded.expect("a catalog with CRLF endings is still a catalog");
-        assert_eq!(loaded.code, "de");
+        assert_eq!(loaded.code, "ru");
         assert_eq!(
             loaded
                 .singular
                 .get("Interface Language")
                 .map(String::as_str),
-            Some("Sprache der Oberfläche"),
+            Some("Язык интерфейса"),
             "a translation came back with a stray carriage return in it"
         );
     }
@@ -1235,17 +1235,17 @@ mod tests {
     fn a_catalog_can_be_read_from_disk() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("po")
-            .join("de.po");
-        let loaded = load(&path).expect("po/de.po is a catalog this can read");
+            .join("ru.po");
+        let loaded = load(&path).expect("po/ru.po is a catalog this can read");
 
-        assert_eq!(loaded.code, "de");
-        assert_eq!(loaded.nplurals, 2);
+        assert_eq!(loaded.code, "ru");
+        assert_eq!(loaded.nplurals, 3);
         assert_eq!(
             loaded
                 .singular
                 .get("Interface Language")
                 .map(String::as_str),
-            Some("Sprache der Oberfläche")
+            Some("Язык интерфейса")
         );
         // Its context separator survived the round trip through the file.
         assert_eq!(
@@ -1253,11 +1253,18 @@ mod tests {
                 .singular
                 .get("audio output device\u{4}None")
                 .map(String::as_str),
-            Some("Keines")
+            Some("Нет")
         );
         // And its plural rule evaluates, rather than merely having parsed.
+        // Russian has three forms, which makes this a stronger check than a
+        // two-form language would be: 1 and 21 take the first, 2 to 4 the
+        // second, and 5 upwards - and everything in the teens - the third.
         assert_eq!(loaded.rule.eval(1), 0);
-        assert_eq!(loaded.rule.eval(7), 1);
+        assert_eq!(loaded.rule.eval(21), 0);
+        assert_eq!(loaded.rule.eval(2), 1);
+        assert_eq!(loaded.rule.eval(4), 1);
+        assert_eq!(loaded.rule.eval(7), 2);
+        assert_eq!(loaded.rule.eval(11), 2);
     }
 
     #[test]

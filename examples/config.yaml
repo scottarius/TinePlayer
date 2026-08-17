@@ -36,7 +36,7 @@ ui_scale: 1.5
 #
 # Which languages a build has is listed under Settings > General > Interface
 # Language. See docs/translating.md to add one.
-language: de
+language: ru
 
 # A short click when moving through the menus, played through the primary
 # output. true or false.
