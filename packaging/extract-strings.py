@@ -146,6 +146,18 @@ def parse_string(text: str, at: int) -> tuple[str, int]:
         character = text[cursor]
         if character == "\\":
             following = text[cursor + 1]
+            # A backslash at the end of a line is Rust's line continuation: the
+            # newline AND the next line's indentation are both dropped, and the
+            # string is joined with nothing between. Getting this wrong is
+            # invisible - the msgid comes out carrying a literal backslash,
+            # newline and seventeen spaces, so it never matches the string the
+            # compiler actually built and a translation of it silently never
+            # appears. Two of the Kodi sandbox messages were exactly that.
+            if following in "\r\n":
+                cursor += 1
+                while cursor < len(text) and text[cursor] in " \t\r\n":
+                    cursor += 1
+                continue
             out.append(
                 {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}.get(
                     following, "\\" + following
