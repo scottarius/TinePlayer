@@ -5164,7 +5164,25 @@ impl App {
         // readings started at a different place on every line and there was
         // nothing to read down; against an edge they line up as a table, which
         // is what a column of measurements wants to be.
-        for (name, value) in self.file_facts() {
+        // How wide the names are allowed to ask to be, measured from the
+        // names themselves rather than fixed at what English happens to need.
+        //
+        // It was 12, chosen against "Resolution:" - which is right in English
+        // and wrong the moment anything is translated: German's Framerate is
+        // "Bildwiederholrate", eighteen characters, and a fixed cap cut it to
+        // "Bildwiederho..." - a label that has stopped labelling anything.
+        // The floor keeps the column steady when every name is short, and the
+        // ceiling keeps one very long name from pushing the page right, which
+        // is the fault the cap exists to prevent.
+        let readings = self.file_facts();
+        let name_chars = readings
+            .iter()
+            .map(|(name, _)| name.chars().count() as i32 + 1)
+            .max()
+            .unwrap_or(12)
+            .clamp(12, 20);
+
+        for (name, value) in readings {
             let line = gtk::Box::builder()
                 .orientation(gtk::Orientation::Horizontal)
                 .spacing(px(8.0))
@@ -5181,11 +5199,7 @@ impl App {
             key.add_css_class("tp-fact-name");
             key.set_xalign(appearance::text_start());
             key.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            // Enough for the longest of them, "Resolution:". Capped at six it
-            // cut every name to "Resol...", which is a label that has stopped
-            // labelling anything. The pair still comes to well under the
-            // poster's width, which is what the cap is protecting.
-            key.set_max_width_chars(12);
+            key.set_max_width_chars(name_chars);
             line.append(&key);
 
             let reading = gtk::Label::new(Some(&value));
