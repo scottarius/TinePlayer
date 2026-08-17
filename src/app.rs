@@ -8990,7 +8990,9 @@ impl App {
     /// `src/i18n.rs` for what the rest of that pass involves.
     fn item_description(&self, item: Item) -> Option<Cow<'static, str>> {
         Some(match item {
-            Item::InterfaceLanguage => tr!("The language TinePlayer's own menus are in."),
+            // No note. The row is called Interface Language and its value is
+            // the language it is set to, which says the whole of it - and the
+            // note it used to carry only repeated the name.
             Item::ReadMetadata => {
                 tr!(
                     "Find and read metadata beside video files like .nfo and images often provided by media libraries."
@@ -10399,7 +10401,7 @@ impl App {
         // assumes you already know, which is no use to somebody who has
         // inherited the machine it is installed on.
         body.append(&about_heading(&tr!(
-            "Watch together, in different languages."
+            "Watch together, hear your own soundtrack"
         )));
         body.append(&about_text(
             tr!("A player that allows people to watch videos together while hearing separate soundtracks.").as_ref(),
