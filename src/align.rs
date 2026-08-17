@@ -13,11 +13,6 @@
 //! when it is quiet, where the explosions and the silences fall. Correlating a
 //! short-term loudness envelope finds that shape, and a foreign dub lines up
 //! against the original as readily as a description track does.
-//!
-//! **Written from the method, not from anyone's code.** Cross-correlation for
-//! a time offset is ordinary signal processing. `describealign` solves the same
-//! problem and is GPL-3.0, so none of it is read or transliterated here:
-//! TinePlayer is MIT and the packaging keeps it that way deliberately.
 
 use gstreamer as gst;
 use gstreamer::prelude::*;

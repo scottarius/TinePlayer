@@ -63,9 +63,6 @@ path = "src/main.rs"
 [dependencies]
 # Cross-correlating two loudness envelopes, to line a separate audio file up
 # with the video. MIT/Apache, pure Rust, no transitive weight worth naming.
-# The technique is ordinary signal processing rather than anyone's invention:
-# see src/align.rs, which is written from the method and not from any GPL
-# implementation of it.
 rustfft = "6"
 
 # wrap_help so help text is wrapped to the real terminal width, with
