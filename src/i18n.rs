@@ -2,8 +2,8 @@
 //!
 //! # How a translation reaches the screen
 //!
-//! Translators work in `.po` files, which is the format Weblate hosts free for
-//! open source and the one people who translate software already know. Those
+//! Translators work in `.po` files, which is the format people who translate
+//! software already know and the one every translation tool can open. Those
 //! files live in `po/`, are listed in `po/LINGUAS`, and are compiled into the
 //! binary by `build.rs` - not installed beside it.
 //!
@@ -1061,7 +1061,7 @@ mod tests {
 
     /// Every catalog compiled into this binary, checked for the mistake a
     /// translator is most likely to make and least likely to notice: dropping
-    /// or renaming a `{hole}`. The string looks fine in Weblate and comes out
+    /// or renaming a `{hole}`. The string looks fine in a PO editor and comes out
     /// on screen missing the one piece of information it existed to carry.
     ///
     /// Deliberately a test rather than a build failure. A catalog arrives from
@@ -1152,7 +1152,7 @@ mod tests {
     /// CRLF whatever the file had.
     ///
     /// The endings are pinned in `.gitattributes` now, which is the real fix
-    /// and covers Weblate and Poedit as well as this. This is the guard for
+    /// and covers every PO editor as well as this. This is the guard for
     /// the file that arrives with them anyway.
     #[test]
     fn a_catalog_with_windows_line_endings_still_reads() {

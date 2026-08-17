@@ -5,10 +5,12 @@ Run it after adding or changing any interface string:
 
     python3 packaging/extract-strings.py
 
-Weblate takes it from there. It merges a new template into every existing
-catalog by itself, so nothing has to be run against the .po files by hand -
-which matters, because the alternative is msgmerge and that means asking every
-contributor on Windows to install gettext.
+It also merges that template into every po/*.po, which is the job a
+translation platform would otherwise do. There is no such platform here -
+hosting one is a paid service or a server to run, and neither is worth
+committing to before anybody is translating - so the merge is done in this
+script. That also avoids msgmerge, which would mean asking every contributor
+on Windows to install gettext.
 
 WHY NOT XGETTEXT
     It has no Rust mode. Running it with --language=C mostly works and then
@@ -211,8 +213,8 @@ def translator_notes(text: str) -> dict[int, str]:
     """`// TRANSLATORS:` comments, by the line of the call they precede.
 
     gettext's own convention, and the one thing in a catalog that can carry
-    context a translator cannot get from the string. Weblate shows these
-    beside the message.
+    context a translator cannot get from the string. Every PO editor shows
+    these beside the message.
 
     Worth having for one kind of string in particular: another project's own
     words. "Quick Connect" is Jellyfin's name for a feature, and a translator
@@ -311,9 +313,147 @@ def extract() -> dict[tuple[str | None, str], dict]:
     return messages
 
 
+ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
+
+
+def unquote(line: str) -> str:
+    """The real text of a quoted `.po` fragment, escapes decoded."""
+    joined = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', line))
+    out: list[str] = []
+    at = 0
+    while at < len(joined):
+        if joined[at] == "\\" and at + 1 < len(joined):
+            out.append(ESCAPES.get(joined[at + 1], joined[at + 1]))
+            at += 2
+        else:
+            out.append(joined[at])
+            at += 1
+    return "".join(out)
+
+
+def read_catalog(path: pathlib.Path) -> tuple[str, dict]:
+    """An existing catalog as its header block and its translations.
+
+    Keyed by `(context, msgid)` - the key gettext uses and the one `build.rs`
+    compiles against. A translation survives a merge exactly when its msgid
+    does, which is the whole reason to be careful about rewording a string
+    once a catalog exists.
+    """
+    header = ""
+    known: dict = {}
+
+    for block in path.read_text(encoding="utf-8").split("\n\n"):
+        if "Plural-Forms:" in block:
+            header = block
+            continue
+        lines = [l for l in block.split("\n") if l and not l.startswith("#")]
+        context = msgid = None
+        singular = None
+        plural: list[str] = []
+        current = None
+        for line in lines:
+            if line.startswith("msgctxt "):
+                current, context = "ctx", unquote(line)
+            elif line.startswith("msgid_plural "):
+                current = "ignore"
+            elif line.startswith("msgid "):
+                current, msgid = "id", unquote(line)
+            elif line.startswith("msgstr["):
+                current = "plural"
+                plural.append(unquote(line))
+            elif line.startswith("msgstr"):
+                current, singular = "str", unquote(line)
+            elif line.startswith('"') and current:
+                piece = unquote(line)
+                if current == "ctx":
+                    context += piece
+                elif current == "id":
+                    msgid += piece
+                elif current == "str":
+                    singular += piece
+                elif current == "plural":
+                    plural[-1] += piece
+        if msgid:
+            known[(context, msgid)] = {"str": singular or "", "plural": plural}
+
+    return header, known
+
+
+def merge(messages: dict) -> None:
+    """Brings every `po/*.po` up to date with the template.
+
+    **This is the job a translation platform would otherwise do.** There is no
+    Weblate here: hosting one is either a paid service or a server to run, and
+    neither is worth committing to before anyone is actually translating. So
+    the merge lives in this script, needing nothing installed - the same
+    reasoning that has `build.rs` read `.po` files directly rather than
+    shelling out to msgfmt.
+
+    A translation is kept when its msgid is still in the template. When it is
+    not, it moves to the end of the file as an obsolete `#~` entry rather than
+    being deleted: a string that comes back, or a wording somebody wants to
+    reuse, is still there to copy from.
+    """
+    for path in sorted((ROOT / "po").glob("*.po")):
+        header, known = read_catalog(path)
+        if not header:
+            print(f"warning: {path.name} has no header, skipped", file=sys.stderr)
+            continue
+
+        out = [header]
+        used = set()
+        done = 0
+
+        for key, entry in sorted(
+            messages.items(), key=lambda item: (item[1]["places"][0], item[0][1])
+        ):
+            context, msgid = key
+            had = known.get(key)
+            used.add(key)
+
+            block = []
+            for note in entry.get("notes", []):
+                block += [f"#. {line}" for line in textwrap.wrap(note, 74)]
+            block.append(f"#: {' '.join(entry['places'])}")
+            if context is not None:
+                block.append(f"msgctxt {quote(context)}")
+            block.append(f"msgid {quote(msgid)}")
+
+            if entry["plural"] is not None:
+                block.append(f"msgid_plural {quote(entry['plural'])}")
+                forms = (had or {}).get("plural") or []
+                for index in range(max(len(forms), 2)):
+                    block.append(
+                        f"msgstr[{index}] "
+                        f"{quote(forms[index] if index < len(forms) else '')}"
+                    )
+                done += 1 if any(forms) else 0
+            else:
+                body = (had or {}).get("str") or ""
+                block.append(f"msgstr {quote(body)}")
+                done += 1 if body else 0
+
+            out.append("\n".join(block))
+
+        orphans = sorted(
+            (key for key in known if key not in used), key=lambda k: k[1]
+        )
+        for context, msgid in orphans:
+            lines = []
+            if context is not None:
+                lines.append(f"#~ msgctxt {quote(context)}")
+            lines.append(f"#~ msgid {quote(msgid)}")
+            lines.append(f"#~ msgstr {quote(known[(context, msgid)]['str'])}")
+            out.append("\n".join(lines))
+
+        path.write_text("\n\n".join(out) + "\n", encoding="utf-8", newline="")
+        stale = f", {len(orphans)} obsolete" if orphans else ""
+        print(f"{path.relative_to(ROOT)}: {done}/{len(messages)} translated{stale}")
+
+
 def quote(text: str) -> str:
     """A msgid as a .po writes one: escaped, and split at newlines so a long
-    message is readable in a diff and in Weblate."""
+    message stays readable in a diff."""
     escaped = (
         text.replace("\\", "\\\\").replace('"', '\\"').replace("\t", "\\t")
     )
@@ -364,10 +504,11 @@ def report_duplicates(messages: dict) -> None:
     dialog title that should not. What the script can do is make sure nobody
     has to notice them by reading.
 
-    Worth acting on BEFORE a catalog reaches Weblate. A msgid is its own key,
-    so changing one afterwards orphans every translation of it: the string
-    comes back untranslated in every language, and somebody has to do the work
-    again. Consolidating is free today and expensive next month.
+    Worth acting on BEFORE a string has been translated. A msgid is its own
+    key, so changing one afterwards orphans every translation of it: `merge`
+    keeps the words as an obsolete `#~` entry to copy from, but somebody has
+    to do that for each language. Consolidating is free today and expensive
+    next month.
     """
     groups: dict[str, list] = {}
     for (context, msgid), entry in messages.items():
@@ -418,8 +559,8 @@ msgstr ""
     for (context, msgid), entry in sorted(
         messages.items(), key=lambda item: (item[1]["places"][0], item[0][1])
     ):
-        # Wrapped, because a `#.` line is read by a person in a Weblate
-        # sidebar rather than parsed by anything.
+        # Wrapped, because a `#.` line is read by a person rather than
+        # parsed by anything.
         block = []
         for note in entry.get("notes", []):
             block += [f"#. {line}" for line in textwrap.wrap(note, 74)]
@@ -451,6 +592,7 @@ msgstr ""
         f"({plurals} with plural forms, {contexts} with a context)"
     )
     report_duplicates(messages)
+    merge(messages)
 
 
 if __name__ == "__main__":
