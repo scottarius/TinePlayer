@@ -580,7 +580,7 @@ impl Controls {
         let stop = gtk::Button::new();
         stop.set_child(Some(&stop_icon));
         stop.add_css_class("tp-transport-button");
-        name_it(&stop, "Stop");
+        name_it(&stop, &tr!("Stop"));
 
         let elapsed = gtk::Label::new(Some("0:00"));
         elapsed.add_css_class("tp-time");
@@ -606,7 +606,7 @@ impl Controls {
         position.set_hexpand(true);
         position.set_can_focus(false);
         position.add_css_class("tp-progress");
-        name_it(&position, "Position");
+        name_it(&position, &tr!("Position"));
 
         let fullscreen = gtk::Button::new();
         fullscreen.set_child(Some(&crate::app::fullscreen_image(fullscreen_now, scale)));
@@ -637,7 +637,7 @@ impl Controls {
         let volume_button = gtk::Button::new();
         volume_button.set_child(Some(&volume_icon));
         volume_button.add_css_class("tp-transport-button");
-        name_it(&volume_button, "Volume");
+        name_it(&volume_button, &tr!("Volume"));
 
         // No spacing of its own. Each group already pads itself and every join
         // between two of them carries a divider with margins either side, so a
@@ -708,14 +708,14 @@ impl Controls {
             mute.set_can_focus(false);
             // Named by device, since which output is being silenced is the
             // whole question in a player with two of them.
-            name_it(&mute, &format!("Mute {name}"));
+            name_it(&mute, &tr!("Mute {name}", name = name));
 
             let level = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
             level.set_draw_value(false);
             level.set_hexpand(true);
             level.set_can_focus(false);
             level.add_css_class("tp-progress");
-            name_it(&level, &format!("Volume, {name}"));
+            name_it(&level, &tr!("Volume, {name}", name = name));
 
             let level_reading = reading_label(&crate::app::volume_label(1.0, false));
 
@@ -728,7 +728,7 @@ impl Controls {
                 .spacing(ROW_SPACING)
                 .build();
             row.set_focusable(true);
-            name_it(&row, &format!("Volume, {name}"));
+            name_it(&row, &tr!("Volume, {name}", name = name));
             row.append(&mute);
             row.append(&level);
             row.append(&level_reading);
@@ -962,7 +962,7 @@ impl Controls {
         let back = gtk::Button::new();
         back.set_child(Some(&back_mark));
         back.add_css_class("tp-transport-button");
-        name_it(&back, "Back");
+        name_it(&back, &tr!("Back"));
 
         // Two rows: where playback is, and what can be done to it. Separating
         // them is what lets a controller treat them differently - left and

@@ -297,8 +297,15 @@ def similar(text: str) -> str:
     translator handed both translates the same sentence twice, after which the
     two can drift apart in the interface with nothing to catch it.
     """
-    flattened = re.sub(r"\s+", " ", text).strip().lower()
-    flattened = re.sub(r"\{[a-z_0-9]+\}", "{}", flattened)
+    flattened = re.sub(r"\s+", " ", text).strip()
+    # An all-capitals message is a group heading - INTERFACE, FIRST OUTPUT,
+    # SUBTITLES - and that is a deliberate style rather than an accident of
+    # capitalization. Folding its case would report every heading against any
+    # ordinary label using the same word, which is three false positives and
+    # no true ones.
+    if flattened != flattened.upper():
+        flattened = flattened.lower()
+    flattened = re.sub(r"\{[a-z_0-9]+\}", "{}", flattened, flags=re.I)
     # A trailing full stop or colon is punctuation. A question mark is not:
     # "Close the Player?" is a heading asking something and "Close the player"
     # is a button that does it, and they are two messages however alike they

@@ -46,7 +46,13 @@ const MOST_LANGUAGES: usize = 6;
 /// neither is what a viewer would say about a soundtrack they can plainly
 /// hear. It says the same thing in the word already being used everywhere
 /// else something is missing.
-const UNKNOWN_LANGUAGE: &str = "Unknown";
+///
+/// A function rather than a `const` for the reason every other piece of
+/// interface text here became one: it is translated, and a translation is
+/// built when it is asked for.
+fn unknown_language() -> Cow<'static, str> {
+    trc!("a track's language", "Unknown")
+}
 
 /// One summary line's markup: the label, the languages that fit, and a count
 /// of the ones that did not.
@@ -607,14 +613,15 @@ impl Category {
         Category::About,
     ];
 
-    fn title(self) -> &'static str {
+    fn title(self) -> Cow<'static, str> {
         match self {
-            Category::General => "General",
-            Category::Outputs => "Outputs",
-            Category::Subtitles => "Subtitles",
-            Category::Jellyfin => "Jellyfin",
-            Category::Kodi => "Kodi",
-            Category::About => "About",
+            Category::General => tr!("General"),
+            Category::Outputs => tr!("Outputs"),
+            Category::Subtitles => trc!("settings category", "Subtitles"),
+            // Product names, the same in every language.
+            Category::Jellyfin => Cow::Borrowed("Jellyfin"),
+            Category::Kodi => Cow::Borrowed("Kodi"),
+            Category::About => tr!("About"),
         }
     }
 
@@ -637,19 +644,19 @@ impl Category {
     ) -> Vec<(Option<Cow<'static, str>>, Item)> {
         match self {
             Category::General => vec![
-                (Some("INTERFACE".into()), Item::InterfaceScale),
+                (Some(tr!("INTERFACE")), Item::InterfaceScale),
                 (None, Item::InterfaceLanguage),
                 (None, Item::Sounds),
                 (None, Item::StartFullscreen),
-                (Some("LIBRARY".into()), Item::ReadMetadata),
+                (Some(tr!("LIBRARY")), Item::ReadMetadata),
                 (None, Item::ShowBackdrop),
                 (None, Item::ResumeThreshold),
                 (None, Item::WatchedThreshold),
-                (Some("UPDATES".into()), Item::Updates),
+                (Some(tr!("UPDATES")), Item::Updates),
                 (None, Item::UpdateStatus),
                 // Last, and alone under its own heading: it is the one thing
                 // on this screen that destroys something.
-                (Some("DATA".into()), Item::ClearData),
+                (Some(tr!("DATA")), Item::ClearData),
             ],
             Category::Outputs => vec![
                 (Some(tr!("FIRST OUTPUT")), Item::Device(Role::Primary)),
@@ -674,7 +681,7 @@ impl Category {
                 // same subject. A pane offering only "Add a Kodi Folder" would
                 // leave somebody wondering whether it had looked.
                 if kodis.is_empty() {
-                    return vec![(Some("KODI".into()), Item::KodiNone), (None, Item::KodiAdd)];
+                    return vec![(Some(tr!("KODI")), Item::KodiNone), (None, Item::KodiAdd)];
                 }
 
                 let mut rows: Vec<(Option<Cow<'static, str>>, Item)> = Vec::new();
@@ -694,7 +701,7 @@ impl Category {
                 }
                 // Under a heading of its own: it belongs to no installation,
                 // and without one it reads as another row of the last group.
-                rows.push((Some("OTHER".into()), Item::KodiAdd));
+                rows.push((Some(tr!("OTHER")), Item::KodiAdd));
                 rows
             }
             // One heading over the lot. Unlike Kodi there is only ever one
@@ -705,10 +712,10 @@ impl Category {
             // heading instead of taking a row each and inviting a press.
             Category::Jellyfin => match jellyfin {
                 JellyfinPane::NotConnected => {
-                    vec![(Some("JELLYFIN".into()), Item::JellyfinConnect)]
+                    vec![(Some(tr!("JELLYFIN")), Item::JellyfinConnect)]
                 }
                 JellyfinPane::Connected => {
-                    vec![(Some("JELLYFIN".into()), Item::JellyfinDisconnect)]
+                    vec![(Some(tr!("JELLYFIN")), Item::JellyfinDisconnect)]
                 }
             },
             // The text itself is not a row - see `about_body`, which the
@@ -1715,7 +1722,7 @@ impl App {
         page.set_halign(gtk::Align::Center);
         page.append(&scroller);
 
-        let close = gtk::Button::with_label("Close");
+        let close = gtk::Button::with_label(&tr!("Close"));
         close.add_css_class("tp-button");
         close.set_halign(gtk::Align::Center);
         page.append(&close);
@@ -3775,7 +3782,7 @@ impl App {
     fn audio_rows(&self, role: Role) -> Vec<(String, Option<Playing>)> {
         let mut rows = Vec::new();
         if role == Role::Secondary {
-            rows.push(("None".to_string(), None));
+            rows.push((trc!("audio track", "None").into_owned(), None));
         }
         for track in self.tracks.borrow().iter() {
             rows.push((
@@ -4154,7 +4161,7 @@ impl App {
                 let scale = chosen.unwrap_or_else(|| self.scale.get());
                 let reading = match chosen {
                     Some(scale) => scale_label(scale),
-                    None => "Auto".to_string(),
+                    None => tr!("Auto").into_owned(),
                 };
                 (steps_from_scale(scale), reading)
             }
@@ -4734,10 +4741,15 @@ impl App {
             play_image(scale),
             &match resume_at {
                 Some(position) => format!(
-                    "  Resume ({})",
-                    crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
+                    "  {}",
+                    tr!(
+                        "Resume ({position})",
+                        position = crate::controls::format_time(
+                            gstreamer::ClockTime::from_nseconds(position)
+                        )
+                    )
                 ),
-                None => "  Play".to_string(),
+                None => format!("  {}", tr!("Play")),
             },
         )));
         // The face is two labels, so the button has no text of its own for a
@@ -4773,7 +4785,7 @@ impl App {
             // tooltip for a pointer, and a name for a screen reader, which
             // would otherwise announce the glyph or nothing at all.
             restart.set_tooltip_text(Some(tr!("Start from the beginning").as_ref()));
-            name_it(&restart, "Restart");
+            name_it(&restart, &tr!("Restart"));
             plays.append(&restart);
             play_buttons.push(restart);
         }
@@ -5490,7 +5502,10 @@ impl App {
             .spacing(px(1.0))
             .margin_top(px(14.0))
             .build();
-        for (name, languages) in [("Audio", spoken.0), ("Subtitles", spoken.1)] {
+        for (name, languages) in [
+            (tr!("Audio"), spoken.0),
+            (trc!("media page heading", "Subtitles"), spoken.1),
+        ] {
             let line = gtk::Label::new(None);
             line.add_css_class("tp-fact");
             line.set_xalign(appearance::text_start());
@@ -5498,7 +5513,7 @@ impl App {
             // down on exactly the files that carry the most languages.
             line.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
-            line.set_markup(&summary_markup(name, &languages));
+            line.set_markup(&summary_markup(&name, &languages));
             summary.append(&line);
         }
         block.push(summary.upcast());
@@ -5520,10 +5535,13 @@ impl App {
             // A track that never said what it is still counts. Plenty of files
             // tag nothing at all - an AVI usually does not - and a line that
             // quietly left those out would claim a file had no soundtrack.
-            let name = crate::languages::name_of_tag(&track.language).unwrap_or(UNKNOWN_LANGUAGE);
+            // The language's own name for itself - see native_of_tag.
+            let name = crate::languages::native_of_tag(&track.language)
+                .map(Cow::Borrowed)
+                .unwrap_or_else(unknown_language);
             let entry = match crate::probe::is_audio_description(&track.title) {
-                true => format!("{name} (Described)"),
-                false => name.to_string(),
+                true => tr!("{language} (Described)", language = name).into_owned(),
+                false => name.into_owned(),
             };
             if !named.contains(&entry) {
                 named.push(entry);
@@ -5552,9 +5570,11 @@ impl App {
                 .split('.')
                 .next()
                 .unwrap_or_default();
-            let name = crate::languages::name_of_tag(tag).unwrap_or(UNKNOWN_LANGUAGE);
-            if !named.iter().any(|held| held == name) {
-                named.push(name.to_string());
+            let name = crate::languages::native_of_tag(tag)
+                .map(Cow::Borrowed)
+                .unwrap_or_else(unknown_language);
+            if !named.iter().any(|held| *held == name) {
+                named.push(name.into_owned());
             }
         }
         named
@@ -5635,11 +5655,11 @@ impl App {
         let browse = gtk::Button::new();
         browse.set_child(Some(&marked_face(
             marked_image(BROWSE_ICON, PLAY_MARK_PX * scale),
-            "  Browse...",
+            &format!("  {}", tr!("Browse...")),
         )));
         browse.add_css_class("tp-button");
         browse.add_css_class("tp-action");
-        name_it(&browse, &tr!("Browse"));
+        name_it(&browse, &tr!("Browse..."));
 
         let address = gtk::Button::new();
         address.set_child(Some(&marked_face(
@@ -5709,7 +5729,7 @@ impl App {
         // a third way to choose a video, and standing in line with two that
         // are made it look like one.
         let back = cancel.then(|| {
-            let back = gtk::Button::with_label("Cancel");
+            let back = gtk::Button::with_label(&tr!("Cancel"));
             back.add_css_class("tp-button");
             back.set_halign(gtk::Align::Center);
             middle.append(&back);
@@ -5856,8 +5876,8 @@ impl App {
         open.set_child(Some(&marked_image(ICON, CORNER_MARK_PX * self.scale.get())));
         open.add_css_class("tp-gear");
         open.set_focus_on_click(false);
-        open.set_tooltip_text(Some("Choose a video"));
-        name_it(&open, "Choose a video");
+        open.set_tooltip_text(Some(tr!("Choose a video").as_ref()));
+        name_it(&open, &tr!("Choose a video"));
         {
             let app = self.clone();
             open.connect_clicked(move |_| {
@@ -5909,8 +5929,8 @@ impl App {
         gear.set_child(Some(&settings_image(CORNER_MARK_PX * self.scale.get())));
         gear.add_css_class("tp-gear");
         gear.set_focus_on_click(false);
-        gear.set_tooltip_text(Some("Settings"));
-        name_it(&gear, "Settings");
+        gear.set_tooltip_text(Some(tr!("Settings").as_ref()));
+        name_it(&gear, &tr!("Settings"));
         {
             let app = self.clone();
             gear.connect_clicked(move |_| {
@@ -6073,7 +6093,7 @@ impl App {
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
                 if setting == Setting::SecondaryDevice {
-                    entries.push(("None".to_string(), None));
+                    entries.push((trc!("audio output device", "None").into_owned(), None));
                     // A rule under it. "None" here means "play nothing on a
                     // second output", which is a different kind of answer to
                     // the hardware listed below it - and the only list where
@@ -6103,7 +6123,7 @@ impl App {
                 }
             }
             Setting::Subtitles => {
-                entries.push(("None".to_string(), None));
+                entries.push((trc!("subtitle track", "None").into_owned(), None));
                 // Under "None", and again above the row that leaves the film
                 // to go looking on disk. What sits between is what the file
                 // itself offers, and the two either side of it are answers of
@@ -6121,12 +6141,12 @@ impl App {
                 // is the answer when what is wanted is not beside the film.
                 dividers.push(entries.len());
                 entries.push((
-                    "Browse...".to_string(),
+                    tr!("Browse...").into_owned(),
                     Some(self.subtitle_options.borrow().len()),
                 ));
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
-                entries.push(("None".to_string(), None));
+                entries.push((trc!("audio track", "None").into_owned(), None));
                 dividers.push(1);
                 let role = if setting == Setting::PrimaryTrack {
                     Role::Primary
@@ -6183,7 +6203,7 @@ impl App {
                             Some(elsewhere),
                         ));
                     }
-                    None => entries.push(("Browse...".to_string(), Some(elsewhere))),
+                    None => entries.push((tr!("Browse...").into_owned(), Some(elsewhere))),
                 }
             }
             Setting::PrimaryLanguage | Setting::SecondaryLanguage => {
@@ -6646,14 +6666,14 @@ impl App {
     /// What the menu shows against the Subtitles row.
     fn describe_subtitle(&self) -> String {
         let Some(chosen) = self.subtitle.borrow().clone() else {
-            return "None".to_string();
+            return trc!("subtitle track", "None").into_owned();
         };
         self.subtitle_options
             .borrow()
             .iter()
             .find(|option| option.choice() == chosen)
             .map(subtitle_label)
-            .unwrap_or_else(|| "None".to_string())
+            .unwrap_or_else(|| trc!("subtitle track", "None").into_owned())
     }
 
     /// Returns whether it has already moved to another screen, in which case
@@ -7449,7 +7469,7 @@ impl App {
             .margin_end(56)
             .build();
 
-        let heading = heading_label("Open a URL");
+        let heading = heading_label(&tr!("Open a URL"));
         heading.set_halign(gtk::Align::Center);
         page.append(&heading);
 
@@ -7477,9 +7497,9 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
-        let open = gtk::Button::with_label("Open");
+        let open = gtk::Button::with_label(&tr!("Open"));
         open.add_css_class("tp-button");
         open.add_css_class("tp-action");
         // Nothing to open until there is something in the field, and an empty
@@ -7597,7 +7617,7 @@ impl App {
         );
         spinner.start();
         page.append(&spinner);
-        page.append(&heading_label("Opening"));
+        page.append(&heading_label(&tr!("Opening")));
 
         // The launcher's title where there is one, and the file name
         // otherwise. Nothing beside the file has been read yet at this point -
@@ -7618,7 +7638,7 @@ impl App {
             .build();
         page.append(&what);
 
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
         cancel.set_halign(gtk::Align::Center);
         page.append(&cancel);
@@ -7954,14 +7974,14 @@ impl App {
         // What a click used to do on its own. A single click selects now, so
         // there has to be something a pointer can press to act on what it
         // selected - a double click is the shortcut, not the only way.
-        let open = gtk::Button::with_label("Open");
+        let open = gtk::Button::with_label(&tr!("Open"));
         open.add_css_class("tp-button");
         open.add_css_class("tp-action");
         // Nothing is selected until the list is filled, and a row that opens
         // nothing leaves it off again. See `follow_open`.
         open.set_sensitive(false);
 
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
 
         // A click selects; it takes a second one to open. Set here rather than
@@ -8196,8 +8216,8 @@ impl App {
                 .iter()
                 .find(|track| track.index == index)
                 .map(describe_audio_track)
-                .unwrap_or_else(|| "None".to_string()),
-            None => "None".to_string(),
+                .unwrap_or_else(|| trc!("audio track", "None").into_owned()),
+            None => trc!("subtitle track", "None").into_owned(),
         }
     }
 
@@ -8226,7 +8246,7 @@ impl App {
             "Sync".to_string(),
             match stored {
                 Some(millis) => describe_lateness(millis),
-                None => "Unsynced".to_string(),
+                None => tr!("Unsynced").into_owned(),
             },
             true,
             MenuAction::Align(role),
@@ -8534,9 +8554,9 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
-        let next = gtk::Button::with_label("Next");
+        let next = gtk::Button::with_label(&tr!("Next"));
         next.add_css_class("tp-button");
         next.add_css_class("tp-action");
         buttons.append(&cancel);
@@ -8620,7 +8640,7 @@ impl App {
             .build();
         page.append(&status);
 
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
         cancel.set_halign(gtk::Align::Center);
         page.append(&cancel);
@@ -8760,9 +8780,9 @@ impl App {
         // measurement worked there is nothing to do but accept it; where it
         // did not, the useful thing is to measure again against a different
         // track, and this button becomes the way out beside it.
-        let done = gtk::Button::with_label(match retry {
-            true => "Cancel",
-            false => "Finish",
+        let done = gtk::Button::with_label(&match retry {
+            true => tr!("Cancel"),
+            false => tr!("Finish"),
         });
         done.add_css_class("tp-button");
         if !retry {
@@ -9289,7 +9309,7 @@ impl App {
     fn show_settings(self: &Rc<Self>) {
         let scale = self.scale.get();
         let px = |base: f64| (base * scale).round() as i32;
-        let (page, list, back, slot) = list_page("Settings", true, self.scale.get());
+        let (page, list, back, slot) = list_page(&tr!("Settings"), true, self.scale.get());
 
         // What the window has to spend. The monitor stands in before the
         // window has been given a size.
@@ -9541,8 +9561,8 @@ impl App {
         for category in Category::ALL {
             append_named(
                 &categories,
-                &menu_row(category.title(), "", true),
-                category.title(),
+                &menu_row(&category.title(), "", true),
+                &category.title(),
             );
         }
         if let Some(row) = Category::ALL
@@ -10555,7 +10575,7 @@ impl App {
         page.set_halign(gtk::Align::Center);
         page.append(&scroller);
 
-        let close = gtk::Button::with_label("Close");
+        let close = gtk::Button::with_label(&tr!("Close"));
         close.add_css_class("tp-button");
         close.set_halign(gtk::Align::Center);
         page.append(&close);
@@ -11348,7 +11368,7 @@ impl App {
             page.append(&wizard_text(line, false));
         }
 
-        let ok = gtk::Button::with_label("OK");
+        let ok = gtk::Button::with_label(&tr!("OK"));
         ok.add_css_class("tp-button");
         ok.set_halign(gtk::Align::Center);
         page.append(&ok);
@@ -11399,7 +11419,7 @@ impl App {
         // It used to be: red was put on whichever button was left over, so a
         // confirmation of something harmless painted the way out as the
         // dangerous choice.
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
         let destructive = confirm.destructive;
         let confirm = gtk::Button::with_label(confirm.label);
@@ -11467,7 +11487,7 @@ impl App {
             page.append(&wizard_text(undo, true));
         }
 
-        let ok = gtk::Button::with_label("Done");
+        let ok = gtk::Button::with_label(&tr!("Done"));
         ok.add_css_class("tp-button");
         ok.add_css_class("tp-action");
         ok.set_halign(gtk::Align::Center);
@@ -11607,9 +11627,9 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
-        let connect = gtk::Button::with_label("Connect");
+        let connect = gtk::Button::with_label(&tr!("Connect"));
         connect.add_css_class("tp-button");
         connect.add_css_class("tp-action");
         connect.set_sensitive(!field.text().trim().is_empty());
@@ -11791,7 +11811,7 @@ impl App {
         let status = wizard_text(&tr!("Asking the server for a code..."), false);
         page.append(&status);
 
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
         cancel.set_halign(gtk::Align::Center);
         page.append(&cancel);
@@ -12021,7 +12041,7 @@ impl App {
             page.append(&wizard_text(line, false));
         }
 
-        let ok = gtk::Button::with_label("OK");
+        let ok = gtk::Button::with_label(&tr!("OK"));
         ok.add_css_class("tp-button");
         ok.set_halign(gtk::Align::Center);
         page.append(&ok);
@@ -12059,7 +12079,7 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
         let destructive = confirm.destructive;
         let confirm = gtk::Button::with_label(confirm.label);
@@ -12097,14 +12117,18 @@ impl App {
 
     fn confirm_clear_data(self: &Rc<Self>) {
         let app = self.clone();
-        self.show_confirm(&tr!("Clear all saved playback data?"), "Clear", move || {
-            if let Err(e) = crate::config::clear_all_resume() {
-                eprintln!("{e}");
-            }
-            // The loaded file keeps its choices for this session; only
-            // what was written down is gone.
-            app.show_settings();
-        });
+        self.show_confirm(
+            &tr!("Clear all saved playback data?"),
+            &tr!("Clear"),
+            move || {
+                if let Err(e) = crate::config::clear_all_resume() {
+                    eprintln!("{e}");
+                }
+                // The loaded file keeps its choices for this session; only
+                // what was written down is gone.
+                app.show_settings();
+            },
+        );
     }
 
     /// A yes-or-no panel over the screen that asked the question.
@@ -12143,7 +12167,7 @@ impl App {
             .spacing(24)
             .halign(gtk::Align::Center)
             .build();
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
         let confirm = gtk::Button::with_label(confirm_label);
         confirm.add_css_class("tp-button");
@@ -12816,9 +12840,9 @@ impl App {
             .halign(gtk::Align::Center)
             .build();
 
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&tr!("Cancel"));
         cancel.add_css_class("tp-button");
-        let quit = gtk::Button::with_label("Close");
+        let quit = gtk::Button::with_label(&tr!("Close"));
         quit.add_css_class("tp-button");
         quit.add_css_class("tp-danger");
         buttons.append(&cancel);
@@ -12879,7 +12903,7 @@ impl App {
         // Only an unopenable video named on the command line ends the session:
         // it was the whole reason the player was started, and under a launcher
         // there is no menu behind it worth returning to.
-        let back = gtk::Button::with_label(if fatal { "Close" } else { "Back" });
+        let back = gtk::Button::with_label(&if fatal { tr!("Close") } else { tr!("Back") });
         back.add_css_class("tp-button");
         back.set_halign(gtk::Align::Center);
         page.append(&back);
@@ -13559,7 +13583,7 @@ fn back_button(scale: f64) -> gtk::Button {
     let button = gtk::Button::new();
     button.set_child(Some(&back_image(BACK_MARK_PX * scale)));
     button.add_css_class("tp-back");
-    name_it(&button, "Back");
+    name_it(&button, &tr!("Back"));
     button.set_valign(gtk::Align::Center);
     button
 }

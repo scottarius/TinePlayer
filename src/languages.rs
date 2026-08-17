@@ -127,6 +127,35 @@ pub fn name_of_tag(tag: &str) -> Option<&'static str> {
         .map(|(_, name, _, _)| *name)
 }
 
+/// The same, but the language's own name for itself: `Русский` rather than
+/// `Russian`, `日本語` rather than `Japanese`.
+///
+/// **What the media page's Audio and Subtitles lines use.** Those lines say
+/// what a file carries, and the answer is most useful to whoever is looking
+/// for their own language in it - who scans for their own word, not for the
+/// English one. It also stays right regardless of what language the interface
+/// is in, which "Russian" does not: a Russian interface listing "Russian" is
+/// a line nobody can read twice.
+///
+/// The chooser rows keep [`menu_name`], which shows both. There the question
+/// is "which of these do I want", and a list in fifty scripts with nothing in
+/// common is harder to work down than one with English beside it.
+pub fn native_of_tag(tag: &str) -> Option<&'static str> {
+    let tag: String = tag
+        .trim()
+        .to_lowercase()
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    if tag.is_empty() || tag == "und" {
+        return None;
+    }
+    LANGUAGES
+        .iter()
+        .find(|(_, _, _, aliases)| aliases.contains(&tag.as_str()))
+        .map(|(_, _, native, _)| *native)
+}
+
 /// A language tag as it should read on screen: the tag itself, with the
 /// language named after it where the tag names one.
 ///
@@ -152,14 +181,26 @@ pub fn describe_tag(tag: &str) -> String {
 /// produces "eng (English) - English SDH", which reads as a stutter and is
 /// longer for no gain. `already` is the other text that will be shown, and the
 /// name is added only when it is missing from it.
+///
+/// **The name shown is the language's own**, so `rus` reads `rus (Русский)`.
+/// A track list is scanned by somebody looking for their own language, and
+/// their own word for it is what they are looking for - the same reasoning as
+/// [`native_of_tag`], which the media page's summary lines use.
+///
+/// **Both names are checked against `already`**, not just the one shown. A
+/// container's track titles are written in English far more often than not -
+/// "Russian Commentary", not "Русский комментарий" - so checking only the
+/// native name would miss every stutter it was written to catch, and the row
+/// would read `rus (Русский) - AAC 2ch - Russian Commentary`.
 pub fn describe_tag_unless(tag: &str, already: &str) -> String {
-    let Some(name) = name_of_tag(tag) else {
+    let (Some(name), Some(native)) = (name_of_tag(tag), native_of_tag(tag)) else {
         return tag.to_string();
     };
-    if already.to_lowercase().contains(&name.to_lowercase()) {
+    let already = already.to_lowercase();
+    if already.contains(&name.to_lowercase()) || already.contains(&native.to_lowercase()) {
         return tag.to_string();
     }
-    format!("{tag} ({name})")
+    format!("{tag} ({native})")
 }
 
 /// Whether a tag names a language at all.
@@ -230,6 +271,11 @@ mod tag_descriptions {
 
     /// A tag the table knows gains the language's name, and keeps the tag:
     /// the tag is what tells two English tracks apart.
+    ///
+    /// The name is the language's own, so Russian reads `Русский`. English is
+    /// the case where that is invisible, its own name for itself being the
+    /// same word - which is why the Russian line below is the one that says
+    /// what this function actually does.
     #[test]
     fn a_known_tag_is_named() {
         assert_eq!(describe_tag("eng"), "eng (English)");
@@ -237,7 +283,8 @@ mod tag_descriptions {
         // The whole label survives, so the "hi" that says hard-of-hearing is
         // still there to read.
         assert_eq!(describe_tag("en.hi"), "en.hi (English)");
-        assert_eq!(describe_tag("ru"), "ru (Russian)");
+        assert_eq!(describe_tag("ru"), "ru (Русский)");
+        assert_eq!(describe_tag("ja"), "ja (日本語)");
     }
 
     /// Nothing is added when the text beside it already names the language,
@@ -246,6 +293,16 @@ mod tag_descriptions {
     fn a_language_is_not_named_twice() {
         assert_eq!(describe_tag_unless("eng", "English SDH"), "eng");
         assert_eq!(describe_tag_unless("eng", "english commentary"), "eng");
+        // Both names are checked, not only the one that would be shown. A
+        // container's titles are written in English far more often than in
+        // the language they describe, so checking `Русский` alone would let
+        // "rus (Русский) - Russian Commentary" through.
+        assert_eq!(describe_tag_unless("rus", "Russian Commentary"), "rus");
+        assert_eq!(describe_tag_unless("rus", "Русский"), "rus");
+        assert_eq!(
+            describe_tag_unless("rus", "Director's Commentary"),
+            "rus (Русский)"
+        );
         // A label carrying the name itself rather than a separate title.
         assert_eq!(describe_tag("en.English"), "en.English");
         assert_eq!(describe_tag("eng — English SDH"), "eng — English SDH");

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 use crate::probe::{Media, VideoDetails};
 use crate::source::Source;
+use crate::{tr, trc};
 
 /// What the page draws, once every source has had its say.
 #[derive(Clone, Default)]
@@ -108,9 +109,12 @@ impl Details {
             return None;
         }
         let (hours, minutes) = (total / 3600, (total % 3600) / 60);
+        // Two messages rather than one with an optional half: a language
+        // that puts the hours after the minutes, or that needs a different
+        // word when there are no hours, can only say so if it has both.
         Some(match hours {
-            0 => format!("{minutes}min"),
-            _ => format!("{hours}hr {minutes}min"),
+            0 => tr!("{minutes}min", minutes = minutes).into_owned(),
+            _ => tr!("{hours}hr {minutes}min", hours = hours, minutes = minutes).into_owned(),
         })
     }
 
@@ -119,21 +123,29 @@ impl Details {
         let bytes = self.size_bytes? as f64;
         // Powers of 1024 labelled with the short forms, which is what every
         // media application shows and what the comps ask for.
-        const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+        // Abbreviations, and translated ones: Russian writes KB as КБ and
+        // French writes Go for GB. Contexts because two letters on their own
+        // say nothing about what they abbreviate.
+        let units = [
+            trc!("kilobytes", "KB"),
+            trc!("megabytes", "MB"),
+            trc!("gigabytes", "GB"),
+            trc!("terabytes", "TB"),
+        ];
         if bytes < 1024.0 {
-            return Some(format!("{bytes:.0} bytes"));
+            return Some(tr!("{size} bytes", size = format!("{bytes:.0}")).into_owned());
         }
         let mut value = bytes / 1024.0;
         let mut unit = 0;
-        while value >= 1024.0 && unit + 1 < UNITS.len() {
+        while value >= 1024.0 && unit + 1 < units.len() {
             value /= 1024.0;
             unit += 1;
         }
         // A tenth of a gigabyte is a hundred megabytes, which is worth a
         // digit; a tenth of a kilobyte is not worth printing.
         Some(match unit {
-            0 => format!("{value:.0} {}", UNITS[unit]),
-            _ => format!("{value:.2} {}", UNITS[unit]),
+            0 => format!("{value:.0} {}", units[unit]),
+            _ => format!("{value:.2} {}", units[unit]),
         })
     }
 
@@ -176,7 +188,7 @@ impl Details {
         }
         let text = format!("{fps:.3}");
         let text = text.trim_end_matches('0').trim_end_matches('.');
-        Some(format!("{text} fps"))
+        Some(tr!("{rate} fps", rate = text).into_owned())
     }
 
     /// Overall bitrate, worked out rather than read: the container reports its
@@ -194,8 +206,8 @@ impl Details {
         // Below a megabit the number is small enough that a decimal is noise,
         // and the file is a long way from anything anyone is inspecting.
         Some(match mbps {
-            m if m < 1.0 => format!("{:.0} kbps", m * 1000.0),
-            m => format!("{m:.1} Mbps"),
+            m if m < 1.0 => tr!("{rate} kbps", rate = format!("{:.0}", m * 1000.0)).into_owned(),
+            m => tr!("{rate} Mbps", rate = format!("{m:.1}")).into_owned(),
         })
     }
 }
