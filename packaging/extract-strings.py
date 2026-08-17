@@ -223,6 +223,20 @@ def extract() -> dict[tuple[str | None, str], dict]:
                 )
                 continue
 
+            # `fill` matches `{name}` exactly and knows nothing of Rust's
+            # format specifiers, so `{ms:.0}` never substitutes and reaches the
+            # screen written out. It compiles, it extracts, and it is only
+            # visible by looking at the running interface - which is exactly
+            # the kind of fault worth refusing here instead.
+            for message in found:
+                bad = re.findall(r"\{([a-z_][a-z_0-9]*)[:!][^}]*\}", message)
+                if bad:
+                    problems.append(
+                        f"{where}: {macro}! has a format specifier in "
+                        f"{{{bad[0]}:...}}. Format the value before passing it "
+                        f"- placeholders are substituted by name and nothing else."
+                    )
+
             if macro == "tr":
                 key = (None, found[0])
                 entry = messages.setdefault(key, {"plural": None, "places": []})
@@ -273,7 +287,12 @@ def similar(text: str) -> str:
     """
     flattened = re.sub(r"\s+", " ", text).strip().lower()
     flattened = re.sub(r"\{[a-z_0-9]+\}", "{}", flattened)
-    return flattened.rstrip(".:!?…")
+    # A trailing full stop or colon is punctuation. A question mark is not:
+    # "Close the Player?" is a heading asking something and "Close the player"
+    # is a button that does it, and they are two messages however alike they
+    # look. Stripping `?` reported that pair as worth consolidating, which
+    # would have been wrong in both languages.
+    return flattened.rstrip(".:…")
 
 
 def report_duplicates(messages: dict) -> None:

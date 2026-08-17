@@ -109,7 +109,12 @@ fn summary_markup(name: &str, languages: &[String]) -> String {
 /// The menu is first, and is what no flag means. Choosing the two audio tracks
 /// is the reason this application exists, so landing there is the answer an
 /// integration should have to be talked out of rather than into.
-const HANDOVER: [&str; 2] = ["Show Track Selection Menu", "Play Video Immediately"];
+fn handover() -> [Cow<'static, str>; 2] {
+    [
+        tr!("Show Track Selection Menu"),
+        tr!("Play Video Immediately"),
+    ]
+}
 
 /// What a summary line says when the file carries no such track at all, in
 /// English. The text itself now lives in the catalog under the context
@@ -647,12 +652,12 @@ impl Category {
                 (Some("DATA".into()), Item::ClearData),
             ],
             Category::Outputs => vec![
-                (Some("FIRST OUTPUT".into()), Item::Device(Role::Primary)),
+                (Some(tr!("FIRST OUTPUT")), Item::Device(Role::Primary)),
                 (None, Item::Language(Role::Primary)),
                 (None, Item::Description(Role::Primary)),
                 (None, Item::Volume(Role::Primary)),
                 (None, Item::Sync(Role::Primary)),
-                (Some("SECOND OUTPUT".into()), Item::Device(Role::Secondary)),
+                (Some(tr!("SECOND OUTPUT")), Item::Device(Role::Secondary)),
                 (None, Item::Language(Role::Secondary)),
                 (None, Item::Description(Role::Secondary)),
                 (None, Item::Volume(Role::Secondary)),
@@ -1687,7 +1692,7 @@ impl App {
             .margin_start(px(32.0))
             .margin_end(px(32.0))
             .build();
-        page.append(&heading_label("Keys and Buttons"));
+        page.append(&heading_label(&tr!("Keys and Buttons")));
 
         // Scrolled for the same reason the notices are: on a small window, or
         // at a large interface scale, the list is taller than the screen.
@@ -3780,7 +3785,7 @@ impl App {
         }
         for file in self.attached_files() {
             rows.push((
-                format!("Audio File: {}", self.label_for_file(&file)),
+                tr!("Audio File: {name}", name = self.label_for_file(&file)).into_owned(),
                 Some(Playing::File(file.uri())),
             ));
         }
@@ -4520,7 +4525,7 @@ impl App {
         content.append(&columns);
 
         let (scroller, list) = scrolling_list();
-        name_it(&list, "Playback Options");
+        name_it(&list, &tr!("Playback Options"));
 
         // The film's details sit still. Only the rows scroll, so the poster,
         // the title and the buttons stay where they are however long the list
@@ -4555,9 +4560,10 @@ impl App {
         // that `alignment_row` can go on returning a row and nothing else. The
         // two are pushed together every time, which is what keeps them in step.
         let mut rows: Vec<(String, String, bool, MenuAction)> = Vec::new();
-        let mut groups: Vec<Option<&str>> = Vec::new();
-        let mut push = |group: Option<&'static str>,
-                        row: Option<(String, String, bool, MenuAction)>| {
+        // Owned rather than borrowed, since a translated heading is built
+        // at the moment it is asked for and outlives nothing.
+        let mut groups: Vec<Option<String>> = Vec::new();
+        let mut push = |group: Option<String>, row: Option<(String, String, bool, MenuAction)>| {
             if let Some(row) = row {
                 groups.push(group);
                 rows.push(row);
@@ -4570,13 +4576,13 @@ impl App {
         // distinguishes them to anyone watching, and Primary/Secondary is the
         // vocabulary of the code and the config file.
         push(
-            Some("FIRST OUTPUT"),
+            Some(tr!("FIRST OUTPUT").into_owned()),
             Some((
-                "Output Device".to_string(),
+                tr!("Output Device").into_owned(),
                 config
                     .primary_sink
                     .clone()
-                    .unwrap_or_else(|| "Not set".to_string()),
+                    .unwrap_or_else(|| trc!("audio output device", "Not set").into_owned()),
                 true,
                 MenuAction::Device(Role::Primary),
             )),
@@ -4584,7 +4590,7 @@ impl App {
         push(
             None,
             Some((
-                "Audio Track".to_string(),
+                tr!("Audio Track").into_owned(),
                 if has_file {
                     self.describe_audio(Role::Primary)
                 } else {
@@ -4597,13 +4603,13 @@ impl App {
         push(None, self.alignment_row(Role::Primary));
 
         push(
-            Some("SECOND OUTPUT"),
+            Some(tr!("SECOND OUTPUT").into_owned()),
             Some((
-                "Output Device".to_string(),
+                tr!("Output Device").into_owned(),
                 config
                     .secondary_sink
                     .clone()
-                    .unwrap_or_else(|| "None".to_string()),
+                    .unwrap_or_else(|| trc!("audio output device", "None").into_owned()),
                 true,
                 MenuAction::Device(Role::Secondary),
             )),
@@ -4611,7 +4617,7 @@ impl App {
         push(
             None,
             Some((
-                "Audio Track".to_string(),
+                tr!("Audio Track").into_owned(),
                 if has_file && has_secondary {
                     self.describe_audio(Role::Secondary)
                 } else {
@@ -4629,9 +4635,9 @@ impl App {
         // language is an independent choice, and may be a third language again
         // or a repeat of either soundtrack.
         push(
-            Some("SUBTITLES"),
+            Some(tr!("SUBTITLES").into_owned()),
             Some((
-                "Language".to_string(),
+                tr!("Language").into_owned(),
                 self.describe_subtitle(),
                 has_file,
                 MenuAction::Subtitles,
@@ -4683,7 +4689,10 @@ impl App {
         // and never mounted.
         list.set_header_func(move |row, _before| {
             let index = row.index();
-            match groups.get(index as usize).copied().flatten() {
+            match groups
+                .get(index as usize)
+                .and_then(|group| group.as_deref())
+            {
                 Some(group) => row.set_header(Some(&group_heading(group, scale, index == 0))),
                 None => row.set_header(None::<&gtk::Widget>),
             }
@@ -4736,11 +4745,13 @@ impl App {
         name_it(
             &play,
             &match resume_at {
-                Some(position) => format!(
-                    "Resume at {}",
-                    crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
-                ),
-                None => "Play".to_string(),
+                Some(position) => tr!(
+                    "Resume at {position}",
+                    position =
+                        crate::controls::format_time(gstreamer::ClockTime::from_nseconds(position))
+                )
+                .into_owned(),
+                None => tr!("Play").into_owned(),
             },
         );
         play.add_css_class("tp-button");
@@ -4761,7 +4772,7 @@ impl App {
             // The word is gone from the face, so it has to be somewhere: a
             // tooltip for a pointer, and a name for a screen reader, which
             // would otherwise announce the glyph or nothing at all.
-            restart.set_tooltip_text(Some("Start from the beginning"));
+            restart.set_tooltip_text(Some(tr!("Start from the beginning").as_ref()));
             name_it(&restart, "Restart");
             plays.append(&restart);
             play_buttons.push(restart);
@@ -5321,20 +5332,20 @@ impl App {
             // longest reading in the column, and the column is only as wide
             // as the poster - so as one line they were the thing that decided
             // how much room the picture got.
-            ("Resolution", details.resolution()),
-            ("Codec", details.codec()),
-            ("Framerate", details.framerate()),
-            ("Bitrate", details.bitrate()),
+            (tr!("Resolution"), details.resolution()),
+            (tr!("Codec"), details.codec()),
+            (tr!("Framerate"), details.framerate()),
+            (tr!("Bitrate"), details.bitrate()),
             (
-                "Container",
+                tr!("Container"),
                 Some(details.container.clone()).filter(|c| !c.is_empty()),
             ),
             // Last, under the readings that describe the picture. It is the
             // one line here that says nothing about how the film will look.
-            ("File size", details.filesize()),
+            (tr!("File size"), details.filesize()),
         ]
         .into_iter()
-        .filter_map(|(name, value)| value.map(|value| (name.to_string(), value)))
+        .filter_map(|(name, value)| value.map(|value| (name.into_owned(), value)))
         .collect()
     }
 
@@ -5580,7 +5591,7 @@ impl App {
         }
 
         let prompt = gtk::Label::new(Some(
-            "Drop a video file here, browse for a local file, or enter a URL",
+            tr!("Drop a video file here, browse for a local file, or enter a URL").as_ref(),
         ));
         prompt.add_css_class("tp-empty-prompt");
         prompt.set_wrap(true);
@@ -5614,16 +5625,16 @@ impl App {
         )));
         browse.add_css_class("tp-button");
         browse.add_css_class("tp-action");
-        name_it(&browse, "Browse");
+        name_it(&browse, &tr!("Browse"));
 
         let address = gtk::Button::new();
         address.set_child(Some(&marked_face(
             marked_image(LINK_ICON, PLAY_MARK_PX * scale),
-            "  Enter URL",
+            &format!("  {}", tr!("Enter URL")),
         )));
         address.add_css_class("tp-button");
         address.add_css_class("tp-action");
-        name_it(&address, "Enter URL");
+        name_it(&address, &tr!("Enter URL"));
 
         buttons.append(&browse);
         buttons.append(&address);
@@ -5645,12 +5656,12 @@ impl App {
                 let connect = gtk::Button::new();
                 connect.set_child(Some(&marked_face(
                     marked_image(CONNECT_ICON, PLAY_MARK_PX * scale),
-                    "  Connect to Jellyfin",
+                    &format!("  {}", tr!("Connect to Jellyfin")),
                 )));
                 connect.add_css_class("tp-button");
                 connect.add_css_class("tp-jellyfin");
                 connect.set_halign(gtk::Align::Center);
-                name_it(&connect, "Connect to Jellyfin");
+                name_it(&connect, &tr!("Connect to Jellyfin"));
                 middle.append(&connect);
                 Some(connect)
             }
@@ -5659,8 +5670,11 @@ impl App {
             // nothing is worse than no stop at all.
             true => {
                 let words = match self.jellyfin_server_label() {
-                    Some(server) => format!("  Connected to Jellyfin ({server})"),
-                    None => "  Connected to Jellyfin".to_string(),
+                    Some(server) => format!(
+                        "  {}",
+                        tr!("Connected to Jellyfin ({server})", server = server)
+                    ),
+                    None => format!("  {}", tr!("Connected to Jellyfin")),
                 };
                 // The same mark-and-words shape the buttons above use, so the
                 // line reads as belonging with them rather than as a caption
@@ -5804,8 +5818,8 @@ impl App {
         close.set_child(Some(&marked_image(ICON, CORNER_MARK_PX * self.scale.get())));
         close.add_css_class("tp-gear");
         close.set_focus_on_click(false);
-        close.set_tooltip_text(Some("Close the player"));
-        name_it(&close, "Close the player");
+        close.set_tooltip_text(Some(tr!("Close the player").as_ref()));
+        name_it(&close, &tr!("Close the player"));
         {
             let app = self.clone();
             close.connect_clicked(move |_| {
@@ -5858,8 +5872,8 @@ impl App {
         )));
         fullscreen.add_css_class("tp-gear");
         fullscreen.set_focus_on_click(false);
-        fullscreen.set_tooltip_text(Some("Toggle fullscreen"));
-        name_it(&fullscreen, "Toggle fullscreen");
+        fullscreen.set_tooltip_text(Some(tr!("Toggle fullscreen").as_ref()));
+        name_it(&fullscreen, &tr!("Toggle fullscreen"));
         {
             let app = self.clone();
             fullscreen.connect_clicked(move |_| {
@@ -6065,7 +6079,7 @@ impl App {
                 // showing this while the probe runs, so say so rather than
                 // offering an empty list, which reads as "no outputs".
                 if devices.is_empty() && !self.device_scan.get() {
-                    entries.push(("Searching for outputs...".to_string(), None));
+                    entries.push((tr!("Searching for outputs...").into_owned(), None));
                 }
                 for (position, name) in devices.iter().enumerate() {
                     if configured.as_deref() == Some(name.as_str()) {
@@ -6138,7 +6152,7 @@ impl App {
                         current = Some(tracks + position);
                     }
                     entries.push((
-                        format!("Audio File: {}", audio.label),
+                        tr!("Audio File: {name}", name = audio.label).into_owned(),
                         Some(tracks + position),
                     ));
                 }
@@ -6150,7 +6164,10 @@ impl App {
                 match file.as_ref().filter(|_| beside.is_none()) {
                     Some(file) => {
                         current = Some(elsewhere);
-                        entries.push((format!("Audio File: {}", file.label()), Some(elsewhere)));
+                        entries.push((
+                            tr!("Audio File: {name}", name = file.label()).into_owned(),
+                            Some(elsewhere),
+                        ));
                     }
                     None => entries.push(("Browse...".to_string(), Some(elsewhere))),
                 }
@@ -6174,9 +6191,9 @@ impl App {
                 // the list and the value it came from agree.
                 entries.push((
                     if setting == Setting::PrimaryLanguage {
-                        "First track".to_string()
+                        tr!("First track").into_owned()
                     } else {
-                        "Second track".to_string()
+                        tr!("Second track").into_owned()
                     },
                     None,
                 ));
@@ -6282,8 +6299,8 @@ impl App {
             Setting::KodiHandover(index) => {
                 let plays = self.with_kodi(index, |setup| setup.play);
                 current = Some(usize::from(plays));
-                for (position, choice) in HANDOVER.iter().enumerate() {
-                    entries.push((choice.to_string(), Some(position)));
+                for (position, choice) in handover().into_iter().enumerate() {
+                    entries.push((choice.into_owned(), Some(position)));
                 }
             }
         }
@@ -6830,15 +6847,18 @@ impl App {
         // decides it, so the two always agree about what is being chosen.
         let errand = self.errand.get();
         let chooser = gtk::FileChooserNative::new(
-            Some(match errand {
-                Errand::Audio(_) => "Choose an audio file",
-                Errand::Subtitle => "Choose a subtitle file",
-                _ => "Choose a video",
-            }),
+            Some(
+                match errand {
+                    Errand::Audio(_) => tr!("Choose an audio file"),
+                    Errand::Subtitle => tr!("Choose a subtitle file"),
+                    _ => tr!("Choose a video"),
+                }
+                .as_ref(),
+            ),
             Some(&self.window),
             gtk::FileChooserAction::Open,
-            Some("Open"),
-            Some("Cancel"),
+            Some(tr!("Open").as_ref()),
+            Some(tr!("Cancel").as_ref()),
         );
 
         // The pipeline typefinds rather than assuming a container, so this
@@ -6847,13 +6867,13 @@ impl App {
         // which is why "All files" stays available below.
         let filter = gtk::FileFilter::new();
         let (name, extensions) = if errand == Errand::Subtitle {
-            ("Subtitle files", &crate::subtitles::EXTENSIONS[..])
+            (tr!("Subtitle files"), &crate::subtitles::EXTENSIONS[..])
         } else if matches!(errand, Errand::Audio(_)) {
-            ("Audio files", crate::browser::AUDIO_EXTENSIONS)
+            (tr!("Audio files"), crate::browser::AUDIO_EXTENSIONS)
         } else {
-            ("Video files", &crate::browser::VIDEO_EXTENSIONS[..])
+            (tr!("Video files"), &crate::browser::VIDEO_EXTENSIONS[..])
         };
-        filter.set_name(Some(name));
+        filter.set_name(Some(name.as_ref()));
         for extension in extensions {
             // Case-insensitive by hand: GTK's pattern matching is not, and
             // ".MKV" off a camera or an old disc is common enough to matter.
@@ -6864,7 +6884,7 @@ impl App {
         open_at(&chooser, start);
 
         let all = gtk::FileFilter::new();
-        all.set_name(Some("All files"));
+        all.set_name(Some(tr!("All files").as_ref()));
         all.add_pattern("*");
         chooser.add_filter(&all);
 
@@ -7262,16 +7282,19 @@ impl App {
                 .unwrap_or_else(|| text.to_string())
         };
 
-        let mut message = format!(
-            "Couldn't open:\n{}\n\n{}",
-            readable(&source.uri()),
-            readable(error)
-        );
+        let mut message = tr!(
+            "Couldn't open:\n{source}\n\n{reason}",
+            source = readable(&source.uri()),
+            reason = readable(error)
+        )
+        .into_owned();
         // Whatever launched us handed over a path or URL this machine could
         // not open, so what helps is knowing which paths and URLs work, rather
         // than anything about the launcher itself.
         if self.external {
-            message.push_str("\n\nSee docs/usage.md for the paths and URLs that can be played.");
+            message.push_str(&tr!(
+                "\n\nSee docs/usage.md for the paths and URLs that can be played."
+            ));
         }
         self.show_error(&message, fatal);
     }
@@ -7418,7 +7441,7 @@ impl App {
 
         let blurb = gtk::Label::builder()
             .label(
-                "Enter an address to a video file, such as a link from a media server, a local file path, or a network path.",
+                tr!("Enter an address to a video file, such as a link from a media server, a local file path, or a network path.").as_ref(),
             )
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::WordChar)
@@ -7893,7 +7916,7 @@ impl App {
         // line of text on a button and should not outweigh it.
         let browse_icon = RowIcon::Folder.image_at(BUTTON_FOLDER_PX, self.scale.get());
         browse_face.append(&browse_icon);
-        browse_face.append(&gtk::Label::new(Some("Open System Browser")));
+        browse_face.append(&gtk::Label::new(Some(tr!("Open System Browser").as_ref())));
         let browse = gtk::Button::builder().child(&browse_face).build();
         browse.add_css_class("tp-button");
         browse.add_css_class("tp-secondary");
@@ -8427,7 +8450,7 @@ impl App {
         // windows rather than one panel changing what it says.
         page.set_size_request((ALIGN_PANEL_MIN * self.scale.get()).round() as i32, -1);
 
-        let heading = heading_label("Sync Audio");
+        let heading = heading_label(&tr!("Sync Audio"));
         heading.set_halign(gtk::Align::Center);
         page.append(&heading);
 
@@ -8473,7 +8496,7 @@ impl App {
         );
 
         let (scroller, list) = scrolling_list();
-        name_it(&list, "Reference track");
+        name_it(&list, &tr!("Reference track"));
         // Only as tall as the tracks need, up to a few rows. A list left to
         // expand makes the panel the height of the window whether it holds one
         // track or twelve, which is the opposite of what a short question wants.
@@ -8568,8 +8591,9 @@ impl App {
             }
         };
 
-        let page =
-            self.align_page("Analyzing audio to align the tracks. This may take a few moments.");
+        let page = self.align_page(&tr!(
+            "Analyzing audio to align the tracks. This may take a few moments."
+        ));
 
         let bar = gtk::ProgressBar::new();
         bar.add_css_class("tp-align-bar");
@@ -8669,20 +8693,25 @@ impl App {
             Verdict::Offset { millis, .. } => {
                 self.apply_alignment(role, millis);
                 let rounded = millis.round();
+                // The number is rounded before it is handed over rather than
+                // inside the placeholder: `fill` substitutes by name and has
+                // no format specifiers, so `{ms:.0}` would reach the screen
+                // written out.
                 let shift = if rounded > 0.0 {
-                    format!(
-                        "The audio file runs {rounded:.0}ms late, and has been adjusted to \
-                         sync with the video."
+                    tr!(
+                        "The audio file runs {ms}ms late, and has been adjusted to sync with the video.",
+                        ms = format!("{rounded:.0}")
                     )
+                    .into_owned()
                 } else if rounded < 0.0 {
-                    format!(
-                        "The audio file runs {:.0}ms early, and has been adjusted to sync \
-                         with the video.",
-                        -rounded
+                    tr!(
+                        "The audio file runs {ms}ms early, and has been adjusted to sync with the video.",
+                        ms = format!("{:.0}", -rounded)
                     )
+                    .into_owned()
                 } else {
-                    "The audio file is already in sync with the video, no adjustment needed."
-                        .to_string()
+                    tr!("The audio file is already in sync with the video, no adjustment needed.")
+                        .into_owned()
                 };
                 (shift, false)
             }
@@ -8695,7 +8724,7 @@ impl App {
                 true,
             ),
             Verdict::Unsure => (
-                "The audio file could not be matched with the video.".to_string(),
+                tr!("The audio file could not be matched with the video.").into_owned(),
                 true,
             ),
         };
@@ -8709,7 +8738,7 @@ impl App {
         // Offered only where it could help. Trying another reference track is
         // the answer when the one measured against was a dub and the separate
         // recording was made from the original.
-        let again = gtk::Button::with_label("Try another reference track");
+        let again = gtk::Button::with_label(&tr!("Try another reference track"));
         again.add_css_class("tp-button");
         again.add_css_class("tp-action");
 
@@ -8794,39 +8823,39 @@ impl App {
             Item::InterfaceScale => tr!("Interface Size").into_owned(),
             Item::InterfaceLanguage => tr!("Interface Language").into_owned(),
             Item::Sounds => tr!("Navigation Sounds").into_owned(),
-            Item::StartFullscreen => "Always Start Fullscreen".to_string(),
-            Item::ReadMetadata => "Read Metadata Beside Files".to_string(),
-            Item::ShowBackdrop => "Show Backdrop Artwork".to_string(),
-            Item::ResumeThreshold => "Resume Threshold".to_string(),
-            Item::WatchedThreshold => "Watched Threshold".to_string(),
-            Item::Updates => "Check for updates".to_string(),
+            Item::StartFullscreen => tr!("Always Start Fullscreen").into_owned(),
+            Item::ReadMetadata => tr!("Read Metadata Beside Files").into_owned(),
+            Item::ShowBackdrop => tr!("Show Backdrop Artwork").into_owned(),
+            Item::ResumeThreshold => tr!("Resume Threshold").into_owned(),
+            Item::WatchedThreshold => tr!("Watched Threshold").into_owned(),
+            Item::Updates => tr!("Check for updates").into_owned(),
             Item::UpdateStatus => self.version_label(),
-            Item::ClearData => "Clear Saved Playback Data".to_string(),
-            Item::Device(_) => "Output Device".to_string(),
-            Item::Language(_) => "Preferred Language".to_string(),
-            Item::Description(_) => "Prefer Audio Description".to_string(),
-            Item::Volume(_) => "Volume".to_string(),
-            Item::Sync(_) => "Audio Sync".to_string(),
-            Item::SubtitlePreference => "Subtitle Preference".to_string(),
-            Item::SubtitleSize => "Subtitle Size".to_string(),
-            Item::SubtitleFont => "Subtitle Font".to_string(),
-            Item::KodiType(_) => "Configure As".to_string(),
-            Item::KodiHandover(_) => "When Kodi Opens TinePlayer".to_string(),
-            Item::KodiPermission(_) => "Sandbox Permission".to_string(),
-            Item::KodiNone => "No Kodi installations were found on this system".to_string(),
+            Item::ClearData => tr!("Clear Saved Playback Data").into_owned(),
+            Item::Device(_) => tr!("Output Device").into_owned(),
+            Item::Language(_) => tr!("Preferred Language").into_owned(),
+            Item::Description(_) => tr!("Prefer Audio Description").into_owned(),
+            Item::Volume(_) => tr!("Volume").into_owned(),
+            Item::Sync(_) => tr!("Audio Sync").into_owned(),
+            Item::SubtitlePreference => tr!("Subtitle Preference").into_owned(),
+            Item::SubtitleSize => tr!("Subtitle Size").into_owned(),
+            Item::SubtitleFont => tr!("Subtitle Font").into_owned(),
+            Item::KodiType(_) => tr!("Configure As").into_owned(),
+            Item::KodiHandover(_) => tr!("When Kodi Opens TinePlayer").into_owned(),
+            Item::KodiPermission(_) => tr!("Sandbox Permission").into_owned(),
+            Item::KodiNone => tr!("No Kodi installations were found on this system").into_owned(),
             // Named for what it actually wants. "Add a Kodi Folder" asked for
             // the wrong thing: Kodi's own folder is not where
             // playercorefactory.xml goes, and choosing it lands one level
             // above the folder that is.
-            Item::KodiAdd => "Add User Data Folder".to_string(),
-            Item::JellyfinConnect => "Connect to Jellyfin".to_string(),
+            Item::KodiAdd => tr!("Add User Data Folder").into_owned(),
+            Item::JellyfinConnect => tr!("Connect to Jellyfin").into_owned(),
             Item::JellyfinDisconnect => match self.jellyfin_server_label() {
                 // Named rather than positional, so a translator can put the
                 // server where their own grammar wants it.
                 Some(server) => tr!("Disconnect from {server}", server = server).into_owned(),
                 None => tr!("Disconnect").into_owned(),
             },
-            Item::Notices => "Third-Party Notices".to_string(),
+            Item::Notices => tr!("Third-Party Notices").into_owned(),
         }
     }
 
@@ -8852,12 +8881,12 @@ impl App {
             }
             Item::Language(role) => {
                 let (code, unset) = match role {
-                    Role::Primary => (&config.primary_language, "First track"),
-                    Role::Secondary => (&config.secondary_language, "Second track"),
+                    Role::Primary => (&config.primary_language, tr!("First track")),
+                    Role::Secondary => (&config.secondary_language, tr!("Second track")),
                 };
                 match code {
                     Some(code) => crate::languages::name_for(code),
-                    None => unset.to_string(),
+                    None => unset.into_owned(),
                 }
             }
             Item::InterfaceLanguage => {
@@ -8891,18 +8920,20 @@ impl App {
                     // never set to anything, and saying "Not configured"
                     // invites somebody to try.
                     match setup.confinement.supported() {
-                        false => "Not supported".to_string(),
-                        true => setup.state.describe().to_string(),
+                        false => tr!("Not supported").into_owned(),
+                        true => setup.state.describe().into_owned(),
                     }
                 })
             }
             Item::KodiHandover(index) => {
                 drop(config);
-                self.with_kodi(index, |setup| HANDOVER[usize::from(setup.play)].to_string())
+                self.with_kodi(index, |setup| {
+                    handover()[usize::from(setup.play)].to_string()
+                })
             }
             // Not a claim that it has been granted, which nothing here checks.
             // The row opens the instructions, and this says there are some.
-            Item::KodiPermission(_) => "Action needed".to_string(),
+            Item::KodiPermission(_) => tr!("Action needed").into_owned(),
             Item::UpdateStatus => {
                 drop(config);
                 self.version_status()
@@ -9033,9 +9064,10 @@ impl App {
         // On the same line as the sentence it belongs to, rather than under
         // it: two lines of small print under one row reads as a paragraph.
         text.set_markup(&format!(
-            "{}  <a href=\"{}\">Open user data folder</a>",
+            "{}  <a href=\"{}\">{}</a>",
             glib::markup_escape_text(&sentence),
             glib::markup_escape_text(&gtk::gio::File::for_path(&folder).uri()),
+            glib::markup_escape_text(&tr!("Open user data folder")),
         ));
         // Reported rather than swallowed: a link that does nothing looks like
         // a link that was pressed wrongly.
@@ -9150,20 +9182,27 @@ impl App {
                     .map(|account| account.user_name.clone())
                     .filter(|name| !name.is_empty());
                 match who {
-                    Some(who) => format!("Connected to {} as {who}.", pairing.label()),
-                    None => format!("Connected to {}.", pairing.label()),
+                    Some(who) => tr!(
+                        "Connected to {server} as {who}.",
+                        server = pairing.label(),
+                        who = who
+                    )
+                    .into_owned(),
+                    None => tr!("Connected to {server}.", server = pairing.label()).into_owned(),
                 }
             })
         };
         GroupNote {
             sentence: match self.jellyfin_pane() {
-                JellyfinPane::NotConnected => {
-                    "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet.".to_string()
-                }
-                JellyfinPane::Connected => format!(
-                    "{} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet.",
-                    connected.unwrap_or_default(),
-                ),
+                JellyfinPane::NotConnected => tr!(
+                    "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet."
+                )
+                .into_owned(),
+                JellyfinPane::Connected => tr!(
+                    "{connected} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet.",
+                    connected = connected.unwrap_or_default(),
+                )
+                .into_owned(),
             },
             // Named rather than opened. The folder holds the token, and a
             // settings screen that offers to show somebody their own
@@ -10059,7 +10098,11 @@ impl App {
 
     /// The version this is, on the left of its row.
     fn version_label(&self) -> String {
-        format!("Current Version: v{}", env!("CARGO_PKG_VERSION"))
+        tr!(
+            "Current Version: v{version}",
+            version = env!("CARGO_PKG_VERSION")
+        )
+        .into_owned()
     }
 
     /// What the check made of it, on the right, or nothing while checking is
@@ -10071,13 +10114,12 @@ impl App {
             return String::new();
         }
         match crate::updates::newer(&self.updates.borrow()) {
-            Some((version, _)) => {
-                format!(
-                    "Update available: v{}",
-                    version.trim_start_matches(['v', 'V'])
-                )
-            }
-            None => "Up to date".to_string(),
+            Some((version, _)) => tr!(
+                "Update available: v{version}",
+                version = version.trim_start_matches(['v', 'V'])
+            )
+            .into_owned(),
+            None => tr!("Up to date").into_owned(),
         }
     }
 
@@ -10342,13 +10384,15 @@ impl App {
         // What it is, before what it is made of. Everything else on this page
         // assumes you already know, which is no use to somebody who has
         // inherited the machine it is installed on.
-        body.append(&about_heading("Watch together, in different languages."));
+        body.append(&about_heading(&tr!(
+            "Watch together, in different languages."
+        )));
         body.append(&about_text(
-            "A player that allows people to watch videos together while hearing separate soundtracks.",
+            tr!("A player that allows people to watch videos together while hearing separate soundtracks.").as_ref(),
         ));
 
         body.append(&about_text(
-            "Free software under the MIT License, Copyright (c) 2026 Scott Bounds. You may use, change and pass it on, provided the copyright notice travels with it. It comes with no warranty of any kind.",
+            tr!("Free software under the MIT License, Copyright (c) 2026 Scott Bounds. You may use, change and pass it on, provided the copyright notice travels with it. It comes with no warranty of any kind.").as_ref(),
         ));
         // The domain rather than the repository, and followed rather than
         // only shown. A released binary cannot be edited: if the repository
@@ -10357,7 +10401,7 @@ impl App {
         // also shorter to read from across a room and possible to type from
         // memory, which a full GitHub path is not.
         body.append(&about_link(
-            "Report issues or check for updates at",
+            tr!("Report issues or check for updates at").as_ref(),
             "https://tineplayer.app",
             "tineplayer.app",
         ));
@@ -10365,16 +10409,19 @@ impl App {
         // The attribution without the numbers, which are worth stating exactly
         // and are stated below where they can be read off rather than picked
         // out of a sentence.
-        body.append(&about_heading("Built with"));
+        body.append(&about_heading(&tr!("Built with")));
         body.append(&about_text(
-            "GStreamer and GTK, both free software under the GNU Lesser General Public License.",
+            tr!(
+                "GStreamer and GTK, both free software under the GNU Lesser General Public License."
+            )
+            .as_ref(),
         ));
         // Pointed at the copy in hand rather than at the one on the web. The
         // notices are compiled into the binary and sit one row below this, and
         // the machines this player is built for are televisions where opening
         // a browser is not something a D-pad does well.
         body.append(&about_text(
-            "Also the work of a good many people writing Rust libraries, all attributed under Third-Party Notices below.",
+            tr!("Also the work of a good many people writing Rust libraries, all attributed under Third-Party Notices below.").as_ref(),
         ));
 
         // What a bug report needs, in one place and readable off the screen.
@@ -10384,7 +10431,7 @@ impl App {
         // node this application used to draw its backdrop with looked right on
         // Windows and was all but invisible on a Raspberry Pi, which is a
         // difference nobody can report without being told what to look at.
-        body.append(&about_heading("App Details"));
+        body.append(&about_heading(&tr!("App Details")));
         // One label rather than a line each, so a single drag takes the lot.
         // Every paragraph on this page holds its own selection - GTK gives a
         // label one, and labels do not share - so five lines could be copied
@@ -10417,7 +10464,7 @@ impl App {
         self.window
             .renderer()
             .map(|renderer| renderer.type_().name().to_string())
-            .unwrap_or_else(|| "not yet drawn".to_string())
+            .unwrap_or_else(|| tr!("not yet drawn").into_owned())
     }
 
     /// The notices for everything TinePlayer is built from, in the
@@ -10443,7 +10490,7 @@ impl App {
             .margin_start(px(32.0))
             .margin_end(px(32.0))
             .build();
-        page.append(&heading_label("Third-Party Notices"));
+        page.append(&heading_label(&tr!("Third-Party Notices")));
 
         let body = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -10660,9 +10707,10 @@ impl App {
         if want == Registration::Absent {
             let app = self.clone();
             self.confirm_kodi(
-                "Remove Configuration?",
-                &[&format!(
-                    "TinePlayer will be removed as an external player from {label}."
+                &tr!("Remove Configuration?"),
+                &[&tr!(
+                    "TinePlayer will be removed as an external player from {label}.",
+                    label = label
                 )],
                 Confirm {
                     label: "Remove",
@@ -10705,8 +10753,10 @@ impl App {
 
         let app = self.clone();
         self.confirm_kodi(
-            &format!("Configure {label}?"),
-            &["Are you sure you want to edit this installation's playercorefactory.xml file?"],
+            &tr!("Configure {label}?", label = label),
+            &[&tr!(
+                "Are you sure you want to edit this installation's playercorefactory.xml file?"
+            )],
             Confirm {
                 label: "Configure",
                 destructive: false,
@@ -10770,11 +10820,11 @@ impl App {
         let app = self.clone();
         let refused = userdata.clone();
         self.kodi_notice(
-            "This does not look like Kodi's user data folder",
+            &tr!("This does not look like Kodi's user data folder"),
             &[
                 &userdata.display().to_string(),
-                "A user data folder usually holds guisettings.xml and a Database folder.",
-                "Please choose another folder.",
+                &tr!("A user data folder usually holds guisettings.xml and a Database folder."),
+                &tr!("Please choose another folder."),
             ],
             move || app.show_kodi_folder(&refused),
         );
@@ -11162,13 +11212,13 @@ impl App {
         // what to look for was on the row that opened it, a screen ago - and
         // the wrong answer here is one that fails silently later.
         let prompt = row_note(
-            "Choose Kodi's user data folder - the one holding guisettings.xml.",
+            tr!("Choose Kodi's user data folder - the one holding guisettings.xml.").as_ref(),
             self.scale.get(),
         );
         prompt.set_halign(gtk::Align::Center);
         page.page.append(&prompt);
 
-        let choose = gtk::Button::with_label("Choose This Folder");
+        let choose = gtk::Button::with_label(&tr!("Choose This Folder"));
         choose.add_css_class("tp-button");
         choose.add_css_class("tp-action");
         let buttons = gtk::Box::builder()
@@ -11238,7 +11288,7 @@ impl App {
     /// The system's own folder chooser, for anyone who would rather use it.
     fn choose_kodi_folder_natively(self: &Rc<Self>, start: &std::path::Path) {
         let chooser = gtk::FileChooserNative::new(
-            Some("Choose Kodi's user data folder"),
+            Some(tr!("Choose Kodi's user data folder").as_ref()),
             Some(&self.window),
             gtk::FileChooserAction::SelectFolder,
             Some("Choose"),
@@ -11265,7 +11315,7 @@ impl App {
     /// Something went wrong, said plainly, with a way back to where it was
     /// worth trying from.
     fn show_kodi_error(self: &Rc<Self>, message: &str, back: impl Fn() + 'static) {
-        self.kodi_notice("Configuration Error", &[message], back);
+        self.kodi_notice(&tr!("Configuration Error"), &[message], back);
     }
 
     /// A panel that states something and offers only to be dismissed.
@@ -11392,12 +11442,12 @@ impl App {
         let page = wizard_page(&manual.what);
         page.append(&wizard_text(&manual.why, false));
         if let Some(command) = manual.command {
-            page.append(&wizard_text("Run this once, in a terminal:", false));
+            page.append(&wizard_text(&tr!("Run this once, in a terminal:"), false));
             page.append(&wizard_text(command, true));
         }
         page.append(&wizard_text(&manual.cost, false));
         if let Some(undo) = manual.undo {
-            page.append(&wizard_text("To undo it:", false));
+            page.append(&wizard_text(&tr!("To undo it:"), false));
             page.append(&wizard_text(undo, true));
         }
 
@@ -11493,7 +11543,7 @@ impl App {
         const BODY_MIN: f64 = 132.0;
 
         let scale = self.scale.get();
-        let page = wizard_page("Connect to Jellyfin");
+        let page = wizard_page(&tr!("Connect to Jellyfin"));
 
         // Both states live in here, which is what gives the panel one height:
         // a spinner and a sentence while it looks, a sentence and a field
@@ -11513,7 +11563,7 @@ impl App {
         spinner.start();
         body.append(&spinner);
 
-        let hint = wizard_text("Looking for a server on this network...", false);
+        let hint = wizard_text(&tr!("Looking for a server on this network..."), false);
         body.append(&hint);
 
         let field = gtk::Entry::new();
@@ -11633,7 +11683,7 @@ impl App {
             field.select_region(0, -1);
             match found.first() {
                 Some(server) => {
-                    hint.set_text(&format!("Found {} on this network.", server.name));
+                    hint.set_text(&tr!("Found {server} on this network.", server = server.name));
                     // Only if nobody has typed since. Overwriting an address
                     // somebody is part way through entering would be the worst
                     // thing this could do with its answer.
@@ -11642,7 +11692,7 @@ impl App {
                     }
                 }
                 None => hint.set_text(
-                    "No server answered on this network. Enter its address, which is also what a server on another network or behind a VPN needs.",
+                    tr!("No server answered on this network. Enter its address, which is also what a server on another network or behind a VPN needs.").as_ref(),
                 ),
             }
             glib::ControlFlow::Break
@@ -11671,7 +11721,7 @@ impl App {
             None => crate::jellyfin::Pairing::new(&address),
         };
         if let Err(e) = crate::jellyfin::save(&pairing) {
-            return self.jellyfin_notice("Could Not Save", &[&e]);
+            return self.jellyfin_notice(&tr!("Could Not Save"), &[&e]);
         }
         *self.jellyfin_pairing.borrow_mut() = Some(pairing);
         self.show_jellyfin_code();
@@ -11714,7 +11764,7 @@ impl App {
         // half of the dialog is Jellyfin's own Quick Connect, and the words on
         // screen match what the viewer is about to go looking for in their
         // Jellyfin app - which is the menu item called Quick Connect.
-        let page = wizard_page("Quick Connect");
+        let page = wizard_page(&tr!("Quick Connect"));
         // Filled in once the server answers. Empty rather than absent, so the
         // panel does not change shape under the eye when the code arrives.
         let code = gtk::Label::new(None);
@@ -11722,7 +11772,7 @@ impl App {
         code.set_selectable(true);
         code.set_can_focus(false);
         page.append(&code);
-        let status = wizard_text("Asking the server for a code...", false);
+        let status = wizard_text(&tr!("Asking the server for a code..."), false);
         page.append(&status);
 
         let cancel = gtk::Button::with_label("Cancel");
@@ -11792,7 +11842,7 @@ impl App {
                 std::thread::sleep(ASK_EVERY);
             }
             let _ = sender.send(QuickConnect::Failed(
-                "Nobody approved the code in time. Ask for another.".to_string(),
+                tr!("Nobody approved the code in time. Ask for another.").into_owned(),
             ));
         });
 
@@ -11825,7 +11875,7 @@ impl App {
                 QuickConnect::Code(shown) => {
                     code.set_text(&shown);
                     status.set_text(
-                        "In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code.",
+                        tr!("In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code.").as_ref(),
                     );
                     glib::ControlFlow::Continue
                 }
@@ -11834,7 +11884,7 @@ impl App {
                     glib::ControlFlow::Break
                 }
                 QuickConnect::Failed(why) => {
-                    app.jellyfin_notice("Could Not Connect", &[&why]);
+                    app.jellyfin_notice(&tr!("Could Not Connect"), &[&why]);
                     glib::ControlFlow::Break
                 }
             }
@@ -11853,7 +11903,7 @@ impl App {
         };
         pairing.account = Some(account);
         if let Err(e) = crate::jellyfin::save(&pairing) {
-            return self.jellyfin_notice("Could Not Save", &[&e]);
+            return self.jellyfin_notice(&tr!("Could Not Save"), &[&e]);
         }
         *self.jellyfin_pairing.borrow_mut() = Some(pairing);
         self.start_jellyfin();
@@ -11871,9 +11921,10 @@ impl App {
 
         let app = self.clone();
         self.confirm_jellyfin(
-            "Disconnect from Jellyfin?",
-            &[&format!(
-                "TinePlayer will no longer appear as a player in {server}."
+            &tr!("Disconnect from Jellyfin?"),
+            &[&tr!(
+                "TinePlayer will no longer appear as a player in {server}.",
+                server = server
             )],
             Confirm {
                 label: "Disconnect",
@@ -11917,10 +11968,10 @@ impl App {
                         eprintln!("Jellyfin was not told about the disconnection: {e}");
                         if app.showing_jellyfin_pane() {
                             app.jellyfin_notice(
-                                "Disconnected Here Only",
+                                &tr!("Disconnected Here Only"),
                                 &[
-                                    "The access token stored on this machine has been removed.",
-                                    "The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there.",
+                                    &tr!("The access token stored on this machine has been removed."),
+                                    &tr!("The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there."),
                                     &e.to_string(),
                                 ],
                             );
@@ -12030,7 +12081,7 @@ impl App {
 
     fn confirm_clear_data(self: &Rc<Self>) {
         let app = self.clone();
-        self.show_confirm("Clear all saved playback data?", "Clear", move || {
+        self.show_confirm(&tr!("Clear all saved playback data?"), "Clear", move || {
             if let Err(e) = crate::config::clear_all_resume() {
                 eprintln!("{e}");
             }
@@ -12713,7 +12764,10 @@ impl App {
                 self.set_nav(None, &[], &[]);
                 *self.screen.borrow_mut() = Screen::Playing;
             }
-            Err(e) => self.show_error(&format!("Couldn't play that file.\n\n{e}"), false),
+            Err(e) => self.show_error(
+                &tr!("Couldn't play that file.\n\n{reason}", reason = e),
+                false,
+            ),
         }
     }
 
@@ -12738,7 +12792,7 @@ impl App {
             .valign(gtk::Align::Center)
             .build();
 
-        page.append(&heading_label("Close the Player?"));
+        page.append(&heading_label(&tr!("Close the Player?")));
 
         let buttons = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -12787,7 +12841,7 @@ impl App {
             .margin_end(48)
             .build();
 
-        page.append(&heading_label("Something went wrong"));
+        page.append(&heading_label(&tr!("Something went wrong")));
 
         // Given the window's width rather than a fixed column: these messages
         // carry paths and URLs, which are long, and wrapping them into a
@@ -14108,11 +14162,14 @@ fn describe_audio_track(track: &AudioTrack) -> String {
 fn describe_lateness(millis: f64) -> String {
     let rounded = millis.round();
     if rounded > 0.0 {
-        format!("Audio {rounded:.0}ms late")
+        // Rounded before it is handed over, not inside the placeholder:
+        // `fill` matches `{name}` exactly and has no format specifiers,
+        // so `{ms:.0}` would have gone to screen as written.
+        tr!("Audio {ms}ms late", ms = format!("{rounded:.0}")).into_owned()
     } else if rounded < 0.0 {
-        format!("Audio {:.0}ms early", -rounded)
+        tr!("Audio {ms}ms early", ms = format!("{:.0}", -rounded)).into_owned()
     } else {
-        "In step".to_string()
+        tr!("In step").into_owned()
     }
 }
 
@@ -14163,9 +14220,10 @@ fn group_header(title: &str, note: Option<&GroupNote>, scale: f64, first: bool) 
         // On the same line as the sentence it belongs to, the way Clear Saved
         // Playback Data offers its own folder.
         text.set_markup(&format!(
-            "{}  <a href=\"{}\">Open File Location</a>",
+            "{}  <a href=\"{}\">{}</a>",
             glib::markup_escape_text(&note.sentence),
             glib::markup_escape_text(&gtk::gio::File::for_path(&folder).uri()),
+            glib::markup_escape_text(&tr!("Open File Location")),
         ));
         // Reported rather than swallowed: a link that does nothing looks like
         // a link that was pressed wrongly.
@@ -14359,8 +14417,8 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
             icon: RowIcon::Folder,
             path: None,
             spoken: match parent.file_name() {
-                Some(name) => format!("Up to {}", name.to_string_lossy()),
-                None => "Up to the list of drives".to_string(),
+                Some(name) => tr!("Up to {folder}", folder = name.to_string_lossy()).into_owned(),
+                None => tr!("Up to the list of drives").into_owned(),
             },
             notice: false,
         });
@@ -14399,10 +14457,10 @@ fn browser_entries(directory: &std::path::Path, mode: Browse) -> Vec<BrowserEntr
     if mode == Browse::Videos && entries.iter().all(|entry| entry.path.is_none()) {
         entries.push(BrowserEntry {
             openable: false,
-            label: "Nothing here".to_string(),
+            label: tr!("Nothing here").into_owned(),
             icon: RowIcon::None,
             path: None,
-            spoken: "Nothing here".to_string(),
+            spoken: tr!("Nothing here").into_owned(),
             notice: true,
         });
     }
