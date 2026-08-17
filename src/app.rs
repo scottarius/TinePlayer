@@ -5210,6 +5210,7 @@ impl App {
             key.add_css_class("tp-fact");
             key.add_css_class("tp-fact-name");
             key.set_xalign(appearance::text_start());
+            key.set_justify(appearance::text_justify());
             key.set_ellipsize(gtk::pango::EllipsizeMode::End);
             key.set_max_width_chars(name_chars);
             line.append(&key);
@@ -5217,6 +5218,7 @@ impl App {
             let reading = gtk::Label::new(Some(&value));
             reading.add_css_class("tp-fact");
             reading.set_xalign(appearance::text_end());
+            reading.set_justify(appearance::text_justify());
             reading.set_ellipsize(gtk::pango::EllipsizeMode::End);
             reading.set_max_width_chars(12);
             // Pushes itself to the far edge. Safe only because the column
@@ -5326,6 +5328,7 @@ impl App {
                     line.add_css_class("tp-fact-name");
                 }
                 line.set_xalign(appearance::text_start());
+                line.set_justify(appearance::text_justify());
                 line.set_yalign(0.0);
                 line.set_wrap(true);
                 line.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -5389,6 +5392,7 @@ impl App {
         let title = gtk::Label::new(Some(&details.title));
         title.add_css_class("tp-film-title");
         title.set_xalign(appearance::text_start());
+        title.set_justify(appearance::text_justify());
         // One line, cut with an ellipsis. A filename with a release tag on it
         // is long and would happily take two - but the rows below sit at a
         // fixed distance from the top, and a title that is sometimes one line
@@ -5454,6 +5458,7 @@ impl App {
             let line = gtk::Label::new(Some(&facts.join("     ")));
             line.add_css_class("tp-film-facts");
             line.set_xalign(appearance::text_start());
+            line.set_justify(appearance::text_justify());
             line.set_ellipsize(gtk::pango::EllipsizeMode::End);
             line.set_margin_top(px(4.0));
             block.push(line.upcast());
@@ -5468,6 +5473,7 @@ impl App {
         let plot = gtk::Label::new(Some(&details.plot));
         plot.add_css_class("tp-film-plot");
         plot.set_xalign(appearance::text_start());
+        plot.set_justify(appearance::text_justify());
         plot.set_yalign(0.0);
         plot.set_wrap(true);
         plot.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -5509,6 +5515,7 @@ impl App {
             let line = gtk::Label::new(None);
             line.add_css_class("tp-fact");
             line.set_xalign(appearance::text_start());
+            line.set_justify(appearance::text_justify());
             // Cut rather than wrapped: a second line here would push the rows
             // down on exactly the files that carry the most languages.
             line.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -6412,6 +6419,7 @@ impl App {
                     // alternatives - so they read as a column under it rather
                     // than as a list that starts somewhere else.
                     entry.set_xalign(appearance::text_end());
+                    entry.set_justify(appearance::text_justify());
                     append_named(&list, &entry, text);
                 }
                 // Opened on whatever is already in force. Grabbing focus
@@ -6496,7 +6504,7 @@ impl App {
         // `.tp-selector > contents` puts around them. Measured on the child
         // for the reason `aim` gives - the popover itself measures zero.
         let (_, content_width, _, _) = scroller.measure(gtk::Orientation::Horizontal, -1);
-        aim_right(&popover, anchor, content_width + px(SELECTOR_PAD) * 2);
+        aim_at_value(&popover, anchor, content_width + px(SELECTOR_PAD) * 2);
 
         // The arrows belong to the popover while it is up, and to the page
         // again the moment it is not.
@@ -12966,6 +12974,7 @@ fn list_page(
 ) -> (gtk::Box, gtk::ListBox, gtk::Button, gtk::Box) {
     let heading = heading_label(title);
     heading.set_xalign(appearance::text_start());
+    heading.set_justify(appearance::text_justify());
     let page = list_page_with(&heading, show_back, scale);
     // The list carries the page's title, so arriving on one says where you
     // are before it says what row you are on. A reader gives the container's
@@ -13572,6 +13581,7 @@ fn row_note(text: &str, scale: f64) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-row-note");
     label.set_xalign(appearance::text_start());
+    label.set_justify(appearance::text_justify());
     label.set_wrap(true);
     label.set_can_focus(false);
     // Lined up with the name above it, which sits inside the row's own
@@ -13694,6 +13704,7 @@ fn switch_row(label: &str, on: bool) -> (gtk::Box, gtk::Switch) {
 
     let name = gtk::Label::new(Some(label));
     name.set_xalign(appearance::text_start());
+    name.set_justify(appearance::text_justify());
     name.set_hexpand(true);
     row.append(&name);
 
@@ -13741,6 +13752,7 @@ fn slider_row(
     // width of the screen also reads as far more precision than a level has.
     let name = gtk::Label::new(Some(label));
     name.set_xalign(appearance::text_start());
+    name.set_justify(appearance::text_justify());
     name.set_hexpand(true);
     row.append(&name);
 
@@ -13775,6 +13787,7 @@ fn slider_row(
     let value = gtk::Label::new(Some(reading));
     value.add_css_class("tp-value");
     value.set_xalign(appearance::text_end());
+    value.set_justify(appearance::text_justify());
     value.set_width_chars(READING_CHARS);
     row.append(&value);
 
@@ -13906,6 +13919,7 @@ fn about_heading(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-about-heading");
     label.set_xalign(appearance::text_start());
+    label.set_justify(appearance::text_justify());
     label.set_wrap(true);
     label.set_selectable(true);
     label.set_can_focus(false);
@@ -13937,6 +13951,7 @@ fn about_text(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-about");
     label.set_xalign(appearance::text_start());
+    label.set_justify(appearance::text_justify());
     label.set_wrap(true);
     // Selectable so a path or a version can be copied out rather than
     // transcribed, but never focusable: GTK gives a selectable label focus by
@@ -14301,6 +14316,7 @@ fn group_header(title: &str, note: Option<&GroupNote>, scale: f64, first: bool) 
 pub fn group_heading(title: &str, scale: f64, first: bool) -> gtk::Label {
     let heading = gtk::Label::new(Some(title));
     heading.set_xalign(appearance::text_start());
+    heading.set_justify(appearance::text_justify());
     heading.add_css_class("tp-group");
     // Nothing above the first heading. It opens the list rather than dividing
     // it, and the buttons already sit above with room of their own.
@@ -14343,12 +14359,14 @@ fn menu_row(label: &str, value: &str, enabled: bool) -> gtk::Box {
 
     let name = gtk::Label::new(Some(label));
     name.set_xalign(appearance::text_start());
+    name.set_justify(appearance::text_justify());
     row.append(&name);
 
     let value_label = gtk::Label::new(Some(value));
     value_label.add_css_class("tp-value");
     value_label.set_hexpand(true);
     value_label.set_xalign(appearance::text_end());
+    value_label.set_justify(appearance::text_justify());
     value_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     row.append(&value_label);
 
@@ -14609,21 +14627,28 @@ fn browser_row(icon: RowIcon, text: &str, scale: f64) -> gtk::Box {
 
     let label = gtk::Label::new(Some(text));
     label.set_xalign(appearance::text_start());
+    label.set_justify(appearance::text_justify());
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     row.append(&label);
     row
 }
 
-/// Lines a selector's right edge up with the right edge of the row that opened
-/// it, leaving the vertical placement to GTK.
+/// Lines a selector up with the end of the row that opened it - the edge the
+/// row's *value* sits against - leaving the vertical placement to GTK.
 ///
 /// GTK positions a popover by centering it on a rectangle you nominate, in the
-/// parent's coordinates. Here that is a one-pixel sliver at
-/// `row_width - popover_width / 2`, so centering the popover on it lands the
-/// two right edges together. The entries inside are right-aligned because they
-/// are alternatives to the value on the right of the row, and a centered
-/// popover would sit just left of it - close enough to read as a mistake
-/// rather than a margin.
+/// parent's coordinates. Here that is a one-pixel sliver half a popover's
+/// width in from the value's edge, so centering the popover on it lands the
+/// two edges together. The entries inside are aligned the same way, because
+/// they are alternatives to that value, and a centered popover would sit just
+/// off it - close enough to read as a mistake rather than a margin.
+///
+/// **Widget coordinates do not mirror**, whatever the text direction: x is
+/// measured from the left in every language, so the sliver has to be put on
+/// the other side by hand. Missing that left the chooser opening over the
+/// row's *name* in a right-to-left layout rather than over its value - the one
+/// thing the direction audit did not catch, because it is arithmetic rather
+/// than an alignment or a stylesheet rule.
 ///
 /// The rectangle spans the row's full height, which is GTK's own default and
 /// gives its ordinary vertical behaviour: below the row when there is room,
@@ -14643,11 +14668,14 @@ fn browser_row(icon: RowIcon, text: &str, scale: f64) -> gtk::Box {
 /// it as a child answers zero however wide it will actually open. That zero is
 /// what left an earlier attempt at this centered. The number has to come from
 /// what is inside it, plus the padding the stylesheet puts around that.
-fn aim_right(popover: &gtk::Popover, anchor: &gtk::ListBoxRow, width: i32) {
+fn aim_at_value(popover: &gtk::Popover, anchor: &gtk::ListBoxRow, width: i32) {
     if width <= 0 || anchor.width() <= 0 {
         return;
     }
-    let center = anchor.width() - width / 2;
+    let center = match appearance::rtl() {
+        true => width / 2,
+        false => anchor.width() - width / 2,
+    };
     popover.set_pointing_to(Some(&gdk::Rectangle::new(center, 0, 1, anchor.height())));
 }
 
@@ -14655,6 +14683,7 @@ fn chooser_row(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-row");
     label.set_xalign(appearance::text_start());
+    label.set_justify(appearance::text_justify());
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label
 }
@@ -14725,6 +14754,17 @@ fn default_window_size(
 /// makes re-scaling on a different monitor possible.
 fn install_styles() -> gtk::CssProvider {
     let provider = gtk::CssProvider::new();
+
+    // **A rejected declaration is discarded in silence.** GTK keeps parsing,
+    // the property falls back to its default, and the only trace is a line in
+    // the log nobody is reading - which is how `circle at 14pxpx` shipped,
+    // taking the badge dot out in *both* directions while looking like a
+    // styling decision. Saying so on stderr costs nothing and turns "the dot
+    // is missing" into a sentence naming the line.
+    provider.connect_parsing_error(|_, section, error| {
+        eprintln!("Stylesheet rejected at {}: {error}", section.to_str());
+    });
+
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
@@ -15567,7 +15607,7 @@ fn style_css(scale: f64) -> String {
                 {highlight} 0, {highlight} {badge_r}px, transparent {badge_r}px);
         }}
         .tp-badge-row {{
-            background-image: radial-gradient(circle at {badge_left}px 50%,
+            background-image: radial-gradient(circle at {badge_left} 50%,
                 {highlight} 0, {highlight} {badge_r}px, transparent {badge_r}px);
             padding-{start}: {badge_indent}px;
         }}
@@ -15576,7 +15616,7 @@ fn style_css(scale: f64) -> String {
            one moment it matters most - the row is selected the instant it is
            reached. */
         .tp-menu > row.tp-badge-row:selected {{
-            background-image: radial-gradient(circle at {badge_left}px 50%,
+            background-image: radial-gradient(circle at {badge_left} 50%,
                 {on_highlight} 0, {on_highlight} {badge_r}px, transparent {badge_r}px);
         }}
         .tp-gear {{ padding: {pad_v}px {pad_h}px; }}

@@ -81,6 +81,22 @@ include!(concat!(env!("OUT_DIR"), "/catalogs.rs"));
 /// somebody is checking a layout.
 pub const PSEUDO: &str = "x-pseudo";
 
+/// The same, laid out right to left.
+///
+/// **The only way to see the mirrored interface.** Direction follows the
+/// language that is actually in force, and rightly so - an interface still
+/// showing English words should not be mirrored just because somebody asked
+/// for a language TinePlayer has no catalog for. The consequence is that
+/// until an Arabic or Hebrew translation exists there is nothing to set, and
+/// the whole right-to-left pass would ship having never been looked at.
+///
+/// So this exists to be looked at: the same padded, bracketed text, drawn the
+/// other way round. What it proves is the layout - that labels sit against
+/// the edge the line starts at, that indents and badges are on the correct
+/// side, that nothing was pinned left by hand. What it cannot prove is the
+/// shaping of a real right-to-left script, which needs a real catalog.
+pub const PSEUDO_RTL: &str = "x-pseudo-rtl";
+
 /// The language the source is written in. Its strings are the msgids, so it
 /// needs no catalog and never gets one.
 const SOURCE_LANGUAGE: &str = "en";
@@ -101,7 +117,10 @@ enum Active {
     Compiled(&'static Catalog),
     /// Read from disk at startup, for somebody translating.
     Loaded(Loaded),
-    Pseudo,
+    /// The stand-in language, in one of its two directions.
+    Pseudo {
+        rtl: bool,
+    },
 }
 
 /// A catalog read from a `.po` at run time rather than compiled in.
@@ -221,7 +240,7 @@ fn resolve(preference: Option<&str>) -> Active {
 
     match choose(wanted, CATALOGS) {
         Choice::Untranslated => Active::Untranslated,
-        Choice::Pseudo => Active::Pseudo,
+        Choice::Pseudo { rtl } => Active::Pseudo { rtl },
         Choice::Catalog(catalog) => Active::Compiled(catalog),
     }
 }
@@ -234,7 +253,7 @@ fn resolve(preference: Option<&str>) -> Active {
 enum Choice<'a> {
     Untranslated,
     Catalog(&'a Catalog),
-    Pseudo,
+    Pseudo { rtl: bool },
 }
 
 fn choose<'a>(wanted: Option<&str>, catalogs: &'a [Catalog]) -> Choice<'a> {
@@ -243,7 +262,10 @@ fn choose<'a>(wanted: Option<&str>, catalogs: &'a [Catalog]) -> Choice<'a> {
     };
 
     if wanted == PSEUDO {
-        return Choice::Pseudo;
+        return Choice::Pseudo { rtl: false };
+    }
+    if wanted == PSEUDO_RTL {
+        return Choice::Pseudo { rtl: true };
     }
 
     // English is the source language, so asking for it means asking for no
@@ -353,7 +375,7 @@ fn load(path: &std::path::Path) -> Result<Loaded, String> {
 pub fn translate(msgid: &'static str) -> Cow<'static, str> {
     match active() {
         Active::Untranslated => Cow::Borrowed(msgid),
-        Active::Pseudo => Cow::Owned(pseudo(msgid)),
+        Active::Pseudo { rtl } => Cow::Owned(pseudo(msgid, *rtl)),
         Active::Compiled(catalog) => match catalog.singular.binary_search_by_key(&msgid, |e| e.0) {
             Ok(at) => Cow::Borrowed(catalog.singular[at].1),
             Err(_) => Cow::Borrowed(msgid),
@@ -373,7 +395,7 @@ pub fn translate(msgid: &'static str) -> Cow<'static, str> {
 pub fn translate_in_context(context: &'static str, msgid: &'static str) -> Cow<'static, str> {
     match active() {
         Active::Untranslated => Cow::Borrowed(msgid),
-        Active::Pseudo => Cow::Owned(pseudo(msgid)),
+        Active::Pseudo { rtl } => Cow::Owned(pseudo(msgid, *rtl)),
         Active::Compiled(catalog) => {
             match catalog
                 .singular
@@ -404,10 +426,13 @@ pub fn translate_plural(one: &'static str, many: &'static str, count: u64) -> Co
 
     match active() {
         Active::Untranslated => untranslated(),
-        Active::Pseudo => Cow::Owned(pseudo(match count == 1 {
-            true => one,
-            false => many,
-        })),
+        Active::Pseudo { rtl } => Cow::Owned(pseudo(
+            match count == 1 {
+                true => one,
+                false => many,
+            },
+            *rtl,
+        )),
         Active::Compiled(catalog) => match catalog.plural.binary_search_by_key(&one, |e| e.0) {
             Ok(at) => {
                 let forms = catalog.plural[at].1;
@@ -537,8 +562,22 @@ pub fn fill(template: Cow<'static, str>, values: &[(&str, String)]) -> Cow<'stat
 /// Holes are left exactly as they are. Accenting the inside of `{time}` would
 /// stop it matching what [`fill`] is looking for, and every value would vanish
 /// from the screen at once.
-fn pseudo(text: &str) -> String {
+fn pseudo(text: &str, rtl: bool) -> String {
     let mut out = String::with_capacity(text.len() * 2);
+    // A zero-width strong right-to-left character, first, so the paragraph is
+    // laid out right to left.
+    //
+    // **Without it the mirroring is invisible in the text.** Pango takes a
+    // paragraph's base direction from its first strong directional character,
+    // and this stand-in is Latin, which is strongly left-to-right. So the
+    // containers mirrored correctly while every line of text stayed against
+    // the left edge - which reads as "the right-to-left pass does not work"
+    // and is really "the sample text is not right-to-left". A real Arabic or
+    // Hebrew catalog never has this problem; a Latin stand-in for one always
+    // does.
+    if rtl {
+        out.push('\u{200F}');
+    }
     out.push('[');
 
     let mut letters = 0;
@@ -633,7 +672,8 @@ fn accent(character: char) -> char {
 pub fn code() -> &'static str {
     match active() {
         Active::Untranslated => SOURCE_LANGUAGE,
-        Active::Pseudo => PSEUDO,
+        Active::Pseudo { rtl: false } => PSEUDO,
+        Active::Pseudo { rtl: true } => PSEUDO_RTL,
         Active::Compiled(catalog) => catalog.code,
         Active::Loaded(loaded) => loaded.code.as_str(),
     }
@@ -650,7 +690,11 @@ pub fn code() -> &'static str {
 /// answers this question the same way, and the list of right-to-left languages
 /// somebody might translate a media player into is short and does not move.
 pub fn is_rtl() -> bool {
-    is_rtl_tag(code())
+    match active() {
+        // Not a language, so the table below has nothing to say about it.
+        Active::Pseudo { rtl } => *rtl,
+        _ => is_rtl_tag(code()),
+    }
 }
 
 /// Whether a given locale tag is right-to-left, by language rather than by
@@ -725,6 +769,10 @@ pub fn offered() -> Vec<Offered> {
         offered.push(Offered {
             code: Some(PSEUDO.to_string()),
             label: "Pseudo-locale (layout testing)".to_string(),
+        });
+        offered.push(Offered {
+            code: Some(PSEUDO_RTL.to_string()),
+            label: "Pseudo-locale, right to left".to_string(),
         });
     }
 
@@ -853,7 +901,8 @@ mod tests {
     fn chose(wanted: Option<&str>, catalogs: &[Catalog]) -> String {
         match choose(wanted, catalogs) {
             Choice::Untranslated => SOURCE_LANGUAGE.to_string(),
-            Choice::Pseudo => PSEUDO.to_string(),
+            Choice::Pseudo { rtl: false } => PSEUDO.to_string(),
+            Choice::Pseudo { rtl: true } => PSEUDO_RTL.to_string(),
             Choice::Catalog(catalog) => catalog.code.to_string(),
         }
     }
@@ -913,6 +962,30 @@ mod tests {
     #[test]
     fn the_pseudo_locale_is_reachable_by_name() {
         assert_eq!(chose(Some(PSEUDO), &[]), PSEUDO);
+        assert_eq!(chose(Some(PSEUDO_RTL), &[]), PSEUDO_RTL);
+    }
+
+    /// The two pseudo-locales differ in direction and in nothing else.
+    ///
+    /// Worth pinning because the right-to-left one is the only way anybody can
+    /// look at the mirrored layout at all: direction follows the language in
+    /// force, and until there is an Arabic or Hebrew catalog there is no
+    /// language to put in force. Break this and the whole right-to-left pass
+    /// silently becomes untestable again.
+    #[test]
+    fn the_two_pseudo_locales_differ_only_in_direction() {
+        assert!(!is_rtl_tag(PSEUDO));
+        // The direction of the right-to-left one cannot come from the table -
+        // `x-pseudo-rtl` is not a language and its first subtag is `x`. It is
+        // carried on the resolved value instead, which is what `is_rtl` reads.
+        assert!(!is_rtl_tag(PSEUDO_RTL));
+
+        for wanted in [PSEUDO, PSEUDO_RTL] {
+            match choose(Some(wanted), &[]) {
+                Choice::Pseudo { rtl } => assert_eq!(rtl, wanted == PSEUDO_RTL),
+                _ => panic!("{wanted} did not resolve to the pseudo-locale"),
+            }
+        }
     }
 
     // -- filling in holes ---------------------------------------------------
@@ -990,7 +1063,7 @@ mod tests {
 
     #[test]
     fn the_pseudo_locale_pads_and_brackets() {
-        let padded = pseudo("Interface Size");
+        let padded = pseudo("Interface Size", false);
         assert!(padded.starts_with('['), "{padded}");
         assert!(padded.ends_with(']'), "{padded}");
         assert!(
@@ -999,11 +1072,30 @@ mod tests {
         );
     }
 
+    /// The right-to-left stand-in has to begin with a strong right-to-left
+    /// character, or the mirroring is invisible in every line of text.
+    ///
+    /// Pango takes a paragraph's direction from its first strong directional
+    /// character, and everything else in this stand-in is Latin. Without the
+    /// mark the boxes mirror and the words do not, which reads as the
+    /// right-to-left work being broken when it is the sample that is wrong.
+    #[test]
+    fn the_right_to_left_stand_in_says_which_way_it_reads() {
+        let ltr = pseudo("Interface Size", false);
+        let rtl = pseudo("Interface Size", true);
+
+        assert!(!ltr.starts_with('\u{200F}'), "{ltr}");
+        assert!(rtl.starts_with('\u{200F}'), "{rtl}");
+        // The mark is the only difference. Anything else would mean the two
+        // are testing different layouts as well as different directions.
+        assert_eq!(rtl.trim_start_matches('\u{200F}'), ltr);
+    }
+
     #[test]
     fn the_pseudo_locale_leaves_holes_alone() {
         // If it accented the inside of a hole, `fill` would stop matching it
         // and every value in the interface would disappear at once.
-        let padded = pseudo("Resume at {time}");
+        let padded = pseudo("Resume at {time}", false);
         assert!(padded.contains("{time}"), "{padded}");
         let filled = fill(Cow::Owned(padded), &[("time", "1:04".to_string())]);
         assert!(filled.contains("1:04"), "{filled}");

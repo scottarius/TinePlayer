@@ -354,6 +354,7 @@ fn reading_label(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-hint");
     label.set_xalign(crate::appearance::text_end());
+    label.set_justify(crate::appearance::text_justify());
     label.set_width_chars(crate::app::READING_CHARS);
     label
 }
@@ -368,6 +369,7 @@ fn subtitle_row(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-subtitle-row");
     label.set_xalign(crate::appearance::text_start());
+    label.set_justify(crate::appearance::text_justify());
     label.set_max_width_chars(SUBTITLE_CHARS);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_focusable(true);

@@ -134,33 +134,54 @@ pub fn force_dark() {
 /// is called before the first window in practice, but a stylesheet built one
 /// line too early would be a crash rather than a wrong margin, and the tests
 /// below have no GTK at all.
-fn rtl() -> bool {
+pub fn rtl() -> bool {
     gtk::is_initialized() && gtk::Widget::default_direction() == gtk::TextDirection::Rtl
 }
 
 /// Where text sits inside its own box when it should hug the start of the
 /// line: the left edge in English, the right edge in Arabic or Hebrew.
 ///
-/// **`xalign` is absolute and GTK never flips it**, unlike `halign`, where
-/// `Align::Start` already means "wherever the line begins". So every label
-/// that said `set_xalign(0.0)` was pinned to the left in every language, and
-/// a right-to-left interface came out with its text against the wrong edge
-/// while its boxes were correctly mirrored - which reads as ragged rather
-/// than as a bug, and is the sort of thing only somebody who reads the
-/// language notices.
+/// **`GtkLabel` mirrors `xalign` itself**, so this is 0.0 in both directions
+/// and the name is the whole of what it adds. The label computes its text
+/// position as `xalign` of the spare width in a left-to-right widget and
+/// `1.0 - xalign` in a right-to-left one, which means 0.0 already reads as
+/// "the edge the line starts at".
+///
+/// **This was got wrong first**, and the way it failed is worth keeping. The
+/// pass that made the interface right-to-left assumed `xalign` was absolute
+/// and flipped it here, so every bare label was flipped twice and came out on
+/// the left in a mirrored interface. It looked exactly like the direction work
+/// having no effect, which sent the search everywhere except at the one line
+/// that had caused it. What settled it was measuring: a heading 1355px wide
+/// holding 211px of text, with `xalign` reading 1.0, drawn hard against the
+/// left - a combination GTK cannot produce unless it is doing the flip.
+///
+/// Rows built as a box with a name and a value never showed the fault at all:
+/// a `GtkBox` mirrors its children, so those were right whatever `xalign`
+/// said. Only labels standing alone depend on this.
 pub fn text_start() -> f32 {
-    match rtl() {
-        true => 1.0,
-        false => 0.0,
-    }
+    0.0
 }
 
 /// The opposite edge: where a value sits when its name is at the start of the
-/// row. See [`text_start`].
+/// row. Mirrored by the label, exactly as [`text_start`] is.
 pub fn text_end() -> f32 {
+    1.0
+}
+
+/// Which way the lines of a label are justified, in reading order.
+///
+/// **The second alignment property GTK does not mirror**, and the one that
+/// catches you after `xalign` is dealt with. `xalign` places the text block
+/// inside the label's allocation; `justify` places each *line* inside that
+/// block, defaults to `Left`, and stays `Left` in a right-to-left interface.
+/// A single-line label never shows the difference, which is why this is easy
+/// to miss - it appears only where a label wraps, and then only as text
+/// hugging the wrong edge inside a box that mirrored correctly.
+pub fn text_justify() -> gtk::Justification {
     match rtl() {
-        true => 0.0,
-        false => 1.0,
+        true => gtk::Justification::Right,
+        false => gtk::Justification::Left,
     }
 }
 
