@@ -353,7 +353,7 @@ const SYNC_STEP: f64 = 10.0;
 fn reading_label(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-hint");
-    label.set_xalign(1.0);
+    label.set_xalign(crate::appearance::text_end());
     label.set_width_chars(crate::app::READING_CHARS);
     label
 }
@@ -367,7 +367,7 @@ fn reading_label(text: &str) -> gtk::Label {
 fn subtitle_row(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("tp-subtitle-row");
-    label.set_xalign(0.0);
+    label.set_xalign(crate::appearance::text_start());
     label.set_max_width_chars(SUBTITLE_CHARS);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_focusable(true);
