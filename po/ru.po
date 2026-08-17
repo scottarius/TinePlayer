@@ -83,87 +83,83 @@ msgstr "А также труд множества людей, пишущих б�
 msgid "App Details"
 msgstr "Сведения о программе"
 
-#: src/app.rs:10508
-msgid "not yet drawn"
-msgstr "ещё не отрисовано"
-
-#: src/app.rs:10751
+#: src/app.rs:10754
 msgid "Remove Configuration?"
 msgstr "Удалить настройку?"
 
-#: src/app.rs:10752
+#: src/app.rs:10755
 msgid "TinePlayer will be removed as an external player from {label}."
 msgstr "TinePlayer будет удалён из {label} как внешний проигрыватель."
 
-#: src/app.rs:10797
+#: src/app.rs:10800
 msgid "Configure {label}?"
 msgstr "Настроить {label}?"
 
-#: src/app.rs:10798
+#: src/app.rs:10801
 msgid "Are you sure you want to edit this installation's playercorefactory.xml file?"
 msgstr "Вы действительно хотите изменить файл playercorefactory.xml этой установки?"
 
-#: src/app.rs:10864
+#: src/app.rs:10867
 msgid "This does not look like Kodi's user data folder"
 msgstr "Это не похоже на папку пользовательских данных Kodi"
 
-#: src/app.rs:10867
+#: src/app.rs:10870
 msgid "A user data folder usually holds guisettings.xml and a Database folder."
 msgstr "В папке пользовательских данных обычно есть файл guisettings.xml и папка Database."
 
-#: src/app.rs:10868
+#: src/app.rs:10871
 msgid "Please choose another folder."
 msgstr "Выберите другую папку."
 
-#: src/app.rs:11256
+#: src/app.rs:11259
 msgid "Choose Kodi's user data folder - the one holding guisettings.xml."
 msgstr "Выберите папку пользовательских данных Kodi — ту, в которой лежит guisettings.xml."
 
-#: src/app.rs:11262
+#: src/app.rs:11265
 msgid "Choose This Folder"
 msgstr "Выбрать эту папку"
 
-#: src/app.rs:11332
+#: src/app.rs:11335
 msgid "Choose Kodi's user data folder"
 msgstr "Выберите папку пользовательских данных Kodi"
 
-#: src/app.rs:11359
+#: src/app.rs:11362
 msgid "Configuration Error"
 msgstr "Ошибка настройки"
 
-#: src/app.rs:11376 src/app.rs:12059
+#: src/app.rs:11379 src/app.rs:12065
 msgid "OK"
 msgstr "OK"
 
-#: src/app.rs:11486
+#: src/app.rs:11489
 msgid "Run this once, in a terminal:"
 msgstr "Выполните это один раз в терминале:"
 
-#: src/app.rs:11491
+#: src/app.rs:11494
 msgid "To undo it:"
 msgstr "Чтобы отменить:"
 
-#: src/app.rs:11495
+#: src/app.rs:11498
 msgid "Done"
 msgstr "Готово"
 
-#: src/app.rs:11607
+#: src/app.rs:11610
 msgid "Looking for a server on this network..."
 msgstr "Поиск сервера в этой сети..."
 
-#: src/app.rs:11637
+#: src/app.rs:11640
 msgid "Connect"
 msgstr "Подключиться"
 
-#: src/app.rs:11727
+#: src/app.rs:11730
 msgid "Found {server} on this network."
 msgstr "В этой сети найден {server}."
 
-#: src/app.rs:11736
-msgid "No server answered on this network. Enter its address, which is also what a server on another network or behind a VPN needs."
-msgstr "В этой сети сервер не ответил. Введите его адрес — он же нужен для сервера в другой сети или за VPN."
+#: src/app.rs:11739
+msgid "No server answered on this network. Enter an address manually."
+msgstr "В этой сети сервер не ответил. Введите адрес вручную."
 
-#: src/app.rs:11765 src/app.rs:11955
+#: src/app.rs:11768 src/app.rs:11961
 msgid "Could Not Save"
 msgstr "Не удалось сохранить"
 
@@ -172,34 +168,37 @@ msgstr "Не удалось сохранить"
 #. translating it afresh - this text sends somebody to find it in their own
 #. Jellyfin app, and a different wording sends them looking for something
 #. that is not there.
-#: src/app.rs:11813
+#: src/app.rs:11816
 msgid "Quick Connect"
 msgstr "Быстрое подключение"
-
-#: src/app.rs:11821
-msgid "Asking the server for a code..."
-msgstr "Запрос кода у сервера..."
-
-#: src/app.rs:11891
-msgid "Nobody approved the code in time. Ask for another."
-msgstr "Код никто не подтвердил вовремя. Запросите новый."
 
 #. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
 #. Jellyfin's translation into your language calls it, rather than
 #. translating it afresh.
-#: src/app.rs:11927
+#: src/app.rs:11827
+msgid "Obtaining Quick Connect code..."
+msgstr "Получение кода быстрого подключения..."
+
+#: src/app.rs:11897
+msgid "The code was not approved in time."
+msgstr "Код не был подтверждён вовремя."
+
+#. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
+#. Jellyfin's translation into your language calls it, rather than
+#. translating it afresh.
+#: src/app.rs:11933
 msgid "In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code."
 msgstr "В приложении Jellyfin, где вы вошли в учётную запись, откройте «Быстрое подключение» в меню пользователя и введите этот код."
 
-#: src/app.rs:11936
+#: src/app.rs:11942
 msgid "Could Not Connect"
 msgstr "Не удалось подключиться"
 
-#: src/app.rs:11973
+#: src/app.rs:11979
 msgid "Disconnect from Jellyfin?"
 msgstr "Отключиться от Jellyfin?"
 
-#: src/app.rs:11974
+#: src/app.rs:11980
 msgid "TinePlayer will no longer appear as a player in {server}."
 msgstr "TinePlayer больше не будет отображаться как проигрыватель в {server}."
 
@@ -207,33 +206,33 @@ msgstr "TinePlayer больше не будет отображаться как 
 msgid "Show Track Selection Menu"
 msgstr "Показывать меню выбора дорожек"
 
-#: src/app.rs:12020
+#: src/app.rs:12026
 msgid "Disconnected Here Only"
 msgstr "Отключено только здесь"
 
-#: src/app.rs:12022
+#: src/app.rs:12028
 msgid "The access token stored on this machine has been removed."
 msgstr "Токен доступа, хранившийся на этом компьютере, удалён."
 
 #. "Devices" is the name of a page in Jellyfin's own dashboard. Use whatever
 #. Jellyfin's translation calls that page.
-#: src/app.rs:12025
-msgid "The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there."
-msgstr "Сервер оказался недоступен, поэтому это устройство всё ещё числится в списке, а токен продолжает работать. Удалите TinePlayer в разделе «Устройства» панели управления Jellyfin, чтобы завершить подключение и там."
+#: src/app.rs:12031
+msgid "The server could not be reached. Remove TinePlayer under Devices in the Jellyfin dashboard to revoke access."
+msgstr "Сервер недоступен. Удалите TinePlayer в разделе «Устройства» панели управления Jellyfin, чтобы отозвать доступ."
 
 #: src/app.rs:121
 msgid "Play Video Immediately"
 msgstr "Сразу воспроизводить видео"
 
-#: src/app.rs:12136
+#: src/app.rs:12142
 msgid "Clear all saved playback data?"
 msgstr "Удалить все сохранённые данные воспроизведения?"
 
-#: src/app.rs:12137
+#: src/app.rs:12143
 msgid "Clear"
 msgstr "Очистить"
 
-#: src/app.rs:12823
+#: src/app.rs:12829
 msgid ""
 "Couldn't play that file.\n"
 "\n"
@@ -243,43 +242,43 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app.rs:12850
+#: src/app.rs:12856
 msgid "Close the Player?"
 msgstr "Закрыть проигрыватель?"
 
-#: src/app.rs:12899
+#: src/app.rs:12905
 msgid "Something went wrong"
 msgstr "Что-то пошло не так"
 
-#: src/app.rs:12921 src/app.rs:13601 src/controls.rs:965
+#: src/app.rs:12927 src/app.rs:13607 src/controls.rs:965
 msgid "Back"
 msgstr "Назад"
 
-#: src/app.rs:14223
+#: src/app.rs:14229
 msgid "Audio {ms}ms late"
 msgstr "Звук отстаёт на {ms} мс"
 
-#: src/app.rs:14225
+#: src/app.rs:14231
 msgid "Audio {ms}ms early"
 msgstr "Звук опережает на {ms} мс"
 
-#: src/app.rs:14227
-msgid "In step"
+#: src/app.rs:14233
+msgid "In sync"
 msgstr "Синхронно"
 
-#: src/app.rs:14281
+#: src/app.rs:14287
 msgid "Open File Location"
 msgstr "Открыть папку с файлом"
 
-#: src/app.rs:14475
+#: src/app.rs:14481
 msgid "Up to {folder}"
 msgstr "Вверх, в {folder}"
 
-#: src/app.rs:14476
+#: src/app.rs:14482
 msgid "Up to the list of drives"
 msgstr "Вверх, к списку дисков"
 
-#: src/app.rs:14515 src/app.rs:14518
+#: src/app.rs:14521 src/app.rs:14524
 msgid "Nothing here"
 msgstr "Здесь пусто"
 
@@ -287,7 +286,7 @@ msgstr "Здесь пусто"
 msgid "Keys and Buttons"
 msgstr "Клавиши и кнопки"
 
-#: src/app.rs:1725 src/app.rs:10583 src/app.rs:12860 src/app.rs:12921
+#: src/app.rs:1725 src/app.rs:10586 src/app.rs:12866 src/app.rs:12927
 msgid "Close"
 msgstr "Закрыть"
 
@@ -408,7 +407,7 @@ msgstr "Обзор..."
 msgid "Enter URL"
 msgstr "Ввести ссылку"
 
-#: src/app.rs:5693 src/app.rs:5698 src/app.rs:8885 src/app.rs:11587
+#: src/app.rs:5693 src/app.rs:5698 src/app.rs:8885 src/app.rs:11590
 msgid "Connect to Jellyfin"
 msgstr "Подключиться к Jellyfin"
 
@@ -420,7 +419,7 @@ msgstr "Подключено к Jellyfin ({server})"
 msgid "Connected to Jellyfin"
 msgstr "Подключено к Jellyfin"
 
-#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11427 src/app.rs:11635 src/app.rs:11824 src/app.rs:12097 src/app.rs:12185 src/app.rs:12858
+#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11430 src/app.rs:11638 src/app.rs:11830 src/app.rs:12103 src/app.rs:12191 src/app.rs:12864
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -554,11 +553,11 @@ msgstr ""
 msgid ""
 "\n"
 "\n"
-"See docs/usage.md for the paths and URLs that can be played."
+"See tineplayer.app/docs/ for the paths and URLs that can be played."
 msgstr ""
 "\n"
 "\n"
-"Список поддерживаемых путей и ссылок см. в docs/usage.md."
+"Список поддерживаемых путей и ссылок см. на tineplayer.app/docs/."
 
 #: src/app.rs:7472
 msgid "Open a URL"
@@ -721,7 +720,7 @@ msgstr "Отключиться от {server}"
 msgid "Disconnect"
 msgstr "Отключиться"
 
-#: src/app.rs:8892 src/app.rs:10534
+#: src/app.rs:8892 src/app.rs:10537
 msgid "Third-Party Notices"
 msgstr "Сторонние компоненты"
 
@@ -770,8 +769,8 @@ msgid "Delete remembered video preferences, track choices, and resume positions.
 msgstr "Удалить сохранённые настройки видео, выбранные дорожки и позиции воспроизведения."
 
 #: src/app.rs:9046
-msgid "This Kodi runs in a sandbox and needs permission before it can start TinePlayer."
-msgstr "Этот Kodi работает в песочнице, и для запуска TinePlayer ему нужно разрешение."
+msgid "This Kodi installation is sandboxed and needs permission to start TinePlayer."
+msgstr "Эта установка Kodi работает в песочнице, и для запуска TinePlayer нужно разрешение."
 
 #: src/app.rs:9054
 msgid "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."

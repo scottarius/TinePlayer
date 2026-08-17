@@ -7327,7 +7327,7 @@ impl App {
         // than anything about the launcher itself.
         if self.external {
             message.push_str(&tr!(
-                "\n\nSee docs/usage.md for the paths and URLs that can be played."
+                "\n\nSee tineplayer.app/docs/ for the paths and URLs that can be played."
             ));
         }
         self.show_error(&message, fatal);
@@ -9043,9 +9043,7 @@ impl App {
                 tr!("Delete remembered video preferences, track choices, and resume positions.")
             }
             Item::KodiPermission(_) => {
-                tr!(
-                    "This Kodi runs in a sandbox and needs permission before it can start TinePlayer."
-                )
+                tr!("This Kodi installation is sandboxed and needs permission to start TinePlayer.")
             }
             // Says which folder, because the obvious guess is the wrong one:
             // Kodi's user data lives apart from Kodi itself, and it does not
@@ -10505,7 +10503,10 @@ impl App {
         self.window
             .renderer()
             .map(|renderer| renderer.type_().name().to_string())
-            .unwrap_or_else(|| tr!("not yet drawn").into_owned())
+            // Not translated: this sits beside the renderer's own
+            // type name, which is a class name rather than words, and
+            // the row exists to be read into a bug report.
+            .unwrap_or_else(|| "not yet drawn".to_string())
     }
 
     /// The notices for everything TinePlayer is built from, in the
@@ -11724,7 +11725,10 @@ impl App {
             field.select_region(0, -1);
             match found.first() {
                 Some(server) => {
-                    hint.set_text(&tr!("Found {server} on this network.", server = server.name));
+                    hint.set_text(&tr!(
+                        "Found {server} on this network.",
+                        server = server.name
+                    ));
                     // Only if nobody has typed since. Overwriting an address
                     // somebody is part way through entering would be the worst
                     // thing this could do with its answer.
@@ -11733,7 +11737,7 @@ impl App {
                     }
                 }
                 None => hint.set_text(
-                    tr!("No server answered on this network. Enter its address, which is also what a server on another network or behind a VPN needs.").as_ref(),
+                    tr!("No server answered on this network. Enter an address manually.").as_ref(),
                 ),
             }
             glib::ControlFlow::Break
@@ -11818,7 +11822,10 @@ impl App {
         code.set_selectable(true);
         code.set_can_focus(false);
         page.append(&code);
-        let status = wizard_text(&tr!("Asking the server for a code..."), false);
+        // TRANSLATORS: "Quick Connect" is Jellyfin's own name for this
+        // feature. Use whatever Jellyfin's translation into your language
+        // calls it, rather than translating it afresh.
+        let status = wizard_text(&tr!("Obtaining Quick Connect code..."), false);
         page.append(&status);
 
         let cancel = gtk::Button::with_label(&tr!("Cancel"));
@@ -11888,7 +11895,7 @@ impl App {
                 std::thread::sleep(ASK_EVERY);
             }
             let _ = sender.send(QuickConnect::Failed(
-                tr!("Nobody approved the code in time. Ask for another.").into_owned(),
+                tr!("The code was not approved in time.").into_owned(),
             ));
         });
 
@@ -12022,7 +12029,7 @@ impl App {
                                     &tr!("The access token stored on this machine has been removed."),
                                     // TRANSLATORS: "Devices" is the name of a page in Jellyfin's own
                                     // dashboard. Use whatever Jellyfin's translation calls that page.
-                                    &tr!("The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there."),
+                                    &tr!("The server could not be reached. Remove TinePlayer under Devices in the Jellyfin dashboard to revoke access."),
                                     &e.to_string(),
                                 ],
                             );
@@ -14224,7 +14231,7 @@ fn describe_lateness(millis: f64) -> String {
     } else if rounded < 0.0 {
         tr!("Audio {ms}ms early", ms = format!("{:.0}", -rounded)).into_owned()
     } else {
-        tr!("In step").into_owned()
+        tr!("In sync").into_owned()
     }
 }
 

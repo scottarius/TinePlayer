@@ -59,87 +59,83 @@ msgstr ""
 msgid "App Details"
 msgstr ""
 
-#: src/app.rs:10508
-msgid "not yet drawn"
-msgstr ""
-
-#: src/app.rs:10751
+#: src/app.rs:10754
 msgid "Remove Configuration?"
 msgstr ""
 
-#: src/app.rs:10752
+#: src/app.rs:10755
 msgid "TinePlayer will be removed as an external player from {label}."
 msgstr ""
 
-#: src/app.rs:10797
+#: src/app.rs:10800
 msgid "Configure {label}?"
 msgstr ""
 
-#: src/app.rs:10798
+#: src/app.rs:10801
 msgid "Are you sure you want to edit this installation's playercorefactory.xml file?"
 msgstr ""
 
-#: src/app.rs:10864
+#: src/app.rs:10867
 msgid "This does not look like Kodi's user data folder"
 msgstr ""
 
-#: src/app.rs:10867
+#: src/app.rs:10870
 msgid "A user data folder usually holds guisettings.xml and a Database folder."
 msgstr ""
 
-#: src/app.rs:10868
+#: src/app.rs:10871
 msgid "Please choose another folder."
 msgstr ""
 
-#: src/app.rs:11256
+#: src/app.rs:11259
 msgid "Choose Kodi's user data folder - the one holding guisettings.xml."
 msgstr ""
 
-#: src/app.rs:11262
+#: src/app.rs:11265
 msgid "Choose This Folder"
 msgstr ""
 
-#: src/app.rs:11332
+#: src/app.rs:11335
 msgid "Choose Kodi's user data folder"
 msgstr ""
 
-#: src/app.rs:11359
+#: src/app.rs:11362
 msgid "Configuration Error"
 msgstr ""
 
-#: src/app.rs:11376 src/app.rs:12059
+#: src/app.rs:11379 src/app.rs:12065
 msgid "OK"
 msgstr ""
 
-#: src/app.rs:11486
+#: src/app.rs:11489
 msgid "Run this once, in a terminal:"
 msgstr ""
 
-#: src/app.rs:11491
+#: src/app.rs:11494
 msgid "To undo it:"
 msgstr ""
 
-#: src/app.rs:11495
+#: src/app.rs:11498
 msgid "Done"
 msgstr ""
 
-#: src/app.rs:11607
+#: src/app.rs:11610
 msgid "Looking for a server on this network..."
 msgstr ""
 
-#: src/app.rs:11637
+#: src/app.rs:11640
 msgid "Connect"
 msgstr ""
 
-#: src/app.rs:11727
+#: src/app.rs:11730
 msgid "Found {server} on this network."
 msgstr ""
 
-#: src/app.rs:11736
-msgid "No server answered on this network. Enter its address, which is also what a server on another network or behind a VPN needs."
+#: src/app.rs:11739
+msgid "No server answered on this network. Enter an address manually."
 msgstr ""
 
-#: src/app.rs:11765 src/app.rs:11955
+#: src/app.rs:11768 src/app.rs:11961
 msgid "Could Not Save"
 msgstr ""
 
@@ -148,34 +144,37 @@ msgstr ""
 #. translating it afresh - this text sends somebody to find it in their own
 #. Jellyfin app, and a different wording sends them looking for something
 #. that is not there.
-#: src/app.rs:11813
+#: src/app.rs:11816
 msgid "Quick Connect"
-msgstr ""
-
-#: src/app.rs:11821
-msgid "Asking the server for a code..."
-msgstr ""
-
-#: src/app.rs:11891
-msgid "Nobody approved the code in time. Ask for another."
 msgstr ""
 
 #. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
 #. Jellyfin's translation into your language calls it, rather than
 #. translating it afresh.
-#: src/app.rs:11927
+#: src/app.rs:11827
+msgid "Obtaining Quick Connect code..."
+msgstr ""
+
+#: src/app.rs:11897
+msgid "The code was not approved in time."
+msgstr ""
+
+#. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
+#. Jellyfin's translation into your language calls it, rather than
+#. translating it afresh.
+#: src/app.rs:11933
 msgid "In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code."
 msgstr ""
 
-#: src/app.rs:11936
+#: src/app.rs:11942
 msgid "Could Not Connect"
 msgstr ""
 
-#: src/app.rs:11973
+#: src/app.rs:11979
 msgid "Disconnect from Jellyfin?"
 msgstr ""
 
-#: src/app.rs:11974
+#: src/app.rs:11980
 msgid "TinePlayer will no longer appear as a player in {server}."
 msgstr ""
 
@@ -183,76 +182,76 @@ msgstr ""
 msgid "Show Track Selection Menu"
 msgstr ""
 
-#: src/app.rs:12020
+#: src/app.rs:12026
 msgid "Disconnected Here Only"
 msgstr ""
 
-#: src/app.rs:12022
+#: src/app.rs:12028
 msgid "The access token stored on this machine has been removed."
 msgstr ""
 
 #. "Devices" is the name of a page in Jellyfin's own dashboard. Use whatever
 #. Jellyfin's translation calls that page.
-#: src/app.rs:12025
-msgid "The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there."
+#: src/app.rs:12031
+msgid "The server could not be reached. Remove TinePlayer under Devices in the Jellyfin dashboard to revoke access."
 msgstr ""
 
 #: src/app.rs:121
 msgid "Play Video Immediately"
 msgstr ""
 
-#: src/app.rs:12136
+#: src/app.rs:12142
 msgid "Clear all saved playback data?"
 msgstr ""
 
-#: src/app.rs:12137
+#: src/app.rs:12143
 msgid "Clear"
 msgstr ""
 
-#: src/app.rs:12823
+#: src/app.rs:12829
 msgid ""
 "Couldn't play that file.\n"
 "\n"
 "{reason}"
 msgstr ""
 
-#: src/app.rs:12850
+#: src/app.rs:12856
 msgid "Close the Player?"
 msgstr ""
 
-#: src/app.rs:12899
+#: src/app.rs:12905
 msgid "Something went wrong"
 msgstr ""
 
-#: src/app.rs:12921 src/app.rs:13601 src/controls.rs:965
+#: src/app.rs:12927 src/app.rs:13607 src/controls.rs:965
 msgid "Back"
 msgstr ""
 
-#: src/app.rs:14223
+#: src/app.rs:14229
 msgid "Audio {ms}ms late"
 msgstr ""
 
-#: src/app.rs:14225
+#: src/app.rs:14231
 msgid "Audio {ms}ms early"
 msgstr ""
 
-#: src/app.rs:14227
-msgid "In step"
+#: src/app.rs:14233
+msgid "In sync"
 msgstr ""
 
-#: src/app.rs:14281
+#: src/app.rs:14287
 msgid "Open File Location"
 msgstr ""
 
-#: src/app.rs:14475
+#: src/app.rs:14481
 msgid "Up to {folder}"
 msgstr ""
 
-#: src/app.rs:14476
+#: src/app.rs:14482
 msgid "Up to the list of drives"
 msgstr ""
 
-#: src/app.rs:14515 src/app.rs:14518
+#: src/app.rs:14521 src/app.rs:14524
 msgid "Nothing here"
 msgstr ""
 
@@ -260,7 +259,7 @@ msgstr ""
 msgid "Keys and Buttons"
 msgstr ""
 
-#: src/app.rs:1725 src/app.rs:10583 src/app.rs:12860 src/app.rs:12921
+#: src/app.rs:1725 src/app.rs:10586 src/app.rs:12866 src/app.rs:12927
 msgid "Close"
 msgstr ""
 
@@ -381,7 +380,7 @@ msgstr ""
 msgid "Enter URL"
 msgstr ""
 
-#: src/app.rs:5693 src/app.rs:5698 src/app.rs:8885 src/app.rs:11587
+#: src/app.rs:5693 src/app.rs:5698 src/app.rs:8885 src/app.rs:11590
 msgid "Connect to Jellyfin"
 msgstr ""
 
@@ -393,7 +392,7 @@ msgstr ""
 msgid "Connected to Jellyfin"
 msgstr ""
 
-#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11427 src/app.rs:11635 src/app.rs:11824 src/app.rs:12097 src/app.rs:12185 src/app.rs:12858
+#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11430 src/app.rs:11638 src/app.rs:11830 src/app.rs:12103 src/app.rs:12191 src/app.rs:12864
 msgid "Cancel"
 msgstr ""
 
@@ -523,7 +522,7 @@ msgstr ""
 msgid ""
 "\n"
 "\n"
-"See docs/usage.md for the paths and URLs that can be played."
+"See tineplayer.app/docs/ for the paths and URLs that can be played."
 msgstr ""
 
 #: src/app.rs:7472
@@ -687,7 +686,7 @@ msgstr ""
 msgid "Disconnect"
 msgstr ""
 
-#: src/app.rs:8892 src/app.rs:10534
+#: src/app.rs:8892 src/app.rs:10537
 msgid "Third-Party Notices"
 msgstr ""
 
@@ -736,7 +735,7 @@ msgid "Delete remembered video preferences, track choices, and resume positions.
 msgstr ""
 
 #: src/app.rs:9046
-msgid "This Kodi runs in a sandbox and needs permission before it can start TinePlayer."
+msgid "This Kodi installation is sandboxed and needs permission to start TinePlayer."
 msgstr ""
 
 #: src/app.rs:9054
