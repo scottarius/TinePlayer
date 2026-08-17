@@ -7,12 +7,20 @@
 # as a translation: the terminology is the part most likely to be wrong, and
 # the places to look first are
 #
-#   - "Tonspur"-equivalents: soundtrack/track/audio track are three different
-#     things in this interface and English blurs them.
-#   - The Kodi and Jellyfin rows, which use those projects' own vocabulary.
-#     Whatever Kodi's own Russian says should win over what is here.
+#   - Soundtrack, track and audio track are three different things in this
+#     interface, and English blurs them.
+#
+#   - The Kodi rows, which use Kodi's own vocabulary - "Player Type", "user
+#     data folder". Whatever Kodi's own Russian says should win over what is
+#     here, and none of it has been checked against Kodi yet.
+#
 #   - The keyboard and gamepad columns on the shortcut page, which are key
 #     caps rather than words in several rows.
+#
+# Jellyfin's terms are the one part already settled: "Quick Connect" as
+# "Быстрое подключение" was confirmed on 2026-08-17 to be what Jellyfin's own
+# Russian uses, so leave it. The rest of the Jellyfin wording has not been
+# checked the same way.
 #
 # Plural-Forms is the standard Russian rule: three forms, and the one for 2-4
 # is not the one for 5+.
