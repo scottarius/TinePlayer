@@ -1,26 +1,20 @@
 # Russian translation for TinePlayer.
 #
-# UNREVIEWED DRAFT - awaiting a native speaker.
+# Reviewed by a native speaker on 2026-08-17, in Poedit, against the whole
+# catalog. It was drafted here first and is no longer a draft.
 #
-# Every string here was written in one pass against the English and has not
-# been checked by anyone who reads Russian. Treat it as a starting point, not
-# as a translation: the terminology is the part most likely to be wrong, and
-# the places to look first are
+# Still worth a second look, none of it blocking:
 #
-#   - Soundtrack, track and audio track are three different things in this
-#     interface, and English blurs them.
+#   - Kodi's own vocabulary - "Player Type", "user data folder", "Additional
+#     Player". These were translated from the English rather than taken from
+#     Kodi's own Russian, so somebody who has set Kodi up in Russian may find
+#     they read as a second vocabulary for the same things.
 #
-#   - The Kodi rows, which use Kodi's own vocabulary - "Player Type", "user
-#     data folder". Whatever Kodi's own Russian says should win over what is
-#     here, and none of it has been checked against Kodi yet.
+#   - The keyboard and gamepad columns on the shortcut page, several of which
+#     are key caps rather than words and are meant to pass through unchanged.
 #
-#   - The keyboard and gamepad columns on the shortcut page, which are key
-#     caps rather than words in several rows.
-#
-# Jellyfin's terms are the one part already settled: "Quick Connect" as
-# "Быстрое подключение" was confirmed on 2026-08-17 to be what Jellyfin's own
-# Russian uses, so leave it. The rest of the Jellyfin wording has not been
-# checked the same way.
+# Jellyfin's terms are settled: "Quick Connect" as "Быстрое подключение" is
+# what Jellyfin's own Russian uses, confirmed 2026-08-17.
 #
 # Plural-Forms is the standard Russian rule: three forms, and the one for 2-4
 # is not the one for 5+.
@@ -29,7 +23,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: TinePlayer\n"
 "Report-Msgid-Bugs-To: https://github.com/scottarius/TinePlayer/issues\n"
-"PO-Revision-Date: 2026-08-17\n"
+"POT-Creation-Date: \n"
+"PO-Revision-Date: 2026-08-17 15:58+0400\n"
 "Last-Translator: unreviewed draft\n"
 "Language-Team: none yet\n"
 "Language: ru\n"
@@ -37,6 +32,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+"X-Generator: Poedit 3.9\n"
 
 #: src/app.rs:10140
 msgid "Current Version: v{version}"
@@ -64,7 +60,7 @@ msgstr "Свободное программное обеспечение по л
 
 #: src/app.rs:10443
 msgid "Report issues or check for updates at"
-msgstr "Сообщить о проблеме или проверить обновления:"
+msgstr "Сообщить о проблеме или проверить обновления"
 
 #: src/app.rs:10451
 msgid "Built with"
@@ -418,7 +414,10 @@ msgstr "Подключено к Jellyfin ({server})"
 msgid "Connected to Jellyfin"
 msgstr "Подключено к Jellyfin"
 
-#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11428 src/app.rs:11636 src/app.rs:11831 src/app.rs:12104 src/app.rs:12192 src/app.rs:12865
+#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641
+#: src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784
+#: src/app.rs:11428 src/app.rs:11636 src/app.rs:11831 src/app.rs:12104
+#: src/app.rs:12192 src/app.rs:12865
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -737,7 +736,7 @@ msgstr "Находить и читать метаданные рядом с ви
 
 #: src/app.rs:9022
 msgid "If backdrop artwork is found, display it behind the video details."
-msgstr "Если найдено фоновое изображение, показывать его за сведениями о видео."
+msgstr "Если найдено фоновое изображение, показывать его позади сведениями о видео."
 
 #: src/app.rs:9025
 msgid "How much of a video should be viewed before offering the choice to resume a previously watched video."
@@ -769,11 +768,11 @@ msgstr "Удалить сохранённые настройки видео, в�
 
 #: src/app.rs:9046
 msgid "This Kodi installation is sandboxed and needs permission to start TinePlayer."
-msgstr "Эта установка Kodi работает в песочнице, и для запуска TinePlayer нужно разрешение."
+msgstr "Эта установка Kodi работает в песочнице, для запуска TinePlayer нужно разрешение."
 
 #: src/app.rs:9052
 msgid "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
-msgstr "Для установки Kodi в нестандартном месте, например переносной. Папка пользовательских данных — та, в которой лежит guisettings.xml, а не та, куда установлен сам Kodi."
+msgstr "Для установки Kodi в нестандартном месте, например на переносном устройстве. Папка пользовательских данных — та, в которой лежит guisettings.xml, а не та, куда установлен сам Kodi."
 
 #. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
 #. Jellyfin's translation into your language calls it, rather than

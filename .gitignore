@@ -18,3 +18,9 @@ packaging/fonts/.sources/
 # imported by its own tests.
 __pycache__/
 *.pyc
+
+# Poedit compiles a .mo beside the .po every time it saves. We do not use one:
+# build.rs reads the .po directly and compiles the catalog into the binary, so
+# a .mo here is a build artifact of somebody's editor rather than anything
+# TinePlayer loads.
+*.mo

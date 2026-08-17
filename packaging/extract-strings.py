@@ -414,7 +414,7 @@ def merge(messages: dict) -> None:
             block = []
             for note in entry.get("notes", []):
                 block += [f"#. {line}" for line in textwrap.wrap(note, 74)]
-            block.append(f"#: {' '.join(entry['places'])}")
+            block += references(entry["places"])
             if context is not None:
                 block.append(f"msgctxt {quote(context)}")
             block.append(f"msgid {quote(msgid)}")
@@ -449,6 +449,23 @@ def merge(messages: dict) -> None:
         path.write_text("\n\n".join(out) + "\n", encoding="utf-8", newline="")
         stale = f", {len(orphans)} obsolete" if orphans else ""
         print(f"{path.relative_to(ROOT)}: {done}/{len(messages)} translated{stale}")
+
+
+def references(places: list[str]) -> list[str]:
+    """`#:` lines, wrapped the way gettext wraps them.
+
+    One long line would be simpler and would fight every PO editor: Poedit
+    rewraps these on save, so the file would flip between two spellings of the
+    same thing each time a translator touched it and this script ran. Matching
+    the convention keeps a diff to what actually changed.
+    """
+    lines: list[str] = []
+    for place in places:
+        if lines and len(lines[-1]) + 1 + len(place) <= 78:
+            lines[-1] += f" {place}"
+        else:
+            lines.append(f"#: {place}")
+    return lines or ["#:"]
 
 
 def quote(text: str) -> str:
@@ -564,7 +581,7 @@ msgstr ""
         block = []
         for note in entry.get("notes", []):
             block += [f"#. {line}" for line in textwrap.wrap(note, 74)]
-        block.append(f"#: {' '.join(entry['places'])}")
+        block += references(entry["places"])
         if context is not None:
             block.append(f"msgctxt {quote(context)}")
         block.append(f"msgid {quote(msgid)}")

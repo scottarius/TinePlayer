@@ -392,7 +392,10 @@ msgstr ""
 msgid "Connected to Jellyfin"
 msgstr ""
 
-#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11428 src/app.rs:11636 src/app.rs:11831 src/app.rs:12104 src/app.rs:12192 src/app.rs:12865
+#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641
+#: src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784
+#: src/app.rs:11428 src/app.rs:11636 src/app.rs:11831 src/app.rs:12104
+#: src/app.rs:12192 src/app.rs:12865
 msgid "Cancel"
 msgstr ""
 
