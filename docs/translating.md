@@ -53,6 +53,15 @@ is why they are named rather than numbered. A translation that drops one or
 misspells it fails the build's own check, so it will be caught, but it is
 quicker to notice now.
 
+**Some strings carry a note.** Anything the catalog knows you will need to
+decide is written above the message as a comment, and Weblate shows it beside
+the string. The commonest is another project's vocabulary: "Quick Connect" is
+Jellyfin's name for a feature, so the right translation is **whatever
+Jellyfin's own translation into your language calls it**, not a fresh one. This
+text sends somebody to go and find that feature in their Jellyfin app, and a
+different wording sends them looking for something that is not there. The same
+goes for Kodi's terms.
+
 **Some strings carry a context.** Where the English is ambiguous, the message
 has a `msgctxt` line saying which sense is meant. `None` appears twice, once
 for an audio output device and once for a list of languages, and several
@@ -116,6 +125,20 @@ python3 packaging/extract-strings.py
 
 That rewrites `po/tineplayer.pot`. Weblate merges it into every catalog by
 itself, so nothing needs running against the `.po` files by hand.
+
+To tell a translator something the string cannot, put a comment above the
+call:
+
+```rust
+// TRANSLATORS: "Quick Connect" is Jellyfin's own name for this feature.
+// Use whatever Jellyfin's translation into your language calls it.
+let page = wizard_page(&tr!("Quick Connect"));
+```
+
+It reaches the catalog as a `#.` comment and Weblate shows it beside the
+message. Worth it for another project's vocabulary, for a string whose
+placement is not obvious from its words, and for anywhere the length is
+constrained.
 
 After a translation lands in a script outside Latin, Greek and Cyrillic:
 

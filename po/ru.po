@@ -31,159 +31,167 @@ msgstr ""
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 
 
-#: src/app.rs:10137
+#: src/app.rs:10142
 msgid "Current Version: v{version}"
 msgstr "Текущая версия: v{version}"
 
-#: src/app.rs:10153
+#: src/app.rs:10158
 msgid "Update available: v{version}"
 msgstr "Доступно обновление: v{version}"
 
-#: src/app.rs:10158
+#: src/app.rs:10163
 msgid "Up to date"
 msgstr "Обновлений нет"
 
-#: src/app.rs:10423
+#: src/app.rs:10428
 msgid "Watch together, hear your own soundtrack"
 msgstr "Смотрите вместе, слушайте свою звуковую дорожку"
 
-#: src/app.rs:10427
+#: src/app.rs:10432
 msgid "A player that allows people to watch videos together while hearing separate soundtracks."
 msgstr "Проигрыватель, который позволяет смотреть видео вместе, слушая при этом разные звуковые дорожки."
 
-#: src/app.rs:10431
+#: src/app.rs:10436
 msgid "Free software under the MIT License, Copyright (c) 2026 Scott Bounds. You may use, change and pass it on, provided the copyright notice travels with it. It comes with no warranty of any kind."
 msgstr "Свободное программное обеспечение по лицензии MIT, Copyright (c) 2026 Scott Bounds. Вы можете использовать, изменять и распространять его при условии, что уведомление об авторском праве передаётся вместе с ним. Поставляется без каких-либо гарантий."
 
-#: src/app.rs:10440
+#: src/app.rs:10445
 msgid "Report issues or check for updates at"
 msgstr "Сообщить о проблеме или проверить обновления:"
 
-#: src/app.rs:10448
+#: src/app.rs:10453
 msgid "Built with"
 msgstr "Создано с использованием"
 
-#: src/app.rs:10450
+#: src/app.rs:10455
 msgid "GStreamer and GTK, both free software under the GNU Lesser General Public License."
 msgstr "GStreamer и GTK — свободное программное обеспечение по лицензии GNU Lesser General Public License."
 
-#: src/app.rs:10460
+#: src/app.rs:10465
 msgid "Also the work of a good many people writing Rust libraries, all attributed under Third-Party Notices below."
 msgstr "А также труд множества людей, пишущих библиотеки для Rust, — все они указаны в разделе «Сторонние компоненты» ниже."
 
-#: src/app.rs:10470
+#: src/app.rs:10475
 msgid "App Details"
 msgstr "Сведения о программе"
 
-#: src/app.rs:10503
+#: src/app.rs:10508
 msgid "not yet drawn"
 msgstr "ещё не отрисовано"
 
-#: src/app.rs:10746
+#: src/app.rs:10751
 msgid "Remove Configuration?"
 msgstr "Удалить настройку?"
 
-#: src/app.rs:10747
+#: src/app.rs:10752
 msgid "TinePlayer will be removed as an external player from {label}."
 msgstr "TinePlayer будет удалён из {label} как внешний проигрыватель."
 
-#: src/app.rs:10792
+#: src/app.rs:10797
 msgid "Configure {label}?"
 msgstr "Настроить {label}?"
 
-#: src/app.rs:10793
+#: src/app.rs:10798
 msgid "Are you sure you want to edit this installation's playercorefactory.xml file?"
 msgstr "Вы действительно хотите изменить файл playercorefactory.xml этой установки?"
 
-#: src/app.rs:10859
+#: src/app.rs:10864
 msgid "This does not look like Kodi's user data folder"
 msgstr "Это не похоже на папку пользовательских данных Kodi"
 
-#: src/app.rs:10862
+#: src/app.rs:10867
 msgid "A user data folder usually holds guisettings.xml and a Database folder."
 msgstr "В папке пользовательских данных обычно есть файл guisettings.xml и папка Database."
 
-#: src/app.rs:10863
+#: src/app.rs:10868
 msgid "Please choose another folder."
 msgstr "Выберите другую папку."
 
-#: src/app.rs:11251
+#: src/app.rs:11256
 msgid "Choose Kodi's user data folder - the one holding guisettings.xml."
 msgstr "Выберите папку пользовательских данных Kodi — ту, в которой лежит guisettings.xml."
 
-#: src/app.rs:11257
+#: src/app.rs:11262
 msgid "Choose This Folder"
 msgstr "Выбрать эту папку"
 
-#: src/app.rs:11327
+#: src/app.rs:11332
 msgid "Choose Kodi's user data folder"
 msgstr "Выберите папку пользовательских данных Kodi"
 
-#: src/app.rs:11354
+#: src/app.rs:11359
 msgid "Configuration Error"
 msgstr "Ошибка настройки"
 
-#: src/app.rs:11371 src/app.rs:12044
+#: src/app.rs:11376 src/app.rs:12059
 msgid "OK"
 msgstr "OK"
 
-#: src/app.rs:11481
+#: src/app.rs:11486
 msgid "Run this once, in a terminal:"
 msgstr "Выполните это один раз в терминале:"
 
-#: src/app.rs:11486
+#: src/app.rs:11491
 msgid "To undo it:"
 msgstr "Чтобы отменить:"
 
-#: src/app.rs:11490
+#: src/app.rs:11495
 msgid "Done"
 msgstr "Готово"
 
-#: src/app.rs:11602
+#: src/app.rs:11607
 msgid "Looking for a server on this network..."
 msgstr "Поиск сервера в этой сети..."
 
-#: src/app.rs:11632
+#: src/app.rs:11637
 msgid "Connect"
 msgstr "Подключиться"
 
-#: src/app.rs:11722
+#: src/app.rs:11727
 msgid "Found {server} on this network."
 msgstr "В этой сети найден {server}."
 
-#: src/app.rs:11731
+#: src/app.rs:11736
 msgid "No server answered on this network. Enter its address, which is also what a server on another network or behind a VPN needs."
 msgstr "В этой сети сервер не ответил. Введите его адрес — он же нужен для сервера в другой сети или за VPN."
 
-#: src/app.rs:11760 src/app.rs:11942
+#: src/app.rs:11765 src/app.rs:11955
 msgid "Could Not Save"
 msgstr "Не удалось сохранить"
 
-#: src/app.rs:11803
+#. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
+#. Jellyfin's translation into your language calls it, rather than
+#. translating it afresh - this text sends somebody to find it in their own
+#. Jellyfin app, and a different wording sends them looking for something
+#. that is not there.
+#: src/app.rs:11813
 msgid "Quick Connect"
 msgstr "Быстрое подключение"
 
-#: src/app.rs:11811
+#: src/app.rs:11821
 msgid "Asking the server for a code..."
 msgstr "Запрос кода у сервера..."
 
-#: src/app.rs:11881
+#: src/app.rs:11891
 msgid "Nobody approved the code in time. Ask for another."
 msgstr "Код никто не подтвердил вовремя. Запросите новый."
 
-#: src/app.rs:11914
+#. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
+#. Jellyfin's translation into your language calls it, rather than
+#. translating it afresh.
+#: src/app.rs:11927
 msgid "In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code."
 msgstr "В приложении Jellyfin, где вы вошли в учётную запись, откройте «Быстрое подключение» в меню пользователя и введите этот код."
 
-#: src/app.rs:11923
+#: src/app.rs:11936
 msgid "Could Not Connect"
 msgstr "Не удалось подключиться"
 
-#: src/app.rs:11960
+#: src/app.rs:11973
 msgid "Disconnect from Jellyfin?"
 msgstr "Отключиться от Jellyfin?"
 
-#: src/app.rs:11961
+#: src/app.rs:11974
 msgid "TinePlayer will no longer appear as a player in {server}."
 msgstr "TinePlayer больше не будет отображаться как проигрыватель в {server}."
 
@@ -191,15 +199,17 @@ msgstr "TinePlayer больше не будет отображаться как 
 msgid "Show Track Selection Menu"
 msgstr "Показывать меню выбора дорожек"
 
-#: src/app.rs:12007
+#: src/app.rs:12020
 msgid "Disconnected Here Only"
 msgstr "Отключено только здесь"
 
-#: src/app.rs:12009
+#: src/app.rs:12022
 msgid "The access token stored on this machine has been removed."
 msgstr "Токен доступа, хранившийся на этом компьютере, удалён."
 
-#: src/app.rs:12010
+#. "Devices" is the name of a page in Jellyfin's own dashboard. Use whatever
+#. Jellyfin's translation calls that page.
+#: src/app.rs:12025
 msgid "The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there."
 msgstr "Сервер оказался недоступен, поэтому это устройство всё ещё числится в списке, а токен продолжает работать. Удалите TinePlayer в разделе «Устройства» панели управления Jellyfin, чтобы завершить подключение и там."
 
@@ -207,15 +217,15 @@ msgstr "Сервер оказался недоступен, поэтому эт�
 msgid "Play Video Immediately"
 msgstr "Сразу воспроизводить видео"
 
-#: src/app.rs:12121
+#: src/app.rs:12136
 msgid "Clear all saved playback data?"
 msgstr "Удалить все сохранённые данные воспроизведения?"
 
-#: src/app.rs:12122
+#: src/app.rs:12137
 msgid "Clear"
 msgstr "Очистить"
 
-#: src/app.rs:12808
+#: src/app.rs:12823
 msgid ""
 "Couldn't play that file.\n"
 "\n"
@@ -225,43 +235,43 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app.rs:12835
+#: src/app.rs:12850
 msgid "Close the Player?"
 msgstr "Закрыть проигрыватель?"
 
-#: src/app.rs:12884
+#: src/app.rs:12899
 msgid "Something went wrong"
 msgstr "Что-то пошло не так"
 
-#: src/app.rs:12906 src/app.rs:13586 src/controls.rs:965
+#: src/app.rs:12921 src/app.rs:13601 src/controls.rs:965
 msgid "Back"
 msgstr "Назад"
 
-#: src/app.rs:14208
+#: src/app.rs:14223
 msgid "Audio {ms}ms late"
 msgstr "Звук отстаёт на {ms} мс"
 
-#: src/app.rs:14210
+#: src/app.rs:14225
 msgid "Audio {ms}ms early"
 msgstr "Звук опережает на {ms} мс"
 
-#: src/app.rs:14212
+#: src/app.rs:14227
 msgid "In step"
 msgstr "Синхронно"
 
-#: src/app.rs:14266
+#: src/app.rs:14281
 msgid "Open File Location"
 msgstr "Открыть папку с файлом"
 
-#: src/app.rs:14460
+#: src/app.rs:14475
 msgid "Up to {folder}"
 msgstr "Вверх, в {folder}"
 
-#: src/app.rs:14461
+#: src/app.rs:14476
 msgid "Up to the list of drives"
 msgstr "Вверх, к списку дисков"
 
-#: src/app.rs:14500 src/app.rs:14503
+#: src/app.rs:14515 src/app.rs:14518
 msgid "Nothing here"
 msgstr "Здесь пусто"
 
@@ -269,7 +279,7 @@ msgstr "Здесь пусто"
 msgid "Keys and Buttons"
 msgstr "Клавиши и кнопки"
 
-#: src/app.rs:1725 src/app.rs:10578 src/app.rs:12845 src/app.rs:12906
+#: src/app.rs:1725 src/app.rs:10583 src/app.rs:12860 src/app.rs:12921
 msgid "Close"
 msgstr "Закрыть"
 
@@ -390,7 +400,7 @@ msgstr "Обзор..."
 msgid "Enter URL"
 msgstr "Ввести ссылку"
 
-#: src/app.rs:5693 src/app.rs:5698 src/app.rs:8885 src/app.rs:11582
+#: src/app.rs:5693 src/app.rs:5698 src/app.rs:8885 src/app.rs:11587
 msgid "Connect to Jellyfin"
 msgstr "Подключиться к Jellyfin"
 
@@ -402,7 +412,7 @@ msgstr "Подключено к Jellyfin ({server})"
 msgid "Connected to Jellyfin"
 msgstr "Подключено к Jellyfin"
 
-#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11422 src/app.rs:11630 src/app.rs:11814 src/app.rs:12082 src/app.rs:12170 src/app.rs:12843
+#: src/app.rs:5732 src/app.rs:6895 src/app.rs:7500 src/app.rs:7641 src/app.rs:7984 src/app.rs:8557 src/app.rs:8643 src/app.rs:8784 src/app.rs:11427 src/app.rs:11635 src/app.rs:11824 src/app.rs:12097 src/app.rs:12185 src/app.rs:12858
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -418,7 +428,7 @@ msgstr "Выберите видео"
 msgid "Toggle fullscreen"
 msgstr "Полноэкранный режим"
 
-#: src/app.rs:5932 src/app.rs:5933 src/app.rs:9312
+#: src/app.rs:5932 src/app.rs:5933 src/app.rs:9317
 msgid "Settings"
 msgstr "Настройки"
 
@@ -703,7 +713,7 @@ msgstr "Отключиться от {server}"
 msgid "Disconnect"
 msgstr "Отключиться"
 
-#: src/app.rs:8892 src/app.rs:10529
+#: src/app.rs:8892 src/app.rs:10534
 msgid "Third-Party Notices"
 msgstr "Сторонние компоненты"
 
@@ -759,35 +769,40 @@ msgstr "Этот Kodi работает в песочнице, и для запу
 msgid "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
 msgstr "Для установки Kodi в нестандартном месте, например переносной. Папка пользовательских данных — та, в которой лежит guisettings.xml, а не та, куда установлен сам Kodi."
 
-#: src/app.rs:9063
+#. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
+#. Jellyfin's translation into your language calls it, rather than
+#. translating it afresh - this text sends somebody to find it in their own
+#. Jellyfin app, and a different wording sends them looking for something
+#. that is not there.
+#: src/app.rs:9068
 msgid "Find and connect to a Jellyfin server using Quick Connect."
 msgstr "Найти сервер Jellyfin и подключиться к нему через «Быстрое подключение»."
 
-#: src/app.rs:9066
+#: src/app.rs:9071
 msgid "Removes the access token stored on this machine and signs this device out of the server."
 msgstr "Удаляет токен доступа, хранящийся на этом компьютере, и отключает это устройство от сервера."
 
-#: src/app.rs:9106
+#: src/app.rs:9111
 msgid "Open user data folder"
 msgstr "Открыть папку пользовательских данных"
 
-#: src/app.rs:9221
+#: src/app.rs:9226
 msgid "Connected to {server} as {who}."
 msgstr "Подключено к {server} как {who}."
 
-#: src/app.rs:9227
+#: src/app.rs:9232
 msgid "Connected to {server}."
 msgstr "Подключено к {server}."
 
-#: src/app.rs:9233
+#: src/app.rs:9238
 msgid "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet."
 msgstr "Подключите сервер Jellyfin, чтобы транслировать видео в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
 
-#: src/app.rs:9237
+#: src/app.rs:9242
 msgid "{connected} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet."
 msgstr "{connected} Видео можно транслировать в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
 
-#: src/app.rs:9263
+#: src/app.rs:9268
 msgid "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect."
 msgstr "Файл playercorefactory.xml этой установки будет изменён. Перезапустите Kodi, чтобы изменения вступили в силу."
 

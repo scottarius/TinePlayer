@@ -9060,6 +9060,11 @@ impl App {
             // into TinePlayer, which is the whole reason this is a code and
             // not a login form.
             Item::JellyfinConnect => {
+                // TRANSLATORS: "Quick Connect" is Jellyfin's own name for this
+                // feature. Use whatever Jellyfin's translation into your language
+                // calls it, rather than translating it afresh - this text sends
+                // somebody to find it in their own Jellyfin app, and a different
+                // wording sends them looking for something that is not there.
                 tr!("Find and connect to a Jellyfin server using Quick Connect.")
             }
             Item::JellyfinDisconnect => {
@@ -11800,6 +11805,11 @@ impl App {
         // half of the dialog is Jellyfin's own Quick Connect, and the words on
         // screen match what the viewer is about to go looking for in their
         // Jellyfin app - which is the menu item called Quick Connect.
+        // TRANSLATORS: "Quick Connect" is Jellyfin's own name for this
+        // feature. Use whatever Jellyfin's translation into your language
+        // calls it, rather than translating it afresh - this text sends
+        // somebody to find it in their own Jellyfin app, and a different
+        // wording sends them looking for something that is not there.
         let page = wizard_page(&tr!("Quick Connect"));
         // Filled in once the server answers. Empty rather than absent, so the
         // panel does not change shape under the eye when the code arrives.
@@ -11911,6 +11921,9 @@ impl App {
                 QuickConnect::Code(shown) => {
                     code.set_text(&shown);
                     status.set_text(
+                        // TRANSLATORS: "Quick Connect" is Jellyfin's own name for this
+                        // feature. Use whatever Jellyfin's translation into your language
+                        // calls it, rather than translating it afresh.
                         tr!("In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code.").as_ref(),
                     );
                     glib::ControlFlow::Continue
@@ -12007,6 +12020,8 @@ impl App {
                                 &tr!("Disconnected Here Only"),
                                 &[
                                     &tr!("The access token stored on this machine has been removed."),
+                                    // TRANSLATORS: "Devices" is the name of a page in Jellyfin's own
+                                    // dashboard. Use whatever Jellyfin's translation calls that page.
                                     &tr!("The server could not be reached, so it still lists this device and the token still works. Remove TinePlayer under Devices in the Jellyfin dashboard to end it there."),
                                     &e.to_string(),
                                 ],

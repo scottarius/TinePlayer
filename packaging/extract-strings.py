@@ -32,6 +32,7 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
+import textwrap
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "src"
@@ -206,6 +207,41 @@ def arguments(text: str, at: int) -> tuple[list[str], int]:
             cursor += 1
 
 
+def translator_notes(text: str) -> dict[int, str]:
+    """`// TRANSLATORS:` comments, by the line of the call they precede.
+
+    gettext's own convention, and the one thing in a catalog that can carry
+    context a translator cannot get from the string. Weblate shows these
+    beside the message.
+
+    Worth having for one kind of string in particular: another project's own
+    words. "Quick Connect" is Jellyfin's name for a feature, and a translator
+    working from English alone would translate it afresh - sending somebody to
+    look for a menu item that does not exist under that name in their Jellyfin.
+    The right answer is whatever Jellyfin's own translation says, and only a
+    note can ask for that.
+
+    Runs of `// TRANSLATORS:` lines are joined, so a long note can be wrapped
+    the way the rest of the source is. The note attaches to the next line that
+    is not itself a comment.
+    """
+    notes: dict[int, str] = {}
+    collected: list[str] = []
+    for number, line in enumerate(text.split("\n"), 1):
+        stripped = line.strip()
+        marker = re.match(r"//+\s*TRANSLATORS:\s*(.*)", stripped)
+        if marker:
+            collected = [marker.group(1).strip()]
+            continue
+        if collected and stripped.startswith("//"):
+            collected.append(stripped.lstrip("/").strip())
+            continue
+        if collected:
+            notes[number] = " ".join(part for part in collected if part)
+            collected = []
+    return notes
+
+
 def line_of(text: str, at: int) -> int:
     return text.count("\n", 0, at) + 1
 
@@ -216,7 +252,9 @@ def extract() -> dict[tuple[str | None, str], dict]:
     problems: list[str] = []
 
     for path in sorted(SOURCE.glob("*.rs")):
-        text = blank_comments(path.read_text(encoding="utf-8"))
+        original = path.read_text(encoding="utf-8")
+        notes = translator_notes(original)
+        text = blank_comments(original)
         for call in CALL.finditer(text):
             macro = call.group(1)
             where = f"src/{path.name}:{line_of(text, call.start())}"
@@ -261,6 +299,9 @@ def extract() -> dict[tuple[str | None, str], dict]:
                 entry["plural"] = found[1]
 
             entry["places"].append(where)
+            note = notes.get(line_of(text, call.start()))
+            if note and note not in entry.setdefault("notes", []):
+                entry["notes"].append(note)
 
     if problems:
         for problem in problems:
@@ -377,7 +418,12 @@ msgstr ""
     for (context, msgid), entry in sorted(
         messages.items(), key=lambda item: (item[1]["places"][0], item[0][1])
     ):
-        block = [f"#: {' '.join(entry['places'])}"]
+        # Wrapped, because a `#.` line is read by a person in a Weblate
+        # sidebar rather than parsed by anything.
+        block = []
+        for note in entry.get("notes", []):
+            block += [f"#. {line}" for line in textwrap.wrap(note, 74)]
+        block.append(f"#: {' '.join(entry['places'])}")
         if context is not None:
             block.append(f"msgctxt {quote(context)}")
         block.append(f"msgid {quote(msgid)}")
