@@ -183,7 +183,75 @@ fn external(video: &Path) -> Vec<Subtitle> {
         .collect();
 
     found.sort_by(|a, b| a.label().cmp(b.label()));
+
+    // Then any subtitle file loose in the folder, where the folder holds only
+    // this film - the same rule separate soundtracks get, and the same reason.
+    // A subtitle downloaded from a subtitle site arrives called `English.srt`
+    // or `2_eng.srt`, named after nothing, so holding out for the convention
+    // means the commonest way one arrives is the one way it is not offered.
+    //
+    // Safe only because it is the only film there. The convention earns its
+    // keep telling one film's files from another's in a shared folder; where
+    // there is nothing to tell apart, a subtitle in the folder can only be for
+    // the film in the folder.
+    let mut loose: Vec<Subtitle> = crate::beside::in_a_lone_film_folder(video, is_subtitle_file)
+        .into_iter()
+        .filter_map(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
+        .filter(|name| {
+            !found
+                .iter()
+                .any(|subtitle| matches!(subtitle, Subtitle::External { name: found, .. } if found == name))
+        })
+        // Named to no convention, so there is no tag to read and nothing to
+        // dress it up with: the file's own name is both the label and the only
+        // thing that tells two of them apart.
+        .map(|name| Subtitle::External {
+            label: name.clone(),
+            name,
+        })
+        .collect();
+    loose.sort_by(|a, b| a.label().cmp(b.label()));
+
+    // Capped, and sorted before it is capped so the same ones survive every
+    // time rather than whatever order the directory happened to answer in.
+    //
+    // The named files above are not capped and should not be: a release with
+    // twenty languages beside it named after the film is unambiguous, and
+    // every one of them is a real choice. These are the unnamed ones, where
+    // the folder is being taken at its word - a person who has downloaded
+    // subtitles by hand has a few, and a folder with more than this in it is
+    // not a film folder with extras in it, it is something else that a
+    // subtitle chooser should not try to be a file browser for.
+    if loose.len() > MAX_LOOSE {
+        eprintln!(
+            "{} unnamed subtitle files beside the video; offering the first {} by name",
+            loose.len(),
+            MAX_LOOSE
+        );
+        loose.truncate(MAX_LOOSE);
+    }
+
+    found.extend(loose);
     found
+}
+
+/// How many subtitle files named after nothing are offered from a folder
+/// holding a single film. Above what anybody downloads by hand, below the
+/// point where the chooser stops being readable from across a room.
+const MAX_LOOSE: usize = 10;
+
+/// Whether a path is a subtitle this build can read, by its extension.
+fn is_subtitle_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(extension))
+        })
 }
 
 impl Subtitle {
@@ -795,5 +863,85 @@ mod fallback_tests {
             automatic(&Auto::parse("primary_forced"), &o, Some("ru"), Some("en")),
             None
         );
+    }
+}
+
+/// Finding the subtitle files that sit beside a video, as opposed to choosing
+/// between them once found.
+#[cfg(test)]
+mod external_tests {
+    use super::*;
+
+    /// A folder holding one film offers the subtitles loose in it, the same
+    /// way it offers loose soundtracks - because a downloaded subtitle arrives
+    /// named after the site rather than after the film.
+    #[test]
+    fn a_lone_film_takes_whatever_subtitles_are_in_the_folder() {
+        let root = std::env::temp_dir().join("tp-subs-lone");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let video = root.join("Film (2019).mkv");
+        std::fs::write(&video, b"").unwrap();
+        std::fs::write(root.join("Film (2019).en.srt"), b"").unwrap();
+        std::fs::write(root.join("English.srt"), b"").unwrap();
+        std::fs::write(root.join("2_eng.srt"), b"").unwrap();
+        // Not a subtitle, and must not be offered as one.
+        std::fs::write(root.join("readme.txt"), b"").unwrap();
+
+        let labels: Vec<String> = external(&video)
+            .into_iter()
+            .map(|s| s.label().to_string())
+            .collect();
+        // The one named to the convention first, read as its tag; then the
+        // loose ones as themselves, sorted.
+        assert_eq!(labels, ["en", "2_eng.srt", "English.srt"]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The loose half is capped. A folder with more unnamed subtitles in it
+    /// than anybody downloads is not a film folder, and the chooser should not
+    /// try to be a file browser for it.
+    #[test]
+    fn loose_subtitles_are_capped() {
+        let root = std::env::temp_dir().join("tp-subs-many");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let video = root.join("Film (2019).mkv");
+        std::fs::write(&video, b"").unwrap();
+        for n in 0..MAX_LOOSE + 5 {
+            std::fs::write(root.join(format!("sub{n:02}.srt")), b"").unwrap();
+        }
+
+        let found = external(&video);
+        assert_eq!(found.len(), MAX_LOOSE);
+        // Sorted before it is cut, so the survivors are the same every run
+        // rather than whatever the directory answered with first.
+        assert_eq!(found[0].label(), "sub00.srt");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A second film in the folder takes the loose rule away, exactly as it
+    /// does for soundtracks: `English.srt` names no owner, and guessing one
+    /// would put the wrong film's subtitles on screen.
+    #[test]
+    fn a_second_film_takes_the_loose_subtitles_away() {
+        let root = std::env::temp_dir().join("tp-subs-two-films");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let video = root.join("Film (2019).mkv");
+        std::fs::write(&video, b"").unwrap();
+        std::fs::write(root.join("Other (2020).mkv"), b"").unwrap();
+        std::fs::write(root.join("Film (2019).en.srt"), b"").unwrap();
+        std::fs::write(root.join("English.srt"), b"").unwrap();
+
+        let labels: Vec<String> = external(&video)
+            .into_iter()
+            .map(|s| s.label().to_string())
+            .collect();
+        assert_eq!(labels, ["en"]);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
