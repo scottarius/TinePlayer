@@ -125,6 +125,19 @@ $Plugins = @(
     # terms. a52dec and dvdreadsrc in the same set declare GPL and are not
     # here; this one does not.
     'gstdvdsub'
+    # What actually draws a bitmap subtitle onto the picture, for DVD and
+    # Blu-ray alike. Easily confused with 'gstdvdsub' above and it is not the
+    # same thing: that one parses and decodes, this one composites. Shipping
+    # the parser without the renderer is what this package did until
+    # 2026-08-19, and the result was not a missing subtitle but a frozen film
+    # - see `link_stream` in pipeline.rs for why an unrenderable track stalls
+    # rather than being skipped.
+    'gstdvdspu'
+    # Broadcast subtitles, which are bitmaps too and were missing for the same
+    # reason. Nothing has asked for these, but they cost 60 KB and the whole
+    # point of the entry above is that leaving out one half of a pair is not
+    # obvious until somebody plays a file.
+    'gstdvbsuboverlay'
 
     # Playing from a URL, and the TLS to do it over https.
     'gstsoup'

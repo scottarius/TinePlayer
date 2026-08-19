@@ -374,18 +374,38 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
 
     let mut subtitles = Vec::new();
     for (index, stream) in info.subtitle_streams().into_iter().enumerate() {
-        // Blu-ray bitmap subtitles are listed by the container but no
-        // decoder for them ships with GStreamer, so offering them would only
-        // produce a picture with nothing drawn on it.
-        let renderable = stream
+        // Bitmap subtitles - Blu-ray PGS and the DVD subpictures in an
+        // ordinary rip - are left out of the list.
+        //
+        // Not for the reason this said until 2026-08-19, which was that
+        // GStreamer ships no decoder for them. It does: `dvdspu` takes
+        // `subpicture/x-pgs` and `subpicture/x-dvd` alike and composites
+        // either onto the picture, and `subtitleoverlay` plugs it unasked.
+        // Two separate things were wrong underneath that.
+        //
+        // The first is fixed: the Windows and macOS packages shipped the
+        // similarly named `dvdsub`, which parses, and not `dvdspu`, which
+        // draws - so the renderer was absent and the pad would not link.
+        //
+        // The second is not, and is why this filter is still here. Choosing
+        // one stops the film a few seconds in, on the frame before the first
+        // line. `dvdspu` holds a subpicture from the moment it arrives until
+        // the picture reaches it, which pulls the demuxer seconds ahead; the
+        // demuxer produces every stream in the file, so that read-ahead fills
+        // the multiqueue slots of the tracks nobody selected, and the demuxer
+        // stops. Nothing errors, because nothing has failed. The plan's
+        // backlog carries the measurements and what has already been ruled
+        // out. Offering a track that freezes the film is worse than not
+        // offering it, so until that is fixed, neither is listed.
+        //
+        // Only these two. Anything else GStreamer cannot draw is caught where
+        // it becomes known rather than guessed at here - see `link_stream` in
+        // pipeline.rs, which drops such a stream instead of stalling on it.
+        let bitmap = stream
             .caps()
-            .map(|caps| {
-                caps.structure(0)
-                    .map(|s| s.name() != "subpicture/x-pgs")
-                    .unwrap_or(true)
-            })
-            .unwrap_or(true);
-        if !renderable {
+            .and_then(|caps| caps.structure(0).map(|s| s.name().to_string()))
+            .is_some_and(|name| name.starts_with("subpicture/"));
+        if bitmap {
             continue;
         }
 
