@@ -155,10 +155,14 @@ mkvpropedit film.mkv --edit track:a2 --set name="English Audio Description"
 
 ### A subtitle track in the file is not in the list
 
-Blu-ray discs use PGS subtitles, which are images rather than text, and
-GStreamer ships no decoder for them. TinePlayer leaves those tracks out
-rather than offering one that would draw nothing, so they appear neither in
-the menu nor in `--list-tracks`.
+DVDs and Blu-ray discs store their subtitles as images rather than text, and
+TinePlayer leaves those tracks out of both the menu and `--list-tracks`. It is
+a deliberate hold rather than a preference: they can be drawn, but doing so
+currently stops the picture a few seconds in, and a track that freezes the
+film is worse than one that is not offered.
+
+A rip made from a disc usually carries text subtitles as well, or one can be
+put beside the video as an `.srt`. See [Subtitles](usage.md#subtitles).
 
 ### A subtitle file beside the video is not offered
 

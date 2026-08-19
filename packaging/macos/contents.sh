@@ -86,8 +86,12 @@ PLUGINS=(
     # Video output. applemedia is VideoToolbox, so decoding runs on the GPU.
     videoconvertscale videofilter opengl applemedia
 
-    # Subtitles, and the text drawing they need.
-    subparse assrender pango closedcaption dvdsub
+    # Subtitles, and the text drawing they need. `dvdspu` is the one that
+    # draws a bitmap subtitle onto the picture - DVD and Blu-ray both - and is
+    # not the same plugin as `dvdsub`, which only parses and decodes. Shipping
+    # the second without the first froze the film instead of dropping the
+    # subtitle; `dvbsuboverlay` is the same pairing for broadcast.
+    subparse assrender pango closedcaption dvdsub dvdspu dvbsuboverlay
 
     # Playing from a URL.
     soup tcp

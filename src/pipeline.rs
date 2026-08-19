@@ -1367,8 +1367,47 @@ fn connect_pad_added(
         };
         if let Err(e) = pad.link(&sink_pad) {
             eprintln!("Failed to connect decoded stream {id}: {e}");
+            discard(&pipeline, pad);
         }
     });
+}
+
+/// Sends a stream nowhere, for when the thing that wanted it would not take
+/// it.
+///
+/// A pad decodebin3 has exposed is one it keeps pushing on, and a selected
+/// stream that nothing reads fills its share of the multiqueue and then holds
+/// up every other stream in it. That is the whole distance between "this
+/// subtitle does not work" and "the film stops a few seconds in", and the
+/// second is what a bitmap subtitle looked like before 2026-08-19: the
+/// overlay refused the pad because this build had no element that could draw
+/// one, nothing else took it, and the picture froze at the first line of
+/// dialogue with only a line on stderr to say why.
+///
+/// Not sync'd, because there is nothing to be in time with, and not async, so
+/// a branch nobody watches cannot hold up preroll.
+fn discard(pipeline: &gst::Pipeline, pad: &gst::Pad) {
+    let sink = match gst::ElementFactory::make("fakesink")
+        .property("sync", false)
+        .property("async", false)
+        .build()
+    {
+        Ok(sink) => sink,
+        Err(_) => return,
+    };
+    if pipeline.add(&sink).is_err() {
+        return;
+    }
+    let Some(target) = sink.static_pad("sink") else {
+        return;
+    };
+    if let Err(e) = pad.link(&target) {
+        eprintln!("Couldn't discard the stream either: {e}");
+        return;
+    }
+    if sink.sync_state_with_parent().is_err() {
+        eprintln!("The discarded stream's sink would not start");
+    }
 }
 
 /// Whether a decoded pad carries audio, asked the same two ways

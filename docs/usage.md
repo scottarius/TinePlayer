@@ -208,9 +208,9 @@ To override either for a single playback, see [Choosing subtitles on the
 command line](#choosing-subtitles-on-the-command-line).
 
 > [!NOTE]
-> * Blu-ray PGS subtitles are not offered. They are images rather than text
->   and GStreamer ships no decoder for them, so a track that could only draw
->   nothing is left out of the list entirely.
+> * DVD and Blu-ray subtitles are not offered. They are images rather than
+>   text, and TinePlayer cannot yet show one without stopping the film, so
+>   such a track is left out of the list rather than offered and broken.
 > * External subtitle files are only found for videos opened by path: local, a
 >   UNC path, or a mounted share. A video opened by URL, such as `http://` or
 >   `smb://`, offers only its embedded subtitles.
