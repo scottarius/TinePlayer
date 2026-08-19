@@ -21,6 +21,16 @@ use crate::subtitles::{Subtitle, SubtitleChoice};
 // however deep in the tree it was written. See src/i18n.rs.
 use crate::{tr, trc, trn};
 
+/// Who asked for a subtitle, which decides whether anything may overrule it
+/// later. See [`App::follow_audio_with_subtitle`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Chose {
+    /// A person picked it, from the chooser or the media page.
+    ByHand,
+    /// The preference worked it out, and may work it out again.
+    Automatically,
+}
+
 /// Marks the overlay a modal is stacked in, so that opening one over another
 /// can tell it apart from a page that happens to be built out of an overlay
 /// too - which the media page is.
@@ -925,6 +935,15 @@ pub struct App {
     /// subtitle files sitting beside it.
     subtitle_options: RefCell<Vec<Subtitle>>,
     subtitle: RefCell<Option<SubtitleChoice>>,
+    /// Whether the subtitle showing was chosen by a person rather than worked
+    /// out from the preference.
+    ///
+    /// The difference only matters when a soundtrack changes: the preference
+    /// is written in terms of the outputs, so its answer can go stale, and
+    /// [`App::follow_audio_with_subtitle`] brings it up to date. A choice
+    /// somebody made is not stale and is never revisited. Cleared when a video
+    /// opens, because it is a fact about this sitting rather than this file.
+    subtitle_by_hand: Cell<bool>,
     playback: RefCell<Option<Rc<Playback>>>,
     screen: RefCell<Screen>,
     /// Restored when returning from a chooser, so the menu comes back with
@@ -1247,6 +1266,7 @@ impl App {
             secondary_track: RefCell::new(None),
             subtitle_options: RefCell::new(Vec::new()),
             subtitle: RefCell::new(None),
+            subtitle_by_hand: Cell::new(false),
             playback: RefCell::new(None),
             screen: RefCell::new(Screen::Menu),
             menu_row: RefCell::new(0),
@@ -3868,6 +3888,9 @@ impl App {
         // After the switch, not before: what the sink should be held back by
         // depends on what it is now playing, and only the routing knows that.
         self.push_offset(&playback, role);
+        // Same reason, and the subtitle preference is written in terms of what
+        // the outputs are playing - so it is asked again now that has moved.
+        self.follow_audio_with_subtitle(which);
         if let Some(controls) = self.controls.borrow().clone() {
             self.push_audio_entries(&playback, &controls);
         }
@@ -3915,6 +3938,17 @@ impl App {
     /// remembered as well as applied, the same as choosing one from the media
     /// page: it is the same decision, made later.
     fn choose_subtitle(self: &Rc<Self>, entry: usize) {
+        self.apply_subtitle(entry, Chose::ByHand);
+    }
+
+    /// The same, plus who asked for it.
+    ///
+    /// A person choosing a subtitle has settled the question: nothing should
+    /// overrule it afterwards. The preference following a soundtrack change
+    /// has not, and must not overrule a person - so the two go through one
+    /// path and differ only in what they leave behind. See
+    /// [`Self::follow_audio_with_subtitle`].
+    fn apply_subtitle(self: &Rc<Self>, entry: usize, how: Chose) {
         let playback = self.playback.borrow().clone();
         let file = self.file.borrow().clone();
         let (Some(playback), Some(file)) = (playback, file) else {
@@ -3970,9 +4004,92 @@ impl App {
         // Choosing one is asking to see it, whatever the toggle was doing for
         // the last. Off is the exception, being the toggle said deliberately.
         self.subtitles_hidden.set(entry == 0);
+        // Only a person settles the question. Left false by the automatic
+        // follow, so a later soundtrack change is still free to move it.
+        if how == Chose::ByHand {
+            self.subtitle_by_hand.set(true);
+        }
         self.remember_tracks();
         self.push_subtitle_state();
         self.wake_controls();
+    }
+
+    /// Re-runs the subtitle preference after the soundtrack on `changed` moved,
+    /// where that preference depends on what `changed` is now playing.
+    ///
+    /// The preference is written in terms of the outputs - "forced subtitles
+    /// matching the first output's language" - so the answer it gives is only
+    /// as current as the soundtracks it was asked about. Change what an output
+    /// is playing and the answer can be stale without anything having gone
+    /// wrong, which is what this fixes.
+    ///
+    /// Three things hold it back, and each is a case that would otherwise be a
+    /// bug rather than a feature:
+    ///
+    /// - **A subtitle somebody chose is left alone.** Overruling a deliberate
+    ///   choice because the soundtrack moved is worse than being out of date.
+    /// - **A fixed-language preference is not about the outputs at all**, so
+    ///   nothing an output does can change its answer.
+    /// - **The full modes name one output and never fall back**, so only that
+    ///   output matters. The forced modes prefer one output but will take the
+    ///   other, so for those either output can change the answer - which is
+    ///   why the test is on the mode rather than on the role alone.
+    fn follow_audio_with_subtitle(self: &Rc<Self>, changed: Role) {
+        if self.subtitle_by_hand.get() {
+            return;
+        }
+        let spec = self
+            .config
+            .borrow()
+            .subtitle_language
+            .clone()
+            .unwrap_or_else(|| crate::subtitles::DEFAULT_MODE.to_string());
+        let mode = crate::subtitles::Auto::parse(&spec);
+        if !crate::subtitles::follows_output(&mode, matches!(changed, Role::Secondary)) {
+            return;
+        }
+
+        let language_of = |index: Option<u32>| {
+            index.and_then(|index| {
+                self.tracks
+                    .borrow()
+                    .iter()
+                    .find(|track| track.index == index)
+                    .map(|track| track.language.clone())
+            })
+        };
+        let primary = language_of(*self.primary_track.borrow());
+        let secondary = language_of(*self.secondary_track.borrow());
+
+        let wanted = crate::subtitles::automatic(
+            &mode,
+            &self.subtitle_options.borrow(),
+            primary.as_deref(),
+            secondary.as_deref(),
+        );
+        if wanted == *self.subtitle.borrow() {
+            return;
+        }
+
+        // Back to a row number, because that is what applying one takes: row
+        // zero is Off, and the rest follow `subtitle_options` in order.
+        let entry = match &wanted {
+            None => 0,
+            Some(choice) => {
+                let found = self
+                    .subtitle_options
+                    .borrow()
+                    .iter()
+                    .position(|option| option.choice() == *choice);
+                match found {
+                    Some(index) => index + 1,
+                    // The preference named something no longer on offer, which
+                    // is not a reason to take away what is playing.
+                    None => return,
+                }
+            }
+        };
+        self.apply_subtitle(entry, Chose::Automatically);
     }
 
     /// Starts a hold on the left face button. Nothing happens yet: what the
@@ -6822,6 +6939,7 @@ impl App {
                     .map(|o| o.choice());
                 drop(options);
                 *self.subtitle.borrow_mut() = picked;
+                self.subtitle_by_hand.set(true);
                 // Choosing a subtitle is asking to see it, whatever the
                 // toggle was doing for the last one.
                 self.subtitles_hidden.set(false);
@@ -7006,6 +7124,7 @@ impl App {
         *self.primary_track.borrow_mut() = None;
         *self.secondary_track.borrow_mut() = None;
         *self.subtitle.borrow_mut() = None;
+        self.subtitle_by_hand.set(false);
         *self.file.borrow_mut() = None;
         self.duration_s.set(0.0);
     }
@@ -8418,6 +8537,7 @@ impl App {
             }
         }
         *self.subtitle.borrow_mut() = Some(choice);
+        self.subtitle_by_hand.set(true);
         // Choosing a subtitle is asking to see it, whatever the toggle was
         // doing for the last one.
         self.subtitles_hidden.set(false);

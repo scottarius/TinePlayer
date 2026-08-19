@@ -377,6 +377,28 @@ impl Auto {
 /// subtitles translate signs and foreign lines, which are worth having in
 /// either language on offer. The full modes do not fall back, because a full
 /// translation in the wrong language is a worse answer than none.
+/// Whether changing one output's soundtrack can change what this preference
+/// answers, and so whether it is worth asking again.
+///
+/// `secondary_output` names which output moved. The three cases:
+///
+/// - **None, and a fixed language**: not about the outputs at all. A
+///   preference for Russian subtitles says the same thing whatever anybody is
+///   listening to.
+/// - **The full modes** name one output and never fall back, because a whole
+///   translation in the wrong language is worse than none - so only the output
+///   they name can change the answer.
+/// - **The forced modes** prefer one output but will take the other, since
+///   forced subtitles translate signs and are worth having in either language
+///   on offer. Either output moving can therefore change the answer, which is
+///   why this cannot be decided from the role alone.
+pub fn follows_output(mode: &Auto, secondary_output: bool) -> bool {
+    match mode {
+        Auto::None | Auto::Language(_) => false,
+        Auto::Output { secondary, forced } => *forced || *secondary == secondary_output,
+    }
+}
+
 pub fn automatic(
     mode: &Auto,
     options: &[Subtitle],
@@ -943,5 +965,46 @@ mod external_tests {
         assert_eq!(labels, ["en"]);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+/// Which soundtrack changes a preference cares about.
+#[cfg(test)]
+mod follows_tests {
+    use super::*;
+
+    #[test]
+    fn a_preference_about_nothing_follows_nothing() {
+        for mode in [Auto::parse("none"), Auto::parse("ru")] {
+            assert!(!follows_output(&mode, false));
+            assert!(!follows_output(&mode, true));
+        }
+    }
+
+    /// A whole translation never falls back to the other output, so only the
+    /// output it names can change its answer.
+    #[test]
+    fn a_full_mode_follows_only_its_own_output() {
+        let primary = Auto::parse("primary");
+        assert!(follows_output(&primary, false));
+        assert!(!follows_output(&primary, true));
+
+        let secondary = Auto::parse("secondary");
+        assert!(!follows_output(&secondary, false));
+        assert!(follows_output(&secondary, true));
+    }
+
+    /// Forced subtitles are worth having in either language on offer, so the
+    /// forced modes take the other output when the preferred one has nothing -
+    /// which means either output moving can change the answer.
+    #[test]
+    fn a_forced_mode_follows_both_outputs() {
+        for mode in [
+            Auto::parse("primary_forced"),
+            Auto::parse("secondary_forced"),
+        ] {
+            assert!(follows_output(&mode, false));
+            assert!(follows_output(&mode, true));
+        }
     }
 }
