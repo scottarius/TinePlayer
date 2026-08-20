@@ -23,6 +23,13 @@
 //! lose what no flag records - "Restored 1998 Mix", "Director's Cut" - and
 //! showing both would stutter on the common case where the title is only the
 //! type spelled out by hand.
+//!
+//! **A file beside the video is a track too**, and comes through
+//! [`named_after_the_film`] or [`named_after_nothing`]
+//! rather than reading as something else in the same list. It states no codec,
+//! and everything it does state is in its name, but `Film.en.ad.mp3` and a
+//! track inside the film flagged `FlagVisualImpaired` are the same fact and
+//! now say so the same way.
 
 use std::borrow::Cow;
 
@@ -110,6 +117,11 @@ pub fn line(parts: &Parts, naming: Naming, unknown: &str) -> String {
     let last = match parts.kind {
         Some(kind) => Some(kind.name().into_owned()),
         None if title.is_empty() || restates_language(title, parts.language) => None,
+        // Where the track said no language, the caller's wording holds the
+        // first segment - and where that wording *is* the title, which is all
+        // a library's own subtitle file ever said, showing it again says the
+        // same thing twice: "Signs - Signs".
+        None if !states_a_language(parts.language) && title == unknown.trim() => None,
         None => Some(title.to_string()),
     };
 
@@ -178,14 +190,135 @@ fn restates_language(title: &str, tag: &str) -> bool {
         .any(|name| name.eq_ignore_ascii_case(title))
 }
 
-/// The type a bare tag implies, for the sources that carry nothing else.
+/// One row for a file a library named after the film, which is where every
+/// external file that says anything about itself says it.
+///
+/// Every such file goes through here - a soundtrack or a subtitle beside the
+/// video, and a library's own. They used to each write their own row, so the
+/// same fact read three ways: `en.ad (English, Audio Description)` in a
+/// soundtrack list, `en.hi (English) - SDH` in a subtitle list, and
+/// `English - AAC 6ch - Audio Description` for the track inside the file that
+/// meant the same thing.
+///
+/// `tag` is whatever the convention left between the film's name and the
+/// extension - `en`, `en.hi`, `ad` - and is **empty for a file named exactly
+/// after the film**, which is a real case and says nothing whatever about
+/// itself. `kind_of` reads the type out of the tag and only ever out of the
+/// tag: [`kind_of_audio_tag`] for a soundtrack, [`kind_of_subtitle_tag`] for a
+/// subtitle, because `hi` means Hindi beside one and hearing-impaired beside
+/// the other.
+///
+/// **`name` is shown but never read**, because it is the film's name with an
+/// extension on the end rather than anything this file chose. Reading it would
+/// read the film's title, and `Ad Astra (2019).mka` is not an audio
+/// description. A file that named *itself* goes through
+/// [`named_after_nothing`] instead, which does read it.
+pub fn named_after_the_film(
+    tag: &str,
+    name: &str,
+    kind_of: fn(&str) -> Option<Kind>,
+    naming: Naming,
+) -> String {
+    let tag = tag.trim();
+    // A tag is language-then-marks by convention, so the first component names
+    // the language and whatever follows is left to say what no flag could -
+    // `en.restored`. The printed list keeps the tag whole instead, because it
+    // is what somebody types back at `--subtitle`, and naming the language
+    // properly there would hide the very thing the list exists to show.
+    let (language, rest) = match naming {
+        Naming::WithTag => (tag, ""),
+        Naming::Native => split_tag(tag),
+    };
+    line(
+        &Parts {
+            // Nothing to state: a file carries no codec, and a subtitle file's
+            // format is its extension, which the name already shows.
+            technical: String::new(),
+            language,
+            kind: kind_of(tag),
+            title: rest,
+        },
+        naming,
+        // The tag is what tells one of these from another and is short enough
+        // to read across a room; the name is the film's over again with two
+        // letters on the end. Only where there is no tag does the name have to
+        // stand, and then it is standing as an identifier rather than as
+        // anything anybody claimed.
+        if tag.is_empty() { name } else { tag },
+    )
+}
+
+/// One row for a file nothing named after the film: loose in its folder, or
+/// picked by hand from anywhere on disk.
+///
+/// Its own name is the whole of what it has - it is what tells two of them
+/// apart, and it is read for what it says, because a described soundtrack
+/// downloaded by hand arrives called `AD.mp3` as often as it arrives named
+/// after the film.
+///
+/// No language is taken from it. A name is not a tag: splitting `en.mp3` the
+/// way `en.ad` is split would name the language and then show the extension as
+/// if it meant something, and stripping the extension first would collapse
+/// `English.srt` and `English.ass` into one unpickable row.
+pub fn named_after_nothing(name: &str, kind_of: fn(&str) -> Option<Kind>) -> String {
+    line(
+        &Parts {
+            language: "",
+            technical: String::new(),
+            kind: kind_of(name),
+            title: "",
+        },
+        // Nothing to name either way, there being no language: whichever the
+        // caller would have asked for, the row is the name and what it says.
+        Naming::Native,
+        name,
+    )
+}
+
+/// A tag split into the language it names and whatever it says after it.
+///
+/// `("en", "hi")` for `en.hi`, `("en", "")` for `en`. Nothing at all where the
+/// first component names no language - `ad`, `commentary`, or a file name
+/// standing in for a tag - because the whole of it is then the caller's to
+/// show as written: handing back a `rest` there would print it twice, once as
+/// the row's own name and once as its reading.
+fn split_tag(tag: &str) -> (&str, &str) {
+    let (first, rest) = tag.split_once('.').unwrap_or((tag, ""));
+    if languages::known(first) {
+        (first, rest)
+    } else {
+        ("", "")
+    }
+}
+
+/// The type a bare tag implies for a *soundtrack*.
+///
+/// The ladder [`crate::probe::AudioTrack::kind`] climbs, in the same order and
+/// for the same reason: description first, because it is the one a preference
+/// acts on and because the two overlap in the wild. The words are read the
+/// same way too, so that `Film.en.ad.mp3` beside a video and a track inside it
+/// flagged `FlagVisualImpaired` arrive at the same row.
+///
+/// Deliberately not the subtitle reading below. `hi` beside a soundtrack is
+/// Hindi, and answering "hearing impaired" would be both wrong and unhelpful.
+pub fn kind_of_audio_tag(tag: &str) -> Option<Kind> {
+    if crate::probe::is_audio_description(tag) {
+        return Some(Kind::Described);
+    }
+    tag.to_lowercase()
+        .contains("commentary")
+        .then_some(Kind::Commentary)
+}
+
+/// The type a bare tag implies for a *subtitle*, for the sources that carry
+/// nothing else.
 ///
 /// A subtitle file beside a video says everything it has to say in its name -
 /// `Film.en.hi.srt`, `Film.en.forced.srt` - and a library hands over a title
 /// and nothing more. Both go through the same words a track title is read for,
 /// so that `en.hi` beside a file and `FlagHearingImpaired` inside one arrive at
 /// the same row.
-pub fn kind_of_tag(tag: &str) -> Option<Kind> {
+pub fn kind_of_subtitle_tag(tag: &str) -> Option<Kind> {
     let tag = tag.to_lowercase();
     if tag.contains("forced") {
         return Some(Kind::Forced);
@@ -317,6 +450,131 @@ mod tests {
         assert_eq!(
             line(&p, Naming::WithTag, "?"),
             "rus (Русский) - AAC 6ch - Commentary"
+        );
+    }
+
+    /// A title the first segment is already showing is not shown twice. Only
+    /// where the language was unstated, which is the one case the two can be
+    /// the same string.
+    #[test]
+    fn a_title_the_row_is_already_named_by_is_dropped() {
+        let p = parts("", "", None, "Signs");
+        assert_eq!(line(&p, Naming::Native, "Signs"), "Signs");
+    }
+
+    /// The whole point again, from the file end: a soundtrack beside the video
+    /// reads exactly as the equivalent track inside it, bar the codec no file
+    /// states.
+    #[test]
+    fn a_file_reads_as_the_track_it_matches() {
+        assert_eq!(
+            named_after_the_film(
+                "en.ad",
+                "Film (2019).en.ad.mp3",
+                kind_of_audio_tag,
+                Naming::Native
+            ),
+            "English - Audio Description"
+        );
+        assert_eq!(
+            named_after_the_film(
+                "en.hi",
+                "Film (2019).en.hi.srt",
+                kind_of_subtitle_tag,
+                Naming::Native
+            ),
+            "English - SDH"
+        );
+    }
+
+    /// A tag naming no language stands as it is, with its reading after it -
+    /// which is how `ad` and `described` are told from each other at all.
+    #[test]
+    fn a_tag_that_names_no_language_stands_as_written() {
+        for tag in ["ad", "described"] {
+            assert_eq!(
+                named_after_the_film(tag, "Film.mp3", kind_of_audio_tag, Naming::Native),
+                format!("{tag} - Audio Description")
+            );
+        }
+        assert_eq!(
+            named_after_the_film("commentary", "Film.mp3", kind_of_audio_tag, Naming::Native),
+            "commentary - Commentary"
+        );
+    }
+
+    /// What a tag says beyond its language is kept where no type was worked
+    /// out of it, for the same reason a track's title is: nothing else records
+    /// it.
+    #[test]
+    fn a_tag_says_what_no_type_covers() {
+        assert_eq!(
+            named_after_the_film("en.restored", "Film.mp3", kind_of_audio_tag, Naming::Native),
+            "English - restored"
+        );
+    }
+
+    /// A file named exactly after the film says nothing about itself, and the
+    /// name it is shown by is the film's rather than its own - so it stands as
+    /// an identifier and is not read. `Ad Astra` is a film, not an audio
+    /// description.
+    #[test]
+    fn a_film_named_file_is_shown_but_not_read() {
+        assert_eq!(
+            named_after_the_film("", "Ad Astra (2019).mka", kind_of_audio_tag, Naming::Native),
+            "Ad Astra (2019).mka"
+        );
+        assert_eq!(
+            named_after_the_film(
+                "",
+                "Hi, Mom (2021).srt",
+                kind_of_subtitle_tag,
+                Naming::Native
+            ),
+            "Hi, Mom (2021).srt"
+        );
+    }
+
+    /// A file nothing named after the film is its own name, and that name *is*
+    /// read: a downloaded soundtrack arrives called `AD.mp3` as often as it
+    /// arrives named after the film.
+    #[test]
+    fn a_file_named_after_nothing_is_read_for_what_it_says() {
+        assert_eq!(
+            named_after_nothing("AD.mp3", kind_of_audio_tag),
+            "AD.mp3 - Audio Description"
+        );
+        assert_eq!(
+            named_after_nothing("English.srt", kind_of_subtitle_tag),
+            "English.srt"
+        );
+        // A name is not a tag: nothing is split off it, so neither a language
+        // nor an extension is picked out of one that happens to look like one.
+        assert_eq!(named_after_nothing("en.mp3", kind_of_audio_tag), "en.mp3");
+    }
+
+    /// `hi` is Hindi beside a soundtrack and hearing-impaired beside a
+    /// subtitle, which is why the two readings are separate functions.
+    #[test]
+    fn a_tag_is_read_for_the_kind_of_track_it_is() {
+        assert_eq!(kind_of_audio_tag("en.hi"), None);
+        assert_eq!(kind_of_subtitle_tag("en.hi"), Some(Kind::Sdh));
+        assert_eq!(kind_of_audio_tag("en.ad"), Some(Kind::Described));
+        assert_eq!(kind_of_subtitle_tag("en.ad"), None);
+    }
+
+    /// The printed list keeps the whole tag, because that is what
+    /// `--subtitle` is matched against.
+    #[test]
+    fn the_cli_naming_keeps_a_files_tag_whole() {
+        assert_eq!(
+            named_after_the_film(
+                "en.hi",
+                "Film.en.hi.srt",
+                kind_of_subtitle_tag,
+                Naming::WithTag
+            ),
+            "en.hi (English) - SDH"
         );
     }
 }

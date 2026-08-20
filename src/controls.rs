@@ -1895,11 +1895,17 @@ impl Controls {
     /// Rebuilt whole for the same reason the subtitle chooser is: it is called
     /// whenever any of it could have changed, and the list is a handful of
     /// labels. `current` counts into `entries`, and `None` marks nothing.
+    ///
+    /// `group` is where the separate audio files begin, which gets a heading
+    /// above it saying so. The rows themselves say only what each file is: the
+    /// alternative was every one of them beginning "Audio File:", three words
+    /// repeated down a list that a heading says once.
     pub fn set_audio_entries(
         self: &Rc<Self>,
         index: usize,
         entries: &[String],
         current: Option<usize>,
+        group: Option<usize>,
     ) {
         let Some(output) = self.outputs.get(index) else {
             return;
@@ -1909,6 +1915,16 @@ impl Controls {
         }
         let mut rows = Vec::new();
         for (at, text) in entries.iter().enumerate() {
+            // Appended but never pushed to `rows`, which is what the cursor
+            // and every index into this list are counted against: a heading is
+            // not a row, and is stepped over rather than stepped onto.
+            if group == Some(at) {
+                let heading = crate::app::group_heading(&tr!("AUDIO FILES"), self.scale, at == 0);
+                // Indented to this list's own padding rather than the settings
+                // page's, which is wider - see the stylesheet.
+                heading.add_css_class("tp-strip-group");
+                output.tracks.append(&heading);
+            }
             let row = subtitle_row(text);
             name_it(&row, text);
             if Some(at) == current {

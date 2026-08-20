@@ -436,11 +436,21 @@ struct Choices {
     /// top. `None` when nothing is set, which lands on the "None" row every
     /// list that has one begins with.
     current: Option<usize>,
-    /// Entries with a rule drawn above them, by index. Only the subtitle
-    /// preference has any: it offers three unlike things in one list - nothing,
-    /// four ways of following an output, and two hundred languages - and
-    /// without the rules they read as one long undifferentiated run.
-    dividers: Vec<usize>,
+    /// Entries that begin a group, by index, and what that group is called
+    /// where it is called anything.
+    ///
+    /// Most are a plain rule: the subtitle preference offers three unlike
+    /// things in one list - nothing, four ways of following an output, and two
+    /// hundred languages - and without the rules they read as one long
+    /// undifferentiated run. A rule says "these are a different kind of
+    /// answer", which is all most of them have to say.
+    ///
+    /// A caption says *which* kind, for the one group where the rows cannot:
+    /// the separate audio files, which look like the track rows above them.
+    /// Drawn as a heading in place of the rule rather than beside it, the way
+    /// the settings screen's groups are - and a heading sits outside the
+    /// selection model and the focus chain, so it cannot be landed on.
+    dividers: Vec<(usize, Option<String>)>,
 }
 
 /// Puts a selector's rows in, and can be run again when what they should say
@@ -1967,6 +1977,19 @@ impl App {
                     app.toggle_fullscreen();
                     glib::Propagation::Stop
                 }
+                // The one letter claimed *outside* playback, and the reason
+                // Space is not: Space belongs to whatever row has focus, so a
+                // media page where it played the film would stop opening the
+                // chooser somebody had arrowed onto. P is what Kodi binds Play
+                // to, and Kodi is the launcher most of this application's
+                // viewers arrive through.
+                //
+                // `play_from_page` is what decides, and says no everywhere the
+                // letter is worth more as a letter - which is what hands the
+                // key back to the browser's type-ahead.
+                gdk::Key::p | gdk::Key::P if !playing && app.play_from_page() => {
+                    glib::Propagation::Stop
+                }
                 // Only during playback: there is nothing to turn off from a
                 // menu, and the choosers want the letter for type-ahead.
                 gdk::Key::c | gdk::Key::C if playing => {
@@ -2107,6 +2130,43 @@ impl App {
             }
         });
         self.window.add_controller(capture);
+    }
+
+    /// Play or resume from the media page, for the two shortcuts that stand
+    /// in for its Play button: `P` and the pad's Start.
+    ///
+    /// Answers whether it did anything, which is what lets the key be claimed
+    /// only where it means this - press `P` in the file browser and it is
+    /// still a letter to jump by.
+    ///
+    /// **Only from the media page, and only when nothing is open over it.**
+    /// Every other screen has a use for the letter or nothing to play: the
+    /// browser and the choosers jump by it, and a selector open over the page
+    /// is a question being answered, not a page waiting to be played from. A
+    /// popover is found by looking up from whatever has the focus, there being
+    /// no register of the open one - and `take_nav` moving the arrows into it
+    /// says nothing about the keys this handler still sees.
+    ///
+    /// Resuming rather than restarting, which is what the button it stands for
+    /// does: `start_playback(false)` keeps the saved position, and Restart is
+    /// a button of its own for the other answer.
+    fn play_from_page(self: &Rc<Self>) -> bool {
+        if *self.screen.borrow() != Screen::Menu || self.playback.borrow().is_some() {
+            return false;
+        }
+        // Spelled out because `focus` is on two traits the window implements
+        // and neither is the obvious one.
+        let mut widget = gtk::prelude::GtkWindowExt::focus(&self.window);
+        while let Some(current) = widget {
+            if current.is::<gtk::Popover>() {
+                return false;
+            }
+            widget = current.parent();
+        }
+        // The same readiness the media key asks about, through the same path:
+        // there is one answer to "can this play now" and one place that gives
+        // it.
+        self.handle_media(crate::media_keys::Command::Play)
     }
 
     /// Pause or resume, keeping the display-awake hold in step with it.
@@ -3544,7 +3604,13 @@ impl App {
                 self.wake_controls();
             }
             Action::Activate => self.activate_focused(),
-            Action::PlayPause => {}
+            // Nothing is playing, so Start is what the page's Play button is:
+            // the way to it without crossing the page to press it. It did
+            // nothing at all here, which on the one screen a pad is most
+            // likely to be picked up on read as a dead button.
+            Action::PlayPause => {
+                self.play_from_page();
+            }
             Action::ActivateReleased if self.playback.borrow().is_some() => self.release_activate(),
             Action::ActivateReleased => {}
             Action::DirectionReleased => self.end_scrub(),
@@ -3810,11 +3876,11 @@ impl App {
                 Some(Playing::Track(track.index)),
             ));
         }
+        // Named as they are on the media page's list, with the heading over
+        // them saying once what each row used to begin by saying - see
+        // `chooser_entries`.
         for file in self.attached_files() {
-            rows.push((
-                tr!("Audio File: {name}", name = self.label_for_file(&file)).into_owned(),
-                Some(Playing::File(file.uri())),
-            ));
+            rows.push((self.label_for_file(&file), Some(Playing::File(file.uri()))));
         }
         rows
     }
@@ -3843,20 +3909,35 @@ impl App {
     /// [`Self::show_subtitle_state`] takes one. Reading `self` here marked the
     /// first row of both lists on every film, since with no playback to ask,
     /// nothing matched what was playing.
-    fn audio_entries(&self, playback: &Playback, role: Role) -> (Vec<String>, Option<usize>) {
+    fn audio_entries(
+        &self,
+        playback: &Playback,
+        role: Role,
+    ) -> (Vec<String>, Option<usize>, Option<usize>) {
         let playing = playback.playing_on(role.key());
         let rows = self.audio_rows(role);
         // Nothing is marked until a row matches, which on the first output is
         // the honest answer when it is playing nothing: it has no "None" row.
         let current = rows.iter().position(|(_, row)| *row == playing);
-        (rows.into_iter().map(|(label, _)| label).collect(), current)
+        // Where the separate files begin, for the heading over them - asked of
+        // the rows rather than counted out again from the tracks and the
+        // "None" row, which is the arithmetic `choose_audio` stopped doing for
+        // the reason its own note gives.
+        let files = rows
+            .iter()
+            .position(|(_, row)| matches!(row, Some(Playing::File(_))));
+        (
+            rows.into_iter().map(|(label, _)| label).collect(),
+            current,
+            files,
+        )
     }
 
     /// Fills both outputs' menus with what this video offers.
     fn push_audio_entries(&self, playback: &Playback, controls: &Rc<Controls>) {
         for (index, role) in [Role::Primary, Role::Secondary].into_iter().enumerate() {
-            let (entries, current) = self.audio_entries(playback, role);
-            controls.set_audio_entries(index, &entries, current);
+            let (entries, current, files) = self.audio_entries(playback, role);
+            controls.set_audio_entries(index, &entries, current, files);
         }
     }
 
@@ -6213,7 +6294,7 @@ impl App {
         // output has to exist for anything to play.
         let mut entries: Vec<Choice> = Vec::new();
         let mut current: Option<usize> = None;
-        let mut dividers: Vec<usize> = Vec::new();
+        let mut dividers: Vec<(usize, Option<String>)> = Vec::new();
         match setting {
             Setting::PrimaryDevice | Setting::SecondaryDevice => {
                 if setting == Setting::SecondaryDevice {
@@ -6222,7 +6303,7 @@ impl App {
                     // second output", which is a different kind of answer to
                     // the hardware listed below it - and the only list where
                     // this one is offered at all.
-                    dividers.push(1);
+                    dividers.push((1, None));
                 }
                 let configured = {
                     let config = self.config.borrow();
@@ -6252,7 +6333,7 @@ impl App {
                 // to go looking on disk. What sits between is what the file
                 // itself offers, and the two either side of it are answers of
                 // a different kind.
-                dividers.push(1);
+                dividers.push((1, None));
                 let chosen = self.subtitle.borrow().clone();
                 for (position, option) in self.subtitle_options.borrow().iter().enumerate() {
                     if chosen.as_ref() == Some(&option.choice()) {
@@ -6263,7 +6344,7 @@ impl App {
                 // Last, after everything the video came with, the same way the
                 // track lists offer one: a subtitle file from somewhere else
                 // is the answer when what is wanted is not beside the film.
-                dividers.push(entries.len());
+                dividers.push((entries.len(), None));
                 entries.push((
                     tr!("Browse...").into_owned(),
                     Some(self.subtitle_options.borrow().len()),
@@ -6271,7 +6352,7 @@ impl App {
             }
             Setting::PrimaryTrack | Setting::SecondaryTrack => {
                 entries.push((trc!("audio track", "None").into_owned(), None));
-                dividers.push(1);
+                dividers.push((1, None));
                 let role = if setting == Setting::PrimaryTrack {
                     Role::Primary
                 } else {
@@ -6303,29 +6384,29 @@ impl App {
                 // commonest thing there is to want here, and nobody should
                 // have to go looking on disk for a file already in the folder.
                 if !found.is_empty() {
-                    dividers.push(entries.len());
+                    dividers.push((entries.len(), Some(tr!("AUDIO FILES").into_owned())));
                 }
+                // The rows say only what they are. Every one of them used to
+                // begin "Audio File:", which put the same three words down the
+                // whole group where the heading says it once - and pushed what
+                // tells one file from another towards the end of a row that
+                // ellipsizes, on the one screen this is read across a room
+                // from.
                 for (position, audio) in found.iter().enumerate() {
                     if beside == Some(position) {
                         current = Some(tracks + position);
                     }
-                    entries.push((
-                        tr!("Audio File: {name}", name = audio.label).into_owned(),
-                        Some(tracks + position),
-                    ));
+                    entries.push((audio.label(), Some(tracks + position)));
                 }
                 // Last, after everything the film came with and everything
                 // sitting beside it: a file from somewhere else entirely,
                 // which is the answer when it is neither.
                 let elsewhere = tracks + found.len();
-                dividers.push(entries.len());
+                dividers.push((entries.len(), None));
                 match file.as_ref().filter(|_| beside.is_none()) {
                     Some(file) => {
                         current = Some(elsewhere);
-                        entries.push((
-                            tr!("Audio File: {name}", name = file.label()).into_owned(),
-                            Some(elsewhere),
-                        ));
+                        entries.push((file.label(), Some(elsewhere)));
                     }
                     None => entries.push((tr!("Browse...").into_owned(), Some(elsewhere))),
                 }
@@ -6344,7 +6425,7 @@ impl App {
                 // not a language at all - it is the absence of a preference,
                 // which leaves the choice to whatever the file offers first -
                 // and run flush against Afrikaans it reads as one.
-                dividers.push(1);
+                dividers.push((1, None));
                 // Worded exactly as the settings row shows it when unset, so
                 // the list and the value it came from agree.
                 entries.push((
@@ -6384,8 +6465,8 @@ impl App {
                 // between is the part worth choosing: following an output
                 // tracks whatever is actually being heard, file by file, where
                 // naming a language is a guess that holds until it does not.
-                dividers.push(1);
-                dividers.push(modes);
+                dividers.push((1, None));
+                dividers.push((modes, None));
                 for (position, value) in crate::subtitles::MODES.iter().enumerate() {
                     // The stored value and what it reads as are two different
                     // things now: one goes in config.yaml, the other on screen.
@@ -6418,7 +6499,7 @@ impl App {
                 // Below "Use the system language", which is not a language but
                 // the answer almost everybody wants and so sits above the list
                 // rather than in it.
-                dividers.push(1);
+                dividers.push((1, None));
                 for (position, offered) in languages.into_iter().enumerate() {
                     entries.push((offered.label, Some(position)));
                 }
@@ -6443,7 +6524,7 @@ impl App {
                 // thing to do, which is the same reason the secondary device
                 // list rules off its "None".
                 if configured {
-                    dividers.push(Registration::ALL.len() - 1);
+                    dividers.push((Registration::ALL.len() - 1, None));
                 }
             }
             Setting::KodiHandover(index) => {
@@ -6538,17 +6619,35 @@ impl App {
                     .position(|(_, choice)| *choice == current)
                     .unwrap_or(0) as i32;
                 *entries.borrow_mut() = fresh;
-                // A rule above the entries that begin a group. A header rather
-                // than a row of its own, for the reason the media page's group
-                // headings give: headers sit outside the selection model and
-                // the focus chain, so a rule cannot be landed on. Set on every
-                // fill, since the rows it describes are rebuilt each time.
+                // A rule above the entries that begin a group, or a heading
+                // where the group is named. A header rather than a row of its
+                // own, for the reason the media page's group headings give:
+                // headers sit outside the selection model and the focus chain,
+                // so neither can be landed on. Set on every fill, since the
+                // rows they describe are rebuilt each time.
+                let scale = app.scale.get();
                 list.set_header_func(move |row, _| {
-                    match dividers.contains(&(row.index() as usize)) {
-                        true => {
+                    let group = dividers
+                        .iter()
+                        .find(|(at, _)| *at == row.index() as usize)
+                        .map(|(_, caption)| caption);
+                    match group {
+                        Some(Some(caption)) => {
+                            // Never the first row, so it always takes its top
+                            // margin: a named group opens below rows rather
+                            // than at the top of the list.
+                            let heading = group_heading(caption, scale, false);
+                            // Against the same edge as the rows it labels,
+                            // which in a popover is the far one - see the note
+                            // on the rows above. The page's own headings start
+                            // where their rows start, and so does this.
+                            heading.set_xalign(appearance::text_end());
+                            row.set_header(Some(&heading))
+                        }
+                        Some(None) => {
                             row.set_header(Some(&gtk::Separator::new(gtk::Orientation::Horizontal)))
                         }
-                        false => row.set_header(None::<&gtk::Widget>),
+                        None => row.set_header(None::<&gtk::Widget>),
                     }
                 });
                 if let Some(row) = list.row_at_index(opening) {
@@ -8570,9 +8669,15 @@ impl App {
                     .borrow()
                     .iter()
                     .find(|found| found.path == path)
-                    .map(|found| found.label.clone())
+                    .map(crate::beside::AudioFile::label)
             })
-            .unwrap_or_else(|| file.label())
+            .unwrap_or_else(|| {
+                // Named to no convention, so its own name stands - through the
+                // same formatter every other row goes through, which reads it
+                // for what it says and leaves it alone where it says nothing.
+                let name = file.label();
+                crate::label::named_after_nothing(&name, crate::label::kind_of_audio_tag)
+            })
     }
 
     // --- Alignment -----------------------------------------------------
@@ -15234,6 +15339,16 @@ fn style_css(scale: f64) -> String {
             margin: {group_top}px {pad_h}px {group_gap}px {pad_h}px;
         }}
         .tp-group-first {{ margin-top: {group_first_top}px; }}
+        /* The same heading on the playback strip, whose rows are padded to
+           `crumb_pad` rather than to the page's `pad_h` - so it starts where
+           they start rather than a dozen pixels inside them, and takes a
+           smaller gap above, that list being a short one read over a film.
+
+           Two classes against one, so it wins on specificity rather than on
+           where it happens to sit in the sheet. */
+        .tp-group.tp-strip-group {{
+            margin: {strip_group_top}px {crumb_pad}px {group_gap}px {crumb_pad}px;
+        }}
         /* A selector opened over the page. `contents` is the node GTK puts
            inside a popover; styling the popover itself leaves the theme's own
            background drawn underneath. */
@@ -15248,6 +15363,19 @@ fn style_css(scale: f64) -> String {
         .tp-selector separator {{
             margin: {rule_gap}px 0;
             background-color: rgba(255, 255, 255, 0.14);
+        }}
+        /* A group heading inside a selector. The page's heading size is the
+           selector's *row* size, near enough, so a heading set at it does not
+           read as one - it takes a step down of its own, keeping the relation
+           to the rows below that it has on the page. Indented to the row
+           padding rather than the page's, so it starts where they do.
+
+           Two classes against one, which is how it wins: a rule that loses on
+           specificity is discarded in silence. */
+        .tp-selector .tp-group {{
+            font-size: {selector_group}px;
+            margin: {selector_group_top}px {selector_row_pad_h}px {group_gap}px
+                {selector_row_pad_h}px;
         }}
         .tp-selector > contents {{
             background-color: {selector_bg};
@@ -15777,12 +15905,18 @@ fn style_css(scale: f64) -> String {
         group_top = px(24.0),
         group_gap = px(4.0),
         group_first_top = px(10.0),
+        strip_group_top = px(12.0),
         // About three quarters of the page's row. Clearly subordinate to the
         // menu behind it, and still a size anyone can read from a sofa - which
         // half size was not, on the one list in the interface made of
         // near-identical strings where a misread picks the wrong track.
         rule_gap = px(6.0),
         selector_row = px(17.0),
+        selector_group = px(13.0),
+        // Less than the page's 24: a popover is a short list read in one
+        // glance, and the gap that separates groups on a full screen only
+        // makes this one taller.
+        selector_group_top = px(14.0),
         selector_row_pad_v = px(7.0),
         selector_row_pad_h = px(14.0),
         shadow_drop = px(4.0),

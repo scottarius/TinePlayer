@@ -84,11 +84,42 @@ pub fn files(video: &Path, extensions: &[&str]) -> Vec<Found> {
 /// or a restored track, downloaded next to it and named after it.
 pub struct AudioFile {
     pub path: PathBuf,
-    /// How the row reads. The tag rather than the whole file name, which is
-    /// the film's name over again with two letters on the end - those letters
-    /// are the whole of what tells one of these from another, and a name long
+    /// Whatever the convention left between the film's name and the
+    /// extension, where a library named this file after the film. Empty where
+    /// it is named *exactly* after the film, which says nothing about itself,
+    /// and `None` where nothing named it after the film at all.
+    ///
+    /// The difference is not decoration: a file named after the film is read
+    /// from its tag alone, because its name is the film's with an extension on
+    /// the end and reading that would read the film's title.
+    pub tag: Option<String>,
+    /// The file's own name, which is what tells one of these from the next
+    /// where the tag says nothing.
+    pub name: String,
+}
+
+impl AudioFile {
+    /// How the row reads - see [`crate::label`], which every track in the
+    /// application is named by, inside a file or beside it.
+    ///
+    /// Built when it is shown rather than when the file is found: the answer
+    /// carries the interface language, and that can change without a restart.
+    ///
+    /// The tag rather than the whole file name, where there is one. The name
+    /// is the film's over again with two letters on the end, those letters are
+    /// the whole of what tells one of these from another, and a name long
     /// enough to be cut off is no use across a room.
-    pub label: String,
+    pub fn label(&self) -> String {
+        match &self.tag {
+            Some(tag) => crate::label::named_after_the_film(
+                tag,
+                &self.name,
+                crate::label::kind_of_audio_tag,
+                crate::label::Naming::Native,
+            ),
+            None => crate::label::named_after_nothing(&self.name, crate::label::kind_of_audio_tag),
+        }
+    }
 }
 
 /// Every separate soundtrack beside `video`, in the order a list should show
@@ -98,13 +129,12 @@ pub fn audio(video: &Path) -> Vec<AudioFile> {
     let mut found: Vec<AudioFile> = files(video, crate::browser::AUDIO_EXTENSIONS)
         .into_iter()
         .map(|file| AudioFile {
-            // A file named exactly after the video says nothing about itself,
-            // so its own name is all there is to show.
-            label: describe(&file.tag).unwrap_or(file.name),
+            tag: Some(file.tag),
+            name: file.name,
             path: file.path,
         })
         .collect();
-    found.sort_by(|a, b| a.label.cmp(&b.label));
+    found.sort_by_key(AudioFile::label);
 
     // Then whatever else is in there, where there is only one film for it to
     // belong to. A soundtrack is *downloaded*, from somewhere that never heard
@@ -126,17 +156,18 @@ pub fn audio(video: &Path) -> Vec<AudioFile> {
         .into_iter()
         .filter(|path| !found.iter().any(|file| file.path == *path))
         .map(|path| AudioFile {
-            // Nothing to read: it is named to no convention, so it is shown as
-            // what it is. Its own name is also the only thing that tells two
-            // of them apart.
-            label: path
+            // Named after nothing, so there is no tag - and its own name is
+            // both what it is shown as and what is read for what it says,
+            // since `AD.mp3` is how one of these arrives as often as not.
+            tag: None,
+            name: path
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_default(),
             path,
         })
         .collect();
-    loose.sort_by(|a, b| a.label.cmp(&b.label));
+    loose.sort_by_key(AudioFile::label);
     found.extend(loose);
     found
 }
@@ -173,36 +204,6 @@ pub fn in_a_lone_film_folder(video: &Path, wanted: impl Fn(&Path) -> bool) -> Ve
     found
 }
 
-/// A tag as a row reads it: what the name says, then what it means.
-///
-/// Both halves are worth having. The tag is what tells two English tracks
-/// apart, and what somebody typing a choice would type; the reading is what
-/// makes `en.ad` legible to a person who has never seen the convention. Where
-/// the tag means nothing we know - `commentary`, `restored` - it is shown as
-/// it stands rather than dressed up.
-///
-/// `None` for an empty tag, which is not a description of anything.
-fn describe(tag: &str) -> Option<String> {
-    if tag.is_empty() {
-        return None;
-    }
-    let mut reading = Vec::new();
-    if let Some(name) = crate::languages::name_of_tag(tag) {
-        reading.push(name.to_string());
-    }
-    // The same reading of a name the track titles inside a file get, and for
-    // the same reason: the tools that produce description write "ad" and
-    // nothing else, and two letters on a row say nothing at all.
-    if crate::probe::is_audio_description(tag) {
-        reading.push("Audio Description".to_string());
-    }
-    Some(if reading.is_empty() {
-        tag.to_string()
-    } else {
-        format!("{tag} ({})", reading.join(", "))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,13 +236,11 @@ mod tests {
         let video = library(&root);
 
         let found = audio(&video);
-        let labels: Vec<&str> = found.iter().map(|file| file.label.as_str()).collect();
+        let labels: Vec<String> = found.iter().map(AudioFile::label).collect();
         // The subtitle, the artwork and the other film are not soundtracks for
-        // this one, however they are named.
-        assert_eq!(
-            labels,
-            ["ad (Audio Description)", "de (German)", "en (English)"]
-        );
+        // this one, however they are named. Named as every other track in the
+        // application is - see `crate::label`.
+        assert_eq!(labels, ["Deutsch", "English", "ad - Audio Description"]);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -278,7 +277,7 @@ mod tests {
 
         let found = audio(&extras);
         assert_eq!(found.len(), 1, "{:?}", found.len());
-        assert_eq!(found[0].label, "en (English)");
+        assert_eq!(found[0].label(), "English");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -295,7 +294,7 @@ mod tests {
 
         let found = audio(&root.join("Film.mkv"));
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].label, "Film.mka");
+        assert_eq!(found[0].label(), "Film.mka");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -312,7 +311,7 @@ mod tests {
 
         let found = audio(&root.join("Film.mkv"));
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].label, "FR (French)");
+        assert_eq!(found[0].label(), "Français");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -341,12 +340,17 @@ mod tests {
         let root = std::env::temp_dir().join("tp-beside-lone");
         let video = lone_film(&root);
 
-        let labels: Vec<String> = audio(&video).into_iter().map(|file| file.label).collect();
+        let labels: Vec<String> = audio(&video).iter().map(AudioFile::label).collect();
         // The one named to the convention first, read; then the loose ones as
-        // themselves, since their names say nothing to read.
+        // themselves, since their names name no language - though a name that
+        // says what it is is still read for it.
         assert_eq!(
             labels,
-            ["described (Audio Description)", "AD.mp3", "audio.mp3"]
+            [
+                "described - Audio Description",
+                "AD.mp3 - Audio Description",
+                "audio.mp3"
+            ]
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -362,25 +366,31 @@ mod tests {
         let video = lone_film(&root);
         std::fs::write(root.join("Toy Story (1995)-trailer.mp4"), b"x").unwrap();
 
-        let labels: Vec<String> = audio(&video).into_iter().map(|file| file.label).collect();
-        assert_eq!(labels, ["described (Audio Description)"]);
+        let labels: Vec<String> = audio(&video).iter().map(AudioFile::label).collect();
+        assert_eq!(labels, ["described - Audio Description"]);
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     /// What each kind of tag reads as. The language and the description are
     /// read together, because a described track is usually in a language too.
+    ///
+    /// The reading itself is `crate::label`'s and is tested there; this is the
+    /// half that matters here, which is that a file goes through it at all.
     #[test]
     fn a_tag_is_read_where_it_says_something() {
-        assert_eq!(describe("en").as_deref(), Some("en (English)"));
-        assert_eq!(describe("ad").as_deref(), Some("ad (Audio Description)"));
-        assert_eq!(
-            describe("en.ad").as_deref(),
-            Some("en.ad (English, Audio Description)")
-        );
+        let file = |tag: &str| AudioFile {
+            path: PathBuf::new(),
+            tag: Some(tag.to_string()),
+            name: "Film (2019).mp3".to_string(),
+        };
+        assert_eq!(file("en").label(), "English");
+        assert_eq!(file("ad").label(), "ad - Audio Description");
+        assert_eq!(file("en.ad").label(), "English - Audio Description");
         // Nothing the table knows, and no description: shown as it stands
         // rather than guessed at.
-        assert_eq!(describe("commentary").as_deref(), Some("commentary"));
-        assert_eq!(describe(""), None);
+        assert_eq!(file("commentary").label(), "commentary - Commentary");
+        // Nothing to read at all, so the file's own name stands.
+        assert_eq!(file("").label(), "Film (2019).mp3");
     }
 }
