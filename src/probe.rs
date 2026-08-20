@@ -19,6 +19,9 @@ pub struct AudioTrack {
     /// Matroska's `FlagVisualImpaired`. `None` where the file did not say,
     /// which is not the same as saying no. See [`AudioTrack::is_described`].
     pub described: Option<bool>,
+    /// Marked a director's commentary. Shown on the row and never acted on:
+    /// a commentary is a thing somebody chooses, not a thing to prefer.
+    pub commentary: Option<bool>,
 }
 
 impl AudioTrack {
@@ -33,6 +36,23 @@ impl AudioTrack {
     pub fn is_described(&self) -> bool {
         self.described
             .unwrap_or_else(|| is_audio_description(&self.title))
+    }
+
+    /// What this track is for, on the same ladder everything else uses: the
+    /// container's flag, then the title.
+    ///
+    /// Description is asked first because it is the one a preference acts on,
+    /// and because the two overlap in the wild - a described track is titled
+    /// "Commentary For Visually Impaired" often enough that answering
+    /// "commentary" would be true and useless.
+    pub fn kind(&self) -> Option<crate::label::Kind> {
+        if self.is_described() {
+            return Some(crate::label::Kind::Described);
+        }
+        let commentary = self
+            .commentary
+            .unwrap_or_else(|| self.title.to_lowercase().contains("commentary"));
+        commentary.then_some(crate::label::Kind::Commentary)
     }
 }
 
@@ -152,11 +172,20 @@ pub struct SubtitleTrack {
     pub index: u32,
     pub language: String,
     pub title: String,
-    /// Set only from a sidecar, which is the one place a forced flag can be
-    /// read from: GStreamer surfaces none. False means "nothing said so",
-    /// not "not forced" - the title is still consulted, in
+    /// What the stream is, for the technical half of a row: `SRT`, `ASS`,
+    /// `PGS`. Empty where the container would not say.
+    pub format: String,
+    /// The container's forced flag, then the sidecar's where the container was
+    /// silent. `None` is "nothing said so", which is not "not forced" - the
+    /// title is still read after this, in
     /// [`crate::subtitles::Subtitle::is_forced`].
-    pub forced: bool,
+    pub forced: Option<bool>,
+    /// Marked for the hard of hearing - Matroska's `FlagHearingImpaired`, the
+    /// flag behind the "SDH" a track title usually spells out by hand.
+    pub hearing_impaired: Option<bool>,
+    /// Marked a commentary. Read for what a row says rather than for what gets
+    /// chosen: nothing prefers or avoids a commentary automatically.
+    pub commentary: Option<bool>,
 }
 
 /// The picture, as far as the container describes it.
@@ -420,6 +449,7 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
 
     let mut subtitles = Vec::new();
     for (index, stream) in info.subtitle_streams().into_iter().enumerate() {
+        let container = flags_for(stream.upcast_ref());
         // Bitmap subtitles - Blu-ray PGS and the DVD subpictures in an
         // ordinary rip - are left out of the list.
         //
@@ -470,12 +500,22 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
             // and a track title is read after that - flags first, sidecar
             // second, names last, because that is the order of how much each
             // one actually knows.
-            forced: flags_for(stream.upcast_ref()).forced.unwrap_or(false),
+            format: stream
+                .caps()
+                .and_then(|caps| {
+                    caps.structure(0)
+                        .map(|s| subtitle_format(s.name().as_str()))
+                })
+                .unwrap_or_default(),
+            forced: container.forced,
+            hearing_impaired: container.hearing_impaired,
+            commentary: container.commentary,
         });
     }
 
     let mut tracks = Vec::new();
     for (index, stream) in info.audio_streams().into_iter().enumerate() {
+        let container = flags_for(stream.upcast_ref());
         let codec = stream
             .caps()
             .map(|caps| pbutils::pb_utils_get_codec_description(&caps).to_string())
@@ -495,7 +535,8 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
                 .map(|l| l.to_string())
                 .unwrap_or_else(|| "und".to_string()),
             title,
-            described: flags_for(stream.upcast_ref()).visual_impaired,
+            described: container.visual_impaired,
+            commentary: container.commentary,
         });
     }
 
@@ -665,6 +706,7 @@ mod resolve_audio_tests {
             language: language.to_string(),
             title: title.to_string(),
             described: None,
+            commentary: None,
         })
         .collect()
     }
@@ -726,6 +768,7 @@ mod described_tests {
             language: "en".into(),
             title: title.into(),
             described,
+            commentary: None,
         }
     }
 
@@ -753,5 +796,121 @@ mod described_tests {
     #[test]
     fn absent_is_not_a_denial() {
         assert!(track("Descriptive Audio", None).is_described());
+    }
+}
+
+/// A subtitle stream's format, where naming it tells a viewer something.
+///
+/// Only the bitmap formats are named, and the reason is that they behave
+/// differently: they are pictures, so the subtitle font and size settings do
+/// not touch them, and as of 1.5 they cannot be drawn at all. "PGS" on a row
+/// is the difference between two subtitles that would otherwise look
+/// interchangeable.
+///
+/// Text formats are deliberately not named, for two reasons. It says nothing
+/// anybody would act on - "SRT" beside a subtitle does not help anyone choose
+/// it - and we do not reliably know it anyway: SubRip, WebVTT, SAMI and an
+/// MKV `S_TEXT/UTF8` track all reach us as decoded `text/x-raw`, the container
+/// format already gone. This used to answer "SRT" for every one of them,
+/// which was a guess wearing the clothes of a fact.
+fn subtitle_format(media_type: &str) -> String {
+    match media_type {
+        "subpicture/x-pgs" => "PGS".to_string(),
+        "subpicture/x-dvd" => "VOBSUB".to_string(),
+        "subpicture/x-dvb" => "DVB".to_string(),
+        _ => String::new(),
+    }
+}
+
+impl SubtitleTrack {
+    /// What this subtitle is for: the container's flags, then the sidecar's,
+    /// then the words in its title.
+    ///
+    /// Forced is asked first because it is the one a preference acts on, and
+    /// because a track is rarely both - forced subtitles carry signs and
+    /// foreign lines, SDH carries everything including the sound.
+    pub fn kind(&self) -> Option<crate::label::Kind> {
+        let title = self.title.to_lowercase();
+        if self.forced.unwrap_or_else(|| title.contains("forced")) {
+            return Some(crate::label::Kind::Forced);
+        }
+        let sdh = self.hearing_impaired.unwrap_or_else(|| {
+            title.contains("sdh")
+                || title.contains("hearing impaired")
+                || title.contains("hard of hearing")
+                || title
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|word| word == "hi" || word == "cc")
+        });
+        if sdh {
+            return Some(crate::label::Kind::Sdh);
+        }
+        let commentary = self
+            .commentary
+            .unwrap_or_else(|| title.contains("commentary"));
+        commentary.then_some(crate::label::Kind::Commentary)
+    }
+}
+
+/// Working out what a subtitle is for, on the flags-then-title ladder.
+#[cfg(test)]
+mod subtitle_kind_tests {
+    use super::SubtitleTrack;
+    use crate::label::Kind;
+
+    fn track(title: &str) -> SubtitleTrack {
+        SubtitleTrack {
+            index: 0,
+            language: "en".into(),
+            title: title.into(),
+            format: "SRT".into(),
+            forced: None,
+            hearing_impaired: None,
+            commentary: None,
+        }
+    }
+
+    #[test]
+    fn the_title_answers_where_the_container_did_not() {
+        assert_eq!(track("English (Forced)").kind(), Some(Kind::Forced));
+        assert_eq!(track("English SDH").kind(), Some(Kind::Sdh));
+        assert_eq!(track("English CC").kind(), Some(Kind::Sdh));
+        assert_eq!(
+            track("Director's Commentary").kind(),
+            Some(Kind::Commentary)
+        );
+        assert_eq!(track("English").kind(), None);
+    }
+
+    /// The flag wins both ways. The second half is the one that changed
+    /// behaviour: a file stating "not forced" is believed over a title that
+    /// says otherwise, where before the title always won.
+    #[test]
+    fn the_container_outranks_the_title() {
+        let mut flagged = track("English");
+        flagged.forced = Some(true);
+        assert_eq!(flagged.kind(), Some(Kind::Forced));
+
+        let mut denied = track("English (Forced)");
+        denied.forced = Some(false);
+        assert_ne!(denied.kind(), Some(Kind::Forced));
+    }
+
+    /// Forced is asked first, because it is the one a preference acts on and
+    /// a track is rarely both.
+    #[test]
+    fn forced_is_asked_before_the_rest() {
+        let mut both = track("English SDH Forced");
+        both.hearing_impaired = Some(true);
+        both.forced = Some(true);
+        assert_eq!(both.kind(), Some(Kind::Forced));
+    }
+
+    /// "hi" is two letters that turn up inside other words, so it counts only
+    /// as a word of its own - the same rule "ad" gets for description.
+    #[test]
+    fn short_marks_are_read_as_whole_words() {
+        assert_eq!(track("Hindi").kind(), None);
+        assert_eq!(track("English hi").kind(), Some(Kind::Sdh));
     }
 }

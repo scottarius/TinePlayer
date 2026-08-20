@@ -22,10 +22,21 @@ pub const EXTENSIONS: [&str; 4] = ["srt", "ass", "ssa", "vtt"];
 pub enum Subtitle {
     Embedded {
         index: u32,
+        /// The whole of what the track says, as one string: what `--subtitle`
+        /// is matched against and what a saved choice refers to. Kept exactly
+        /// as it was, which is why the two halves below are carried beside it
+        /// rather than being cut back out of it.
         label: String,
-        /// What a sidecar said, where there was one. See
-        /// [`Subtitle::is_forced`] for why the title is still read as well.
-        flagged: bool,
+        /// The language tag alone, for the row's first segment.
+        language: String,
+        /// The title alone, for its last - where no type was worked out.
+        title: String,
+        /// What the stream is - `SRT`, `PGS`. The technical middle of a row.
+        format: String,
+        /// What this subtitle is for, worked out once where the track was in
+        /// hand: flags, then sidecar, then title. Carried rather than
+        /// re-derived because this is the only place all three were available.
+        kind: Option<crate::label::Kind>,
     },
     External {
         name: String,
@@ -128,9 +139,12 @@ pub fn options(
             label: if track.title.is_empty() {
                 track.language.clone()
             } else {
-                format!("{} — {}", track.language, track.title)
+                format!("{} - {}", track.language, track.title)
             },
-            flagged: track.forced,
+            language: track.language.clone(),
+            title: track.title.clone(),
+            format: track.format.clone(),
+            kind: track.kind(),
         })
         .collect();
     if let Some(video) = video {
@@ -261,21 +275,27 @@ impl Subtitle {
     ///
     /// Read from the name, and from a sidecar when one says so.
     ///
-    /// The name is the older signal and still the load-bearing one. Matroska
-    /// has a forced flag, but GStreamer does not surface it, and rips
-    /// routinely leave it unset while saying "Forced" in the title - the flag
-    /// is false on every track of a well-tagged file we tested. The convention
-    /// in the title and in subtitle file names is what actually carries the
-    /// intent.
+    /// What the file said, then what it is called.
     ///
-    /// A `.nfo` beside the video is the one place a real flag can be read
-    /// from, so it is taken as well. Either saying yes is enough: a library
-    /// that recorded the flag and a ripper who wrote it in the title are two
-    /// independent ways of being told the same thing, and files exist with
-    /// only one of them.
+    /// The flag is the better answer where there is one, and there is one far
+    /// more often than this used to assume: `matroskademux` reads
+    /// `TrackForced` and discards it, so the flag looked absent when it was
+    /// only unreachable. [`crate::matroska`] reads it back, and a `.nfo`
+    /// answers for the files that have one.
+    ///
+    /// Where nothing stated it - an MP4, a subtitle file beside the video, a
+    /// library's stream - the name still carries the intent, because the
+    /// convention of writing "Forced" into the title predates anyone relying
+    /// on the flag. An explicit *no* from the file is believed over a name,
+    /// which is the one case that changed: a track the file says is not forced
+    /// but somebody titled "Forced" is not forced.
     pub fn is_forced(&self) -> bool {
-        let flagged = matches!(self, Subtitle::Embedded { flagged: true, .. });
-        flagged || self.label().to_lowercase().contains("forced")
+        if let Subtitle::Embedded { kind, .. } = self {
+            // Already answered, on the full ladder, where the track was in
+            // hand: see `SubtitleTrack::kind`.
+            return *kind == Some(crate::label::Kind::Forced);
+        }
+        self.label().to_lowercase().contains("forced")
     }
 }
 
@@ -312,14 +332,14 @@ pub fn mode_label(value: &str) -> Option<Cow<'static, str>> {
 
 /// How the setting reads on screen: one of [`MODES`] or a language name.
 ///
-/// Not `languages::name_for` alone, which hands back whatever it was given
+/// Not `languages::display_name` alone, which hands back whatever it was given
 /// when it recognizes nothing - and it recognizes none of the modes, so the
 /// settings list showed `primary_forced` rather than what it means.
 pub fn describe(setting: Option<&str>) -> String {
     let setting = setting.unwrap_or(DEFAULT_MODE);
     mode_label(setting)
         .map(Cow::into_owned)
-        .unwrap_or_else(|| crate::languages::name_for(setting))
+        .unwrap_or_else(|| crate::languages::display_name(setting))
 }
 
 /// Forced subtitles for whatever the room is hearing. A dub usually speaks
@@ -553,7 +573,10 @@ mod tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "en".to_string(),
-                flagged: false,
+                language: "en".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: None,
             },
             Subtitle::External {
                 name: "Film (2019).en.hi.srt".to_string(),
@@ -658,17 +681,26 @@ mod automatic_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "ru - Forced".to_string(),
-                flagged: false,
+                language: "ru - Forced".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: Some(crate::label::Kind::Forced),
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "ru - Full".to_string(),
-                flagged: false,
+                language: "ru - Full".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: None,
             },
             Subtitle::Embedded {
                 index: 2,
                 label: "en - Full".to_string(),
-                flagged: false,
+                language: "en - Full".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: None,
             },
             Subtitle::External {
                 name: "f.en.forced.srt".to_string(),
@@ -677,8 +709,12 @@ mod automatic_tests {
         ]
     }
 
+    /// Forcedness is carried on the option now, worked out once from the
+    /// track. That it can be read out of a *name* is a fact about
+    /// `SubtitleTrack::kind`, and is tested there; this is only that the
+    /// answer survives onto the row and is what the preference sees.
     #[test]
-    fn forced_is_read_from_the_name() {
+    fn forced_is_carried_by_the_option() {
         let o = options();
         assert!(o[0].is_forced());
         assert!(!o[1].is_forced());
@@ -725,7 +761,10 @@ mod automatic_tests {
         let only_full = vec![Subtitle::Embedded {
             index: 0,
             label: "ru - Full".to_string(),
-            flagged: false,
+            language: "ru - Full".to_string(),
+            title: String::new(),
+            format: String::new(),
+            kind: None,
         }];
         assert_eq!(
             automatic(&Auto::parse("primary_forced"), &only_full, Some("ru"), None),
@@ -764,17 +803,26 @@ mod argument_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "ru - Forced".to_string(),
-                flagged: false,
+                language: "ru - Forced".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: Some(crate::label::Kind::Forced),
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "ru - Full".to_string(),
-                flagged: false,
+                language: "ru - Full".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: None,
             },
             Subtitle::Embedded {
                 index: 2,
                 label: "en - Full".to_string(),
-                flagged: false,
+                language: "en - Full".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: None,
             },
         ]
     }
@@ -823,12 +871,18 @@ mod fallback_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "ru - Full".to_string(),
-                flagged: false,
+                language: "ru - Full".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: None,
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "en - Forced".to_string(),
-                flagged: false,
+                language: "en - Forced".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: Some(crate::label::Kind::Forced),
             },
         ];
         assert_eq!(
@@ -843,12 +897,18 @@ mod fallback_tests {
             Subtitle::Embedded {
                 index: 0,
                 label: "en - Forced".to_string(),
-                flagged: false,
+                language: "en - Forced".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: Some(crate::label::Kind::Forced),
             },
             Subtitle::Embedded {
                 index: 1,
                 label: "ru - Forced".to_string(),
-                flagged: false,
+                language: "ru - Forced".to_string(),
+                title: String::new(),
+                format: String::new(),
+                kind: Some(crate::label::Kind::Forced),
             },
         ];
         assert_eq!(
@@ -866,7 +926,10 @@ mod fallback_tests {
         let o = vec![Subtitle::Embedded {
             index: 0,
             label: "en - Full".to_string(),
-            flagged: false,
+            language: "en - Full".to_string(),
+            title: String::new(),
+            format: String::new(),
+            kind: None,
         }];
         assert_eq!(
             automatic(&Auto::parse("primary"), &o, Some("ru"), Some("en")),
@@ -879,7 +942,10 @@ mod fallback_tests {
         let o = vec![Subtitle::Embedded {
             index: 0,
             label: "en - Full".to_string(),
-            flagged: false,
+            language: "en - Full".to_string(),
+            title: String::new(),
+            format: String::new(),
+            kind: None,
         }];
         assert_eq!(
             automatic(&Auto::parse("primary_forced"), &o, Some("ru"), Some("en")),
@@ -1007,4 +1073,68 @@ mod follows_tests {
             assert!(follows_output(&mode, true));
         }
     }
+}
+
+/// One row of a subtitle list, in the shape audio rows use - see
+/// [`crate::label`].
+///
+/// `naming` decides how an embedded track's language is written, because that
+/// is the caller's business: a chooser on a television names it as itself, and
+/// `--list-tracks` keeps the tag so somebody can see what to type.
+///
+/// A file beside the video is not given that choice. Its tag carries the whole
+/// convention - `en.hi`, `en.forced` - where only the first part is a
+/// language, so it is always shown as written with its reading after it.
+/// Naming it natively would quietly drop everything after the dot.
+pub fn row(option: &Subtitle, naming: crate::label::Naming) -> String {
+    // Picked by hand from somewhere on disk, named to no convention. Reading
+    // it as a language tag would mangle it, so it stands as it is.
+    if let Subtitle::File { label, .. } = option {
+        return label.clone();
+    }
+    // An embedded track states its language and its title separately, so the
+    // row is built from those rather than from the label, which is the two
+    // already run together and would come out doubled.
+    if let Subtitle::Embedded {
+        index,
+        language,
+        title,
+        format,
+        kind,
+        ..
+    } = option
+    {
+        return crate::label::line(
+            &crate::label::Parts {
+                language,
+                technical: format.clone(),
+                kind: *kind,
+                title,
+            },
+            naming,
+            // What a track with no language of its own is called. Its number,
+            // because that is the one thing it always has and is what
+            // `--subtitle` takes.
+            &tr!("Subtitle {number}").replace("{number}", &(index + 1).to_string()),
+        );
+    }
+    // A sidecar or a library's own subtitle. No format worth stating, and the
+    // type has to come back out of the tag, which is the only thing either of
+    // them said. Always shown as written: see this function's own note.
+    crate::label::line(
+        &crate::label::Parts {
+            language: option.label(),
+            technical: String::new(),
+            kind: crate::label::kind_of_tag(option.label()),
+            title: "",
+        },
+        crate::label::Naming::WithTag,
+        option.label(),
+    )
+}
+
+/// The same, named as the language names itself - what every on-screen list
+/// uses.
+pub fn row_native(option: &Subtitle) -> String {
+    row(option, crate::label::Naming::Native)
 }

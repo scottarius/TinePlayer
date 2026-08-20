@@ -3761,7 +3761,7 @@ impl App {
             if chosen.as_ref() == Some(&option.choice()) {
                 current = Some(position + 1);
             }
-            entries.push(subtitle_label(option));
+            entries.push(crate::subtitles::row_native(option));
         }
         (entries, current)
     }
@@ -5684,11 +5684,11 @@ impl App {
         let mut named: Vec<String> = Vec::new();
         for option in self.subtitle_options.borrow().iter() {
             // Labels arrive as a tag and possibly a title after it - "eng",
-            // "eng — Forced", "en.hi" - and the language is the first word of
+            // "eng - Forced", "en.hi" - and the language is the first word of
             // whichever shape it is.
             let tag = option
                 .label()
-                .split(" — ")
+                .split(" - ")
                 .next()
                 .unwrap_or_default()
                 .split('.')
@@ -6258,7 +6258,7 @@ impl App {
                     if chosen.as_ref() == Some(&option.choice()) {
                         current = Some(position);
                     }
-                    entries.push((subtitle_label(option), Some(position)));
+                    entries.push((crate::subtitles::row_native(option), Some(position)));
                 }
                 // Last, after everything the video came with, the same way the
                 // track lists offer one: a subtitle file from somewhere else
@@ -6355,13 +6355,9 @@ impl App {
                     },
                     None,
                 ));
-                for (position, (code, name, native, _)) in
-                    crate::languages::LANGUAGES.iter().enumerate()
-                {
-                    entries.push((
-                        crate::languages::menu_name(code, name, native),
-                        Some(position),
-                    ));
+                for position in crate::languages::display_order() {
+                    let code = crate::languages::LANGUAGES[position].0;
+                    entries.push((crate::languages::display_name(code), Some(position)));
                 }
             }
             Setting::SubtitleLanguage => {
@@ -6398,13 +6394,9 @@ impl App {
                         .unwrap_or_else(|| (*value).to_string());
                     entries.push((label, Some(position)));
                 }
-                for (position, (code, name, native, _)) in
-                    crate::languages::LANGUAGES.iter().enumerate()
-                {
-                    entries.push((
-                        crate::languages::menu_name(code, name, native),
-                        Some(modes + position),
-                    ));
+                for position in crate::languages::display_order() {
+                    let code = crate::languages::LANGUAGES[position].0;
+                    entries.push((crate::languages::display_name(code), Some(modes + position)));
                 }
             }
             Setting::SubtitleFont => {
@@ -6797,7 +6789,7 @@ impl App {
             .borrow()
             .iter()
             .find(|option| option.choice() == chosen)
-            .map(subtitle_label)
+            .map(crate::subtitles::row_native)
             .unwrap_or_else(|| trc!("subtitle track", "None").into_owned())
     }
 
@@ -9046,7 +9038,7 @@ impl App {
                     Role::Secondary => (&config.secondary_language, tr!("Second track")),
                 };
                 match code {
-                    Some(code) => crate::languages::name_for(code),
+                    Some(code) => crate::languages::display_name(code),
                     None => unset.into_owned(),
                 }
             }
@@ -14320,34 +14312,21 @@ fn last_row_index(list: &gtk::ListBox) -> i32 {
     last
 }
 
-/// How a subtitle reads in a list.
-///
-/// The label of anything found beside the video is a language tag, written the
-/// way the convention writes it - "en", "en.hi", "pt-BR" - and is put into
-/// words. A file chosen by hand is labelled with its own name, which is not a
-/// tag and would come out mangled if it were read as one.
-fn subtitle_label(option: &Subtitle) -> String {
-    match option {
-        Subtitle::File { label, .. } => label.clone(),
-        other => crate::languages::describe_tag(other.label()),
-    }
-}
-
+/// One row of a soundtrack list. See [`crate::label`] for the shape, which
+/// subtitles share.
 fn describe_audio_track(track: &AudioTrack) -> String {
-    // Checked against the title, which is where a language most often gets
-    // named twice: a track tagged `eng` and titled "English Commentary" needs
-    // no help, and would otherwise read "eng (English) - ... - English
-    // Commentary".
-    let mut text = format!(
-        "{} — {} {}ch",
-        crate::languages::describe_tag_unless(&track.language, &track.title),
-        track.codec,
-        track.channels
-    );
-    if !track.title.is_empty() {
-        text.push_str(&format!(" — {}", track.title));
-    }
-    text
+    crate::label::line(
+        &crate::label::Parts {
+            language: &track.language,
+            technical: format!("{} {}ch", track.codec, track.channels),
+            kind: track.kind(),
+            title: &track.title,
+        },
+        crate::label::Naming::Native,
+        // A track that will not say what it is still has to be pointable at,
+        // and its number is the one thing it always has.
+        &tr!("Track {number}").replace("{number}", &(track.index + 1).to_string()),
+    )
 }
 
 /// A stored alignment as a statement rather than as a signed number.

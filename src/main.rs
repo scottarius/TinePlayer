@@ -27,6 +27,7 @@ mod i18n;
 mod jellyfin;
 mod kodi;
 mod kodi_setup;
+mod label;
 mod languages;
 mod lockup;
 mod matroska;
@@ -395,18 +396,21 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     println!("Audio tracks ({}):", media.audio.len());
     println!();
     println!("  {:>width$}  None", 0);
+    // The same rows the choosers show - see `crate::label` - but keeping the
+    // language tag, because this printed list is where somebody finds out what
+    // to hand to `--primary` or `--subtitle`.
     for (position, track) in media.audio.iter().enumerate() {
-        let mut line = format!(
-            "  {:>width$}  {} — {} {}ch",
-            position + 1,
-            track.language,
-            track.codec,
-            track.channels
+        let name = label::line(
+            &label::Parts {
+                language: &track.language,
+                technical: format!("{} {}ch", track.codec, track.channels),
+                kind: track.kind(),
+                title: &track.title,
+            },
+            label::Naming::WithTag,
+            &format!("Track {}", position + 1),
         );
-        if !track.title.is_empty() {
-            line.push_str(&format!(" — {}", track.title));
-        }
-        println!("{line}");
+        println!("  {:>width$}  {name}", position + 1);
     }
 
     println!();
@@ -414,7 +418,11 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     println!();
     println!("  {:>width$}  None", 0);
     for (position, option) in subtitles.iter().enumerate() {
-        println!("  {:>width$}  {}", position + 1, option.label());
+        println!(
+            "  {:>width$}  {}",
+            position + 1,
+            subtitles::row(option, label::Naming::WithTag)
+        );
     }
 
     println!();

@@ -86,24 +86,31 @@ pub const LANGUAGES: &[(&str, &str, &str, &[&str])] = &[
     ("vi", "Vietnamese", "Tiếng Việt", &["vi", "vie"]),
 ];
 
-pub fn name_for(code: &str) -> String {
+/// How a language is written wherever one is named: in its own words.
+///
+/// Every list in the application uses this - the Interface Language chooser,
+/// the audio and subtitle preferences, and the track rows by way of
+/// [`native_of_tag`]. There is exactly one way a language is spelled on
+/// screen, and it is the way that language spells it.
+///
+/// **Both names used to be shown**, as `Russian (Русский)`, on the reasoning
+/// that a list of fifty entries in scripts with nothing in common is easier to
+/// work down with English beside it. Dropped on 2026-08-20. The English name
+/// is only the *right* name when the interface is English, and since 1.5 that
+/// is not a safe assumption: a Russian reading a Russian interface got a
+/// foreign word bolted onto a language they already read. Naming it properly
+/// would mean the interface language's word for every language, which is fifty
+/// more strings per locale for a translator to carry.
+///
+/// Falls back to the English name for anything with no native form recorded,
+/// and to the code itself for anything the table does not carry - which is an
+/// honest answer rather than a guess.
+pub fn display_name(code: &str) -> String {
     LANGUAGES
         .iter()
         .find(|(stored, _, _, _)| *stored == code)
-        .map(|(_, name, _, _)| name.to_string())
+        .map(|(_, name, native, _)| if native.is_empty() { *name } else { *native }.to_string())
         .unwrap_or_else(|| code.to_string())
-}
-
-/// How a language reads in a menu: the English name, and its own name after
-/// it where the two differ. English gets "English", Russian gets
-/// "Russian (Русский)".
-pub fn menu_name(code: &str, name: &str, native: &str) -> String {
-    let _ = code;
-    if name == native {
-        name.to_string()
-    } else {
-        format!("{name} ({native})")
-    }
 }
 
 /// The English name for whatever a track or file called itself, taken
@@ -130,16 +137,14 @@ pub fn name_of_tag(tag: &str) -> Option<&'static str> {
 /// The same, but the language's own name for itself: `Русский` rather than
 /// `Russian`, `日本語` rather than `Japanese`.
 ///
-/// **What the media page's Audio and Subtitles lines use.** Those lines say
-/// what a file carries, and the answer is most useful to whoever is looking
-/// for their own language in it - who scans for their own word, not for the
-/// English one. It also stays right regardless of what language the interface
-/// is in, which "Russian" does not: a Russian interface listing "Russian" is
-/// a line nobody can read twice.
+/// **What every list naming a language uses**, by way of this or of
+/// [`display_name`]. The answer is most useful to whoever is looking for their
+/// own language, who scans for their own word - and it stays right whatever
+/// language the interface is in, which "Russian" does not: a Russian interface
+/// listing "Russian" is a line nobody can read twice.
 ///
-/// The chooser rows keep [`menu_name`], which shows both. There the question
-/// is "which of these do I want", and a list in fifty scripts with nothing in
-/// common is harder to work down than one with English beside it.
+/// The chooser rows used to show both names and no longer do; see
+/// [`display_name`] for what that cost and why it went.
 pub fn native_of_tag(tag: &str) -> Option<&'static str> {
     let tag: String = tag
         .trim()
@@ -305,7 +310,7 @@ mod tag_descriptions {
         );
         // A label carrying the name itself rather than a separate title.
         assert_eq!(describe_tag("en.English"), "en.English");
-        assert_eq!(describe_tag("eng — English SDH"), "eng — English SDH");
+        assert_eq!(describe_tag("eng - English SDH"), "eng - English SDH");
         // A title naming a different language is not the same language.
         assert_eq!(
             describe_tag_unless("eng", "Spanish Commentary"),
@@ -332,5 +337,152 @@ mod tag_descriptions {
         assert!(matches(&describe_tag("en.hi"), "en"));
         assert!(matches(&describe_tag("eng"), "en"));
         assert!(!matches(&describe_tag("eng"), "ru"));
+    }
+}
+
+/// The order languages are offered in, as indices into [`LANGUAGES`].
+///
+/// The table itself stays sorted by English name, which is what makes it
+/// maintainable to read and edit. That order stopped making sense on screen
+/// the moment the lists began naming languages natively: sorted by their
+/// English names but shown in their own, the list opened with Arabic, then
+/// Armenian, then two Latin entries, then Bengali. Alphabetical by a word the
+/// reader could no longer see.
+///
+/// Sorted by script first, then by name within it. Grouping by script is the
+/// property worth having: somebody looking for their own language is looking
+/// for their own letters, and fifty entries in fifteen scripts are worked down
+/// by finding the block and then reading.
+///
+/// **Within a non-Latin script the order is by code point**, which is not what
+/// a reader of that script would call alphabetical - it is merely stable and
+/// keeps the block together. Doing better needs locale-aware collation, which
+/// means a dependency and a table per language; the blocks are three to six
+/// entries each, so the gain would be small.
+pub fn display_order() -> Vec<usize> {
+    let mut order: Vec<usize> = (0..LANGUAGES.len()).collect();
+    order.sort_by_key(|&index| {
+        let native = LANGUAGES[index].2;
+        (script_rank(native), fold(native))
+    });
+    order
+}
+
+/// Which script a name is written in, as a sort position. Unicode lays the
+/// scripts out in blocks, so this is the block the first character falls in.
+fn script_rank(native: &str) -> u8 {
+    const BLOCKS: [(u32, u32); 16] = [
+        (0x0041, 0x024F), // Latin
+        (0x0370, 0x03FF), // Greek
+        (0x0400, 0x04FF), // Cyrillic
+        (0x0530, 0x058F), // Armenian
+        (0x0590, 0x05FF), // Hebrew
+        (0x0600, 0x06FF), // Arabic, and the languages that borrow it
+        (0x0900, 0x097F), // Devanagari
+        (0x0980, 0x09FF), // Bengali
+        (0x0A00, 0x0A7F), // Gurmukhi
+        (0x0B80, 0x0BFF), // Tamil
+        (0x0C00, 0x0C7F), // Telugu
+        (0x0D00, 0x0D7F), // Malayalam
+        (0x0E00, 0x0E7F), // Thai
+        (0x10A0, 0x10FF), // Georgian
+        (0x4E00, 0x9FFF), // Han
+        (0xAC00, 0xD7AF), // Hangul
+    ];
+    let Some(first) = native.chars().next() else {
+        return u8::MAX;
+    };
+    BLOCKS
+        .iter()
+        .position(|(low, high)| (*low..=*high).contains(&(first as u32)))
+        .map(|rank| rank as u8)
+        .unwrap_or(u8::MAX)
+}
+
+/// A name reduced to something that sorts the way a reader expects.
+///
+/// For ordering only, and never shown. Without it `Čeština` sorts after every
+/// unaccented Latin name rather than beside `Català`, because `Č` lives past
+/// `Z` in Unicode. Non-Latin letters are left alone: there is nothing to fold
+/// them to, and within their own block they are already together.
+fn fold(native: &str) -> String {
+    native
+        .chars()
+        .map(|c| match c {
+            'Č' | 'Ç' => 'C',
+            'č' | 'ç' => 'c',
+            'Í' => 'I',
+            'í' => 'i',
+            'Đ' => 'D',
+            'đ' | 'ð' => 'd',
+            'Ə' => 'E',
+            'ə' | 'é' | 'ė' => 'e',
+            'Ş' | 'Š' => 'S',
+            'ş' | 'š' => 's',
+            'Ğ' => 'G',
+            'ğ' => 'g',
+            'ü' | 'ū' | 'ų' => 'u',
+            'ö' | 'ó' | 'ő' => 'o',
+            'å' | 'á' | 'ą' | 'ã' => 'a',
+            'ñ' => 'n',
+            'ž' => 'z',
+            'ł' => 'l',
+            'ệ' | 'ế' => 'e',
+            other => other,
+        })
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    fn shown() -> Vec<&'static str> {
+        display_order()
+            .into_iter()
+            .map(|i| LANGUAGES[i].2)
+            .collect()
+    }
+
+    /// Every language is offered exactly once, whatever the order.
+    #[test]
+    fn the_order_is_a_permutation() {
+        let mut sorted = display_order();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..LANGUAGES.len()).collect::<Vec<_>>());
+    }
+
+    /// Each script arrives in one run rather than scattered through the list,
+    /// which is the property somebody looking for their own letters needs.
+    #[test]
+    fn a_script_is_never_interrupted() {
+        let mut seen: Vec<u8> = Vec::new();
+        for name in shown() {
+            let rank = script_rank(name);
+            if seen.last() != Some(&rank) {
+                assert!(
+                    !seen.contains(&rank),
+                    "{name} reopens a script already done"
+                );
+                seen.push(rank);
+            }
+        }
+    }
+
+    /// Latin comes first, being most of the table, and reads alphabetically -
+    /// including the accented names, which sort past `Z` unfolded.
+    #[test]
+    fn the_latin_block_reads_alphabetically() {
+        let latin: Vec<&str> = shown()
+            .into_iter()
+            .take_while(|name| script_rank(name) == 0)
+            .collect();
+        assert_eq!(latin.first(), Some(&"Azərbaycan"));
+        let folded: Vec<String> = latin.iter().map(|n| fold(n)).collect();
+        let mut expected = folded.clone();
+        expected.sort();
+        assert_eq!(folded, expected);
+        assert!(latin.contains(&"Čeština") && latin.contains(&"Íslenska"));
     }
 }
