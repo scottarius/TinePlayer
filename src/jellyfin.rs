@@ -1060,6 +1060,14 @@ impl Streams {
                 channels: stream.channels,
                 language: stream.language.clone(),
                 title: stream.title.clone(),
+                // Nothing to read. The library hands over a description of the
+                // stream rather than the file, and it carries no equivalent of
+                // Matroska's `FlagVisualImpaired` - so a cast item falls
+                // through to its track title, which is where this always was.
+                // Worth remembering that the server's flags are not reliably
+                // better anyway: it reports `IsForced=False` on a track it
+                // titles "Forced".
+                described: None,
             })
             .collect();
 

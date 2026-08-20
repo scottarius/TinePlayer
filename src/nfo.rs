@@ -693,6 +693,7 @@ mod tests {
                     channels: 2,
                     language: (*language).to_string(),
                     title: String::new(),
+                    described: None,
                 })
                 .collect(),
             subtitles: subtitles

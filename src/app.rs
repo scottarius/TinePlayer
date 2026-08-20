@@ -5663,7 +5663,7 @@ impl App {
             let name = crate::languages::native_of_tag(&track.language)
                 .map(Cow::Borrowed)
                 .unwrap_or_else(unknown_language);
-            let entry = match crate::probe::is_audio_description(&track.title) {
+            let entry = match track.is_described() {
                 true => tr!("{language} (Described)", language = name).into_owned(),
                 false => name.into_owned(),
             };
@@ -7224,8 +7224,7 @@ impl App {
                 ),
             )
         };
-        let describes =
-            |track: &crate::probe::AudioTrack| crate::probe::is_audio_description(&track.title);
+        let describes = |track: &crate::probe::AudioTrack| track.is_described();
 
         // What ordinary selection is allowed to pick from: everything except
         // the described tracks, which are only ever chosen by asking for them.
@@ -8727,7 +8726,7 @@ impl App {
         // to the first track when description is all the file has.
         let opening = tracks
             .iter()
-            .position(|track| !crate::probe::is_audio_description(&track.title))
+            .position(|track| !track.is_described())
             .unwrap_or(0);
         if let Some(row) = list.row_at_index(opening as i32) {
             list.select_row(Some(&row));

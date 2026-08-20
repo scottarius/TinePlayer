@@ -15,15 +15,36 @@ pub struct AudioTrack {
     pub channels: u32,
     pub language: String,
     pub title: String,
+    /// Whether the container marked this a description for blind viewers -
+    /// Matroska's `FlagVisualImpaired`. `None` where the file did not say,
+    /// which is not the same as saying no. See [`AudioTrack::is_described`].
+    pub described: Option<bool>,
+}
+
+impl AudioTrack {
+    /// Whether this track is an audio description.
+    ///
+    /// The container first, its title second. The tools that add a described
+    /// soundtrack set the flag - describealign writes
+    /// `disposition:a:0 default+visual_impaired` - so on a file made by one of
+    /// them this is the file's own answer rather than a guess at its wording.
+    /// Only where the file says nothing does the title get read, which is
+    /// every MP4 and every rip made by something that did not bother.
+    pub fn is_described(&self) -> bool {
+        self.described
+            .unwrap_or_else(|| is_audio_description(&self.title))
+    }
 }
 
 /// Whether a track's title marks it as an audio description: a narrated
 /// account of what is happening on screen, for a viewer who is blind or has
 /// low vision.
 ///
-/// Title text is the only signal there is. The container flags exist -
-/// Matroska has `FlagVisualImpaired` - but GStreamer exposes none of them, so
-/// there is nothing else to read.
+/// Read only where the container said nothing. Matroska's `FlagVisualImpaired`
+/// is the better answer and is preferred - see [`AudioTrack::is_described`] -
+/// but GStreamer discards it, so it is read back out of the file by
+/// [`crate::matroska`] and is absent for every other container. This is what
+/// answers the rest.
 ///
 /// Naming is not standardized, and real files disagree wildly: Netflix labels
 /// the track "Descriptive", while a Blu-ray rip called it "Commentary For
@@ -108,7 +129,7 @@ pub fn resolve_audio(spec: &str, tracks: &[AudioTrack]) -> Result<Option<u32>, S
     };
     let found = tracks
         .iter()
-        .find(|track| is_audio_description(&track.title) == described && matching(track));
+        .find(|track| track.is_described() == described && matching(track));
 
     found.map(|track| Some(track.index)).ok_or_else(|| {
         let what = if described {
@@ -474,6 +495,7 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
                 .map(|l| l.to_string())
                 .unwrap_or_else(|| "und".to_string()),
             title,
+            described: flags_for(stream.upcast_ref()).visual_impaired,
         });
     }
 
@@ -642,6 +664,7 @@ mod resolve_audio_tests {
             channels: 2,
             language: language.to_string(),
             title: title.to_string(),
+            described: None,
         })
         .collect()
     }
@@ -687,5 +710,48 @@ mod resolve_audio_tests {
         assert!(resolve_audio("fr", &tracks).is_err());
         assert!(resolve_audio("fr:ad", &tracks).is_err());
         assert!(resolve_audio("en:sdh", &tracks).is_err());
+    }
+}
+
+/// Preferring what the container states over what a track is called.
+#[cfg(test)]
+mod described_tests {
+    use super::AudioTrack;
+
+    fn track(title: &str, described: Option<bool>) -> AudioTrack {
+        AudioTrack {
+            index: 0,
+            codec: "AAC".into(),
+            channels: 2,
+            language: "en".into(),
+            title: title.into(),
+            described,
+        }
+    }
+
+    /// The file's own answer wins, in both directions. The second half is the
+    /// half that matters: a track titled "Commentary with the director" that
+    /// the file marks as a description is a description, and the naming rules
+    /// would never have found it.
+    #[test]
+    fn the_container_is_believed_over_the_title() {
+        assert!(!track("English Audio Description", Some(false)).is_described());
+        assert!(track("Commentary with the director", Some(true)).is_described());
+    }
+
+    /// Where the file says nothing - every MP4, and any rip made by something
+    /// that did not set the flag - the title is still read.
+    #[test]
+    fn a_silent_container_falls_through_to_the_title() {
+        assert!(track("English Audio Description", None).is_described());
+        assert!(!track("English", None).is_described());
+    }
+
+    /// Absent is not false. A file that states the flag on one track and omits
+    /// it on another has not said the second is ordinary, so the second is
+    /// still judged on its name.
+    #[test]
+    fn absent_is_not_a_denial() {
+        assert!(track("Descriptive Audio", None).is_described());
     }
 }
