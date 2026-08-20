@@ -1977,6 +1977,19 @@ impl App {
                     app.toggle_fullscreen();
                     glib::Propagation::Stop
                 }
+                // The one letter claimed *outside* playback, and the reason
+                // Space is not: Space belongs to whatever row has focus, so a
+                // media page where it played the film would stop opening the
+                // chooser somebody had arrowed onto. P is what Kodi binds Play
+                // to, and Kodi is the launcher most of this application's
+                // viewers arrive through.
+                //
+                // `play_from_page` is what decides, and says no everywhere the
+                // letter is worth more as a letter - which is what hands the
+                // key back to the browser's type-ahead.
+                gdk::Key::p | gdk::Key::P if !playing && app.play_from_page() => {
+                    glib::Propagation::Stop
+                }
                 // Only during playback: there is nothing to turn off from a
                 // menu, and the choosers want the letter for type-ahead.
                 gdk::Key::c | gdk::Key::C if playing => {
@@ -2117,6 +2130,43 @@ impl App {
             }
         });
         self.window.add_controller(capture);
+    }
+
+    /// Play or resume from the media page, for the two shortcuts that stand
+    /// in for its Play button: `P` and the pad's Start.
+    ///
+    /// Answers whether it did anything, which is what lets the key be claimed
+    /// only where it means this - press `P` in the file browser and it is
+    /// still a letter to jump by.
+    ///
+    /// **Only from the media page, and only when nothing is open over it.**
+    /// Every other screen has a use for the letter or nothing to play: the
+    /// browser and the choosers jump by it, and a selector open over the page
+    /// is a question being answered, not a page waiting to be played from. A
+    /// popover is found by looking up from whatever has the focus, there being
+    /// no register of the open one - and `take_nav` moving the arrows into it
+    /// says nothing about the keys this handler still sees.
+    ///
+    /// Resuming rather than restarting, which is what the button it stands for
+    /// does: `start_playback(false)` keeps the saved position, and Restart is
+    /// a button of its own for the other answer.
+    fn play_from_page(self: &Rc<Self>) -> bool {
+        if *self.screen.borrow() != Screen::Menu || self.playback.borrow().is_some() {
+            return false;
+        }
+        // Spelled out because `focus` is on two traits the window implements
+        // and neither is the obvious one.
+        let mut widget = gtk::prelude::GtkWindowExt::focus(&self.window);
+        while let Some(current) = widget {
+            if current.is::<gtk::Popover>() {
+                return false;
+            }
+            widget = current.parent();
+        }
+        // The same readiness the media key asks about, through the same path:
+        // there is one answer to "can this play now" and one place that gives
+        // it.
+        self.handle_media(crate::media_keys::Command::Play)
     }
 
     /// Pause or resume, keeping the display-awake hold in step with it.
@@ -3554,7 +3604,13 @@ impl App {
                 self.wake_controls();
             }
             Action::Activate => self.activate_focused(),
-            Action::PlayPause => {}
+            // Nothing is playing, so Start is what the page's Play button is:
+            // the way to it without crossing the page to press it. It did
+            // nothing at all here, which on the one screen a pad is most
+            // likely to be picked up on read as a dead button.
+            Action::PlayPause => {
+                self.play_from_page();
+            }
             Action::ActivateReleased if self.playback.borrow().is_some() => self.release_activate(),
             Action::ActivateReleased => {}
             Action::DirectionReleased => self.end_scrub(),

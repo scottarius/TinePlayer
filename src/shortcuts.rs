@@ -119,6 +119,11 @@ fn groups() -> Vec<Group> {
                     tr!("Select/Activate focused element"),
                 ),
                 binding(
+                    trc!("keyboard keys", "P"),
+                    trc!("gamepad buttons", "Start"),
+                    tr!("Play or resume the film on the media page"),
+                ),
+                binding(
                     trc!("keyboard keys", "F, F11"),
                     trc!("gamepad buttons", "Y"),
                     // Sentence case, matching the other seven rows here and
