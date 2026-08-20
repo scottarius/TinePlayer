@@ -372,6 +372,31 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
         other => return Err(format!("Couldn't read {uri}: {other:?}")),
     }
 
+    // What the container itself says about each track, where it is a local
+    // Matroska file. GStreamer reads these flags and hands none of them on -
+    // see `crate::matroska` - so they are read again here rather than being
+    // guessed from track titles.
+    //
+    // Joined by the Matroska track number, which `matroskademux` puts in the
+    // `container-specific-track-id` tag. Never by the order the streams came
+    // in: two orderings that agree today are two orderings free to disagree,
+    // and the failure would be silent and per-file.
+    let container = source
+        .local()
+        .map(crate::matroska::flags)
+        .unwrap_or_default();
+    let flags_for = |stream: &pbutils::DiscovererStreamInfo| {
+        stream
+            .tags()
+            .and_then(|tags| {
+                tags.index_generic("container-specific-track-id", 0)
+                    .and_then(|value| value.get::<String>().ok())
+            })
+            .and_then(|id| id.parse::<u64>().ok())
+            .and_then(|id| container.get(&id).copied())
+            .unwrap_or_default()
+    };
+
     let mut subtitles = Vec::new();
     for (index, stream) in info.subtitle_streams().into_iter().enumerate() {
         // Bitmap subtitles - Blu-ray PGS and the DVD subpictures in an
@@ -419,9 +444,12 @@ pub fn probe_media(source: &Source) -> Result<Media, String> {
                 .tags()
                 .and_then(|tags| tags.get::<gst::tags::Title>().map(|t| t.get().to_string()))
                 .unwrap_or_default(),
-            // Nothing in the pipeline can say. A sidecar can, and does so
-            // below once the whole list is known.
-            forced: false,
+            // What the container said, where it said anything. A `.nfo`
+            // beside the file fills the gap below for the ones that did not,
+            // and a track title is read after that - flags first, sidecar
+            // second, names last, because that is the order of how much each
+            // one actually knows.
+            forced: flags_for(stream.upcast_ref()).forced.unwrap_or(false),
         });
     }
 

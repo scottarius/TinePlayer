@@ -29,6 +29,7 @@ mod kodi;
 mod kodi_setup;
 mod languages;
 mod lockup;
+mod matroska;
 mod media_keys;
 mod metadata;
 mod nfo;
