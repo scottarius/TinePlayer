@@ -39,7 +39,16 @@ pub enum Subtitle {
         kind: Option<crate::label::Kind>,
     },
     External {
+        /// The file's own name, which is how the choice is stored and found
+        /// again.
         name: String,
+        /// The tag the convention left in that name, exactly as written, and
+        /// **empty for a file named exactly after the film** - which is a real
+        /// case and says nothing about itself. For a file named after nothing
+        /// this is the name over again, that being the whole of what it says.
+        ///
+        /// What `--subtitle` is matched against, and what the forced check and
+        /// the language preferences read.
         label: String,
     },
     /// A file chosen by hand, from anywhere on disk. Kept apart from
@@ -61,7 +70,15 @@ pub enum Subtitle {
     /// without the pairing.
     Library {
         index: u32,
+        /// The language and title run together, as [`Subtitle::Embedded`]
+        /// carries it: what `--subtitle` is matched against, and what the row
+        /// falls back to where the stream stated neither.
         label: String,
+        /// The language alone, for the row's first segment.
+        language: String,
+        /// The title alone, for its last - and where the type is read from,
+        /// the server's own flags being unreliable.
+        title: String,
     },
 }
 
@@ -185,13 +202,13 @@ fn external(video: &Path) -> Vec<Subtitle> {
     let mut found: Vec<Subtitle> = crate::beside::files(video, &EXTENSIONS[..])
         .into_iter()
         .map(|file| Subtitle::External {
-            // A file named exactly after the video says nothing about itself,
-            // and falls through to the generic label.
-            label: if file.tag.is_empty() {
-                "External".to_string()
-            } else {
-                file.tag
-            },
+            // The tag as written, empty and all. It used to become the word
+            // "External" where there was none, which named nothing, could not
+            // be translated without breaking what `--subtitle` matches, and
+            // read as a row that had failed rather than one with nothing to
+            // say. An empty tag is shown as the file's own name instead - see
+            // `row` - which at least identifies it.
+            label: file.tag,
             name: file.name,
         })
         .collect();
@@ -498,6 +515,10 @@ pub fn resolve(
         options
             .iter()
             .map(Subtitle::label)
+            // A file named exactly after the film has no label of its own.
+            // Reachable by its file name and by position, both of which this
+            // message's own list would be lying about if it showed a gap.
+            .filter(|label| !label.is_empty())
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -1078,33 +1099,30 @@ mod follows_tests {
 /// One row of a subtitle list, in the shape audio rows use - see
 /// [`crate::label`].
 ///
-/// `naming` decides how an embedded track's language is written, because that
-/// is the caller's business: a chooser on a television names it as itself, and
-/// `--list-tracks` keeps the tag so somebody can see what to type.
+/// `naming` decides how a language is written, because that is the caller's
+/// business: a chooser on a television names it as itself, and `--list-tracks`
+/// keeps the tag so somebody can see what to type.
 ///
-/// A file beside the video is not given that choice. Its tag carries the whole
-/// convention - `en.hi`, `en.forced` - where only the first part is a
-/// language, so it is always shown as written with its reading after it.
-/// Naming it natively would quietly drop everything after the dot.
+/// **A file beside the video is named the same way**, which it was not until
+/// 2026-08-20: its tag was always shown as written, on the reasoning that only
+/// the first part of `en.hi` is a language and naming it natively would
+/// quietly drop everything after the dot. That stopped being true when the
+/// type moved into a segment of its own - `hi` is now read into "SDH" rather
+/// than dropped - so a sidecar reads `English - SDH` where the same subtitle
+/// inside the file reads `English - SRT - SDH`, and the two are the same fact.
 pub fn row(option: &Subtitle, naming: crate::label::Naming) -> String {
-    // Picked by hand from somewhere on disk, named to no convention. Reading
-    // it as a language tag would mangle it, so it stands as it is.
-    if let Subtitle::File { label, .. } = option {
-        return label.clone();
-    }
-    // An embedded track states its language and its title separately, so the
-    // row is built from those rather than from the label, which is the two
-    // already run together and would come out doubled.
-    if let Subtitle::Embedded {
-        index,
-        language,
-        title,
-        format,
-        kind,
-        ..
-    } = option
-    {
-        return crate::label::line(
+    match option {
+        // An embedded track states its language and its title separately, so
+        // the row is built from those rather than from the label, which is the
+        // two already run together and would come out doubled.
+        Subtitle::Embedded {
+            index,
+            language,
+            title,
+            format,
+            kind,
+            ..
+        } => crate::label::line(
             &crate::label::Parts {
                 language,
                 technical: format.clone(),
@@ -1116,25 +1134,126 @@ pub fn row(option: &Subtitle, naming: crate::label::Naming) -> String {
             // because that is the one thing it always has and is what
             // `--subtitle` takes.
             &tr!("Subtitle {number}").replace("{number}", &(index + 1).to_string()),
-        );
+        ),
+        // Loose in the folder, where the label is the file's own name over
+        // again. Told from the one below by exactly that: a file named after
+        // nothing is read, and a file named after the film is not.
+        Subtitle::External { name, label } if label == name => {
+            crate::label::named_after_nothing(name, crate::label::kind_of_subtitle_tag)
+        }
+        // Named after the film, so everything it says is in the tag - and
+        // where the tag is empty it says nothing, and stands as its name.
+        Subtitle::External { name, label } => crate::label::named_after_the_film(
+            label,
+            name,
+            crate::label::kind_of_subtitle_tag,
+            naming,
+        ),
+        // Picked by hand from somewhere on disk, named to no convention.
+        // Reading a language out of it would be guessing, but what it is still
+        // gets read the way a track's title is - `Film.en.forced.srt` says
+        // forced whoever chose it.
+        Subtitle::File { label, .. } => {
+            crate::label::named_after_nothing(label, crate::label::kind_of_subtitle_tag)
+        }
+        // The library's own subtitle file. It states a language and a title
+        // separately, exactly as an embedded track does, and is built from
+        // those for the same reason - the label is the two run together.
+        //
+        // The type comes out of the title rather than from the server, which
+        // reports `IsForced=False` on a track it titles "Forced".
+        Subtitle::Library {
+            language,
+            title,
+            label,
+            ..
+        } => crate::label::line(
+            &crate::label::Parts {
+                language,
+                technical: String::new(),
+                kind: crate::label::kind_of_subtitle_tag(title),
+                title,
+            },
+            naming,
+            // The label, which is the title where there is one and the generic
+            // word where the stream said nothing at all.
+            label,
+        ),
     }
-    // A sidecar or a library's own subtitle. No format worth stating, and the
-    // type has to come back out of the tag, which is the only thing either of
-    // them said. Always shown as written: see this function's own note.
-    crate::label::line(
-        &crate::label::Parts {
-            language: option.label(),
-            technical: String::new(),
-            kind: crate::label::kind_of_tag(option.label()),
-            title: "",
-        },
-        crate::label::Naming::WithTag,
-        option.label(),
-    )
 }
 
 /// The same, named as the language names itself - what every on-screen list
 /// uses.
 pub fn row_native(option: &Subtitle) -> String {
     row(option, crate::label::Naming::Native)
+}
+
+#[cfg(test)]
+mod row_tests {
+    use super::*;
+
+    fn beside(tag: &str, name: &str) -> Subtitle {
+        Subtitle::External {
+            name: name.to_string(),
+            label: tag.to_string(),
+        }
+    }
+
+    /// What the choosers show. Reported 2026-08-21: every track inside the
+    /// film had been brought onto one formatter and the files beside it had
+    /// not, so the same fact read two ways in one list.
+    #[test]
+    fn a_file_beside_the_video_reads_as_a_track_does() {
+        assert_eq!(row_native(&beside("en", "Film.en.srt")), "English");
+        assert_eq!(
+            row_native(&beside("en.hi", "Film.en.hi.srt")),
+            "English - SDH"
+        );
+        assert_eq!(
+            row_native(&beside("es.forced", "Film.es.forced.srt")),
+            "Español - Forced"
+        );
+    }
+
+    /// The two files that carry no tag: one named exactly after the film, one
+    /// named after nothing. Both stand as their own name, and only the second
+    /// is read for what that name says.
+    #[test]
+    fn a_file_with_no_tag_stands_as_its_name() {
+        assert_eq!(row_native(&beside("", "Film.srt")), "Film.srt");
+        assert_eq!(
+            row_native(&beside("Ver2 (forced).srt", "Ver2 (forced).srt")),
+            "Ver2 (forced).srt - Forced"
+        );
+        // The film's own name is not the file's, so nothing is read out of it:
+        // `Forced Entry` is a film, not a forced subtitle.
+        assert_eq!(
+            row_native(&beside("", "Forced Entry (2021).srt")),
+            "Forced Entry (2021).srt"
+        );
+    }
+
+    /// A library's own subtitle file states its language and its title apart,
+    /// as an embedded track does, and is read the same way.
+    #[test]
+    fn a_librarys_file_reads_as_a_track_does() {
+        // Labelled the way `jellyfin::Media::subtitle_options` labels one,
+        // since the row falls back to it where the stream stated no language.
+        let library = |language: &str, title: &str| Subtitle::Library {
+            index: 3,
+            label: match (language.is_empty(), title.is_empty()) {
+                (false, false) => format!("{language} - {title}"),
+                (false, true) => language.to_string(),
+                (true, false) => title.to_string(),
+                (true, true) => "Subtitles".to_string(),
+            },
+            language: language.to_string(),
+            title: title.to_string(),
+        };
+        assert_eq!(row_native(&library("eng", "English SDH")), "English - SDH");
+        assert_eq!(row_native(&library("eng", "Signs")), "English - Signs");
+        // Nothing but a title, which is then the row rather than being said
+        // twice.
+        assert_eq!(row_native(&library("", "Signs")), "Signs");
+    }
 }

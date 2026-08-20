@@ -6310,7 +6310,7 @@ impl App {
                         current = Some(tracks + position);
                     }
                     entries.push((
-                        tr!("Audio File: {name}", name = audio.label).into_owned(),
+                        tr!("Audio File: {name}", name = audio.label()).into_owned(),
                         Some(tracks + position),
                     ));
                 }
@@ -8570,9 +8570,15 @@ impl App {
                     .borrow()
                     .iter()
                     .find(|found| found.path == path)
-                    .map(|found| found.label.clone())
+                    .map(crate::beside::AudioFile::label)
             })
-            .unwrap_or_else(|| file.label())
+            .unwrap_or_else(|| {
+                // Named to no convention, so its own name stands - through the
+                // same formatter every other row goes through, which reads it
+                // for what it says and leaves it alone where it says nothing.
+                let name = file.label();
+                crate::label::named_after_nothing(&name, crate::label::kind_of_audio_tag)
+            })
     }
 
     // --- Alignment -----------------------------------------------------

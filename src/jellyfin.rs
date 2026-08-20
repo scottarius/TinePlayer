@@ -1186,6 +1186,11 @@ impl Streams {
                     (true, false) => stream.title.clone(),
                     (true, true) => crate::trc!("subtitle track", "Subtitles").into_owned(),
                 },
+                // Carried apart as well as together: the label is what a typed
+                // choice is matched against, and the row is built from the two
+                // halves - see `crate::subtitles::row`.
+                language: stream.language.clone(),
+                title: stream.title.clone(),
             })
             .collect()
     }
