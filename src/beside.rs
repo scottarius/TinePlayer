@@ -117,10 +117,12 @@ pub fn audio(video: &Path) -> Vec<AudioFile> {
     // shared folder; where there is nothing to tell apart, an audio file in
     // the folder can only be for the film in the folder.
     //
-    // Deliberately not extended to subtitles, which arrive named: their lists
-    // run to a dozen entries already, and a folder's worth of loose `.srt`
-    // files is a different kind of guess.
-    let mut loose: Vec<AudioFile> = beside_a_lone_film(video)
+    // Subtitles get the same treatment, in `subtitles::external`. This comment
+    // used to say they deliberately did not, on the grounds that a subtitle
+    // arrives named where a soundtrack does not - but a subtitle downloaded
+    // from a subtitle site arrives as `English.srt` or `2_eng.srt` just as
+    // readily, which is the same problem wearing a different extension.
+    let mut loose: Vec<AudioFile> = in_a_lone_film_folder(video, crate::browser::is_audio)
         .into_iter()
         .filter(|path| !found.iter().any(|file| file.path == *path))
         .map(|path| AudioFile {
@@ -139,10 +141,16 @@ pub fn audio(video: &Path) -> Vec<AudioFile> {
     found
 }
 
-/// Every audio file in the video's folder, where that folder holds no other
-/// video. Empty as soon as there is a second one, which is what keeps a
-/// trailer or an extras file from turning the rule loose on a shared folder.
-fn beside_a_lone_film(video: &Path) -> Vec<PathBuf> {
+/// Every file in the video's folder that `wanted` accepts, where that folder
+/// holds no other video. Empty as soon as there is a second one, which is what
+/// keeps a trailer or an extras file from turning the rule loose on a shared
+/// folder.
+///
+/// Takes what to look for rather than assuming, because soundtracks and
+/// subtitles both want this and the answer to "is there only one film here"
+/// must be the same for both. Two copies of the counting is two chances for
+/// them to disagree about what a folder holds.
+pub fn in_a_lone_film_folder(video: &Path, wanted: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let Some(directory) = video.parent() else {
         return Vec::new();
     };
@@ -151,18 +159,18 @@ fn beside_a_lone_film(video: &Path) -> Vec<PathBuf> {
     };
 
     let mut films = 0;
-    let mut audio = Vec::new();
+    let mut found = Vec::new();
     for path in entries.filter_map(|entry| entry.ok()).map(|e| e.path()) {
         if crate::browser::is_video(&path) {
             films += 1;
             if films > 1 {
                 return Vec::new();
             }
-        } else if crate::browser::is_audio(&path) {
-            audio.push(path);
+        } else if wanted(&path) {
+            found.push(path);
         }
     }
-    audio
+    found
 }
 
 /// A tag as a row reads it: what the name says, then what it means.

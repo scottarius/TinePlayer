@@ -110,7 +110,14 @@ impl Sidecar {
         if self.subtitles.len() == media.subtitles.len() {
             for (track, known) in media.subtitles.iter_mut().zip(&self.subtitles) {
                 fill_language(&mut track.language, &known.language);
-                track.forced |= known.forced;
+                // Only where the container was silent. It used to be an
+                // `|=` onto a plain bool, which said the same thing when the
+                // only other source was this one; now that the file itself
+                // can answer, an explicit "not forced" from the container has
+                // to survive a sidecar that disagrees.
+                if track.forced.is_none() {
+                    track.forced = Some(known.forced);
+                }
             }
         }
     }
@@ -693,6 +700,8 @@ mod tests {
                     channels: 2,
                     language: (*language).to_string(),
                     title: String::new(),
+                    described: None,
+                    commentary: None,
                 })
                 .collect(),
             subtitles: subtitles
@@ -702,7 +711,10 @@ mod tests {
                     index: index as u32,
                     language: (*language).to_string(),
                     title: String::new(),
-                    forced: false,
+                    format: String::new(),
+                    forced: None,
+                    hearing_impaired: None,
+                    commentary: None,
                 })
                 .collect(),
             duration_ns: 0,
@@ -720,7 +732,7 @@ mod tests {
         // A stated language wins: it describes the file in hand.
         assert_eq!(m.audio[1].language, "eng");
         assert_eq!(m.subtitles[0].language, "eng");
-        assert!(m.subtitles[0].forced);
+        assert_eq!(m.subtitles[0].forced, Some(true));
     }
 
     /// The guard that keeps a sidecar for another release from being lined up
@@ -730,18 +742,23 @@ mod tests {
         let mut m = media(&[""], &["und", "und"]);
         parse(REAL).apply(&mut m);
         assert_eq!(m.audio[0].language, "");
-        assert!(!m.subtitles[0].forced);
-        assert!(!m.subtitles[1].forced);
+        // Untouched, and untouched is not the same as denied: the sidecar was
+        // dropped, so nothing has spoken for these tracks at all and the title
+        // still gets its say.
+        assert_eq!(m.subtitles[0].forced, None);
+        assert_eq!(m.subtitles[1].forced, None);
     }
 
-    /// Forced is only ever turned on: a sidecar that says nothing about a
-    /// track must not overrule a title that does.
+    /// The container has the last word. A sidecar fills the gap where the file
+    /// said nothing, and is not consulted where it did - which used to be an
+    /// `|=` that could only ever turn the flag on, because back then the
+    /// sidecar was the only thing that could speak at all.
     #[test]
     fn forced_is_never_turned_off() {
         let mut m = media(&["eng", "eng"], &["eng"]);
-        m.subtitles[0].forced = true;
+        m.subtitles[0].forced = Some(true);
         parse(&REAL.replace("<forced>True</forced>", "<forced>False</forced>")).apply(&mut m);
-        assert!(m.subtitles[0].forced);
+        assert_eq!(m.subtitles[0].forced, Some(true));
     }
 
     #[test]

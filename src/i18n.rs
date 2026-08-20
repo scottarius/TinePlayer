@@ -741,7 +741,7 @@ pub fn offered() -> Vec<Offered> {
         },
         Offered {
             code: Some(SOURCE_LANGUAGE.to_string()),
-            label: crate::languages::menu_name("en", "English", "English"),
+            label: crate::languages::display_name("en"),
         },
     ];
 
@@ -753,7 +753,7 @@ pub fn offered() -> Vec<Offered> {
         offered.push(Offered {
             code: Some(catalog.code.to_string()),
             label: match named {
-                Some((code, name, native, _)) => crate::languages::menu_name(code, name, native),
+                Some((code, _, _, _)) => crate::languages::display_name(code),
                 // A catalog for something the language table does not carry.
                 // The code alone is a poor label and an honest one.
                 None => catalog.code.to_string(),

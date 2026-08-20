@@ -1060,6 +1060,15 @@ impl Streams {
                 channels: stream.channels,
                 language: stream.language.clone(),
                 title: stream.title.clone(),
+                // Nothing to read. The library hands over a description of the
+                // stream rather than the file, and it carries no equivalent of
+                // Matroska's `FlagVisualImpaired` - so a cast item falls
+                // through to its track title, which is where this always was.
+                // Worth remembering that the server's flags are not reliably
+                // better anyway: it reports `IsForced=False` on a track it
+                // titles "Forced".
+                described: None,
+                commentary: None,
             })
             .collect();
 
@@ -1072,11 +1081,17 @@ impl Streams {
                 index: position as u32,
                 language: stream.language.clone(),
                 title: stream.title.clone(),
-                // Jellyfin carries a forced flag, but the rest of TinePlayer
-                // reads forcedness out of the title as well, so nothing is
-                // lost by leaving this to the same reading everything else
-                // gets - see `subtitles::Subtitle::is_forced`.
-                forced: false,
+                // The server states a codec for these, which is what a row
+                // shows where a local file shows its container's.
+                format: codec_name(&stream.codec),
+                // Left unstated rather than taken from the server. Jellyfin
+                // reports `IsForced=False` on tracks it titles "Forced", so
+                // its answer is not better than reading the title - and
+                // `None` is what sends this to the title, where every other
+                // source without flags already goes.
+                forced: None,
+                hearing_impaired: None,
+                commentary: None,
             })
             .collect();
 
@@ -1166,7 +1181,7 @@ impl Streams {
             .map(|stream| crate::subtitles::Subtitle::Library {
                 index: stream.index,
                 label: match (stream.language.is_empty(), stream.title.is_empty()) {
-                    (false, false) => format!("{} — {}", stream.language, stream.title),
+                    (false, false) => format!("{} - {}", stream.language, stream.title),
                     (false, true) => stream.language.clone(),
                     (true, false) => stream.title.clone(),
                     (true, true) => crate::trc!("subtitle track", "Subtitles").into_owned(),
