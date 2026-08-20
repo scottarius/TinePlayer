@@ -267,7 +267,7 @@ tineplayer film.mkv --play --primary 5 --secondary 1
 tineplayer film.mkv --primary 5 --secondary 1
 ```
 
-The only argument required with `--play` is a valid video path, and the primary output device setup.
+The only argument required with `--play` is a valid video path.
 
 ### Fixed Fullscreen
 

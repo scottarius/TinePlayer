@@ -6,8 +6,8 @@
 #   Linux:    ~/.config/tineplayer/config.yaml
 #   Windows:  %LOCALAPPDATA%\TinePlayer\config.yaml
 #
-# Every setting is optional except primary_sink. Leave one out and its default
-# applies; there is no need to list settings you are not changing.
+# Every setting is optional. Leave one out and its default applies; there is no
+# need to list settings you are not changing.
 
 
 # --- Appearance -------------------------------------------------------------
@@ -49,7 +49,8 @@ sounds: true
 # "Built-in Audio Analogue Stereo" on Linux, "Speakers (Realtek High Definition
 # Audio)" on Windows. Copy them from the menu rather than guessing.
 
-# Where the first audio track goes. The only required setting.
+# Where the first audio track goes. Left unset, the first run picks the
+# system default output and writes it here.
 primary_sink: Built-in Audio Analogue Stereo
 
 # Where the second goes. Leave it out, or set it to null, to play through the

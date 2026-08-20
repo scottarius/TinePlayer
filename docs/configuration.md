@@ -23,7 +23,7 @@ It lives in the per-user config directory:
 | [Interface Size](#interface-size)                        | `ui_scale`           | Unset       | Interface scale, such as `1.5`, from `0.33` to `3` <br/>If unset it defaults to 1.0 and auto-scales to the display resolution in fullscreen    |
 | Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
 | Check for updates                                        | `check_for_updates`  | `true`      | Asks GitHub once a day whether a newer TinePlayer has been released, `true` or `false` <br/>Nothing is ever downloaded or installed            |
-| [Primary Audio Device](#output-devices)                  | `primary_sink`       | Unset       | Primary output device name. Required                                                                                                           |
+| [Primary Audio Device](#output-devices)                  | `primary_sink`       | System default | Primary output device name <br/>If unset the system default output is chosen on the first run |
 | Primary Language Preference                              | `primary_language`   | Unset       | Preferred primary [language code](#languages) <br/>If unset defaults to the first track                                                        |
 | [Secondary Audio Device](#output-devices)                | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
 | Secondary Language Preference                            | `secondary_language` | Unset       | Preferred secondary [language code](#languages) <br/>If unset defaults to the second track                                                     |
@@ -53,8 +53,7 @@ deleted.
 
 ## Example
 
-Everything is optional except `primary_sink`. Leave a setting out and its
-default applies.
+Every setting is optional. Leave one out and its default applies.
 
 A fully commented version of the whole file is at
 **[examples/config.yaml](../examples/config.yaml)**, if you would rather start
