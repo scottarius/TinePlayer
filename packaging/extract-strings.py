@@ -253,13 +253,19 @@ def extract() -> dict[tuple[str | None, str], dict]:
     messages: dict[tuple[str | None, str], dict] = {}
     problems: list[str] = []
 
-    for path in sorted(SOURCE.glob("*.rs")):
+    # Recursive, because the interface's strings are no longer all one level
+    # down. `glob` here quietly stopped seeing every string under `src/app/`
+    # the moment that directory existed, and a message missing from the
+    # template is not an error anywhere - it just never reaches a translator
+    # and ships in English.
+    for path in sorted(SOURCE.rglob("*.rs")):
         original = path.read_text(encoding="utf-8")
         notes = translator_notes(original)
         text = blank_comments(original)
         for call in CALL.finditer(text):
             macro = call.group(1)
-            where = f"src/{path.name}:{line_of(text, call.start())}"
+            spot = path.relative_to(ROOT).as_posix()
+            where = f"{spot}:{line_of(text, call.start())}"
             try:
                 found, _ = arguments(text, call.end())
             except (Refusal, IndexError, ValueError) as e:
