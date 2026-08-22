@@ -147,7 +147,7 @@ msgstr "Сведения о программе"
 
 #: src/app/alignment.rs:102 src/app/alignment.rs:188 src/app/alignment.rs:329
 #: src/app/browsing.rs:168 src/app/browsing.rs:309 src/app/browsing.rs:656
-#: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:808
+#: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:824
 #: src/app/pairing.rs:123 src/app/pairing.rs:318 src/app/pairing.rs:591
 #: src/app/pairing.rs:679 src/app/playback.rs:645
 msgid "Cancel"
@@ -219,8 +219,8 @@ msgctxt "subtitle track"
 msgid "None"
 msgstr "Нет"
 
-#: src/app/choosers.rs:120 src/app/choosers.rs:182 src/app/media_page.rs:734
-#: src/app/media_page.rs:738
+#: src/app/choosers.rs:120 src/app/choosers.rs:182 src/app/media_page.rs:750
+#: src/app/media_page.rs:754
 msgid "Browse..."
 msgstr "Обзор..."
 
@@ -229,7 +229,7 @@ msgctxt "audio track"
 msgid "None"
 msgstr "Нет"
 
-#: src/app/choosers.rs:158 src/controls.rs:1922
+#: src/app/choosers.rs:158 src/controls.rs:2018
 msgid "AUDIO FILES"
 msgstr ""
 
@@ -258,7 +258,7 @@ msgstr "Выберите аудиофайл"
 msgid "Choose a subtitle file"
 msgstr "Выберите файл субтитров"
 
-#: src/app/files.rs:18 src/app/media_page.rs:955 src/app/media_page.rs:956
+#: src/app/files.rs:18 src/app/media_page.rs:971 src/app/media_page.rs:972
 msgid "Choose a video"
 msgstr "Выберите видео"
 
@@ -368,77 +368,77 @@ msgstr "Готово"
 msgid "Auto"
 msgstr "Авто"
 
-#: src/app/media_page.rs:1008 src/app/media_page.rs:1009
+#: src/app/media_page.rs:1001 src/app/media_page.rs:1002 src/controls.rs:639
+#: src/shortcuts.rs:134
+msgid "Toggle fullscreen"
+msgstr "Полноэкранный режим"
+
+#: src/app/media_page.rs:1024 src/app/media_page.rs:1025
 #: src/app/settings.rs:469
 msgid "Settings"
 msgstr "Настройки"
 
-#: src/app/media_page.rs:433
+#: src/app/media_page.rs:449
 msgid "Resolution"
 msgstr "Разрешение"
 
-#: src/app/media_page.rs:434
+#: src/app/media_page.rs:450
 msgid "Codec"
 msgstr "Кодек"
 
-#: src/app/media_page.rs:435
+#: src/app/media_page.rs:451
 msgid "Framerate"
 msgstr "Частота кадров"
 
-#: src/app/media_page.rs:436
+#: src/app/media_page.rs:452
 msgid "Bitrate"
 msgstr "Битрейт"
 
-#: src/app/media_page.rs:438
+#: src/app/media_page.rs:454
 msgid "Container"
 msgstr "Контейнер"
 
-#: src/app/media_page.rs:443
+#: src/app/media_page.rs:459
 msgid "File size"
 msgstr "Размер файла"
 
-#: src/app/media_page.rs:581
+#: src/app/media_page.rs:597
 msgid "Audio"
 msgstr "Звук"
 
-#: src/app/media_page.rs:582
+#: src/app/media_page.rs:598
 msgctxt "media page heading"
 msgid "Subtitles"
 msgstr "Субтитры"
 
-#: src/app/media_page.rs:619
+#: src/app/media_page.rs:635
 msgid "{language} (Described)"
 msgstr "{language} (с тифлокомментарием)"
 
-#: src/app/media_page.rs:704
+#: src/app/media_page.rs:720
 msgid "Drop a video file here, browse for a local file, or enter a URL"
 msgstr "Перетащите сюда видеофайл, выберите файл на диске или введите ссылку"
 
-#: src/app/media_page.rs:743 src/app/media_page.rs:747
+#: src/app/media_page.rs:759 src/app/media_page.rs:763
 msgid "Enter URL"
 msgstr "Ввести ссылку"
 
-#: src/app/media_page.rs:769 src/app/media_page.rs:774 src/app/pairing.rs:75
+#: src/app/media_page.rs:785 src/app/media_page.rs:790 src/app/pairing.rs:75
 #: src/app/settings.rs:39
 msgid "Connect to Jellyfin"
 msgstr "Подключиться к Jellyfin"
 
-#: src/app/media_page.rs:785
+#: src/app/media_page.rs:801
 msgid "Connected to Jellyfin ({server})"
 msgstr "Подключено к Jellyfin ({server})"
 
-#: src/app/media_page.rs:787
+#: src/app/media_page.rs:803
 msgid "Connected to Jellyfin"
 msgstr "Подключено к Jellyfin"
 
-#: src/app/media_page.rs:931 src/app/media_page.rs:932
+#: src/app/media_page.rs:947 src/app/media_page.rs:948
 msgid "Close the player"
 msgstr "Закрыть проигрыватель"
-
-#: src/app/media_page.rs:985 src/app/media_page.rs:986 src/controls.rs:616
-#: src/shortcuts.rs:134
-msgid "Toggle fullscreen"
-msgstr "Полноэкранный режим"
 
 #: src/app/menu.rs:139 src/app.rs:707
 msgid "FIRST OUTPUT"
@@ -596,7 +596,7 @@ msgstr "Закрыть проигрыватель?"
 msgid "Something went wrong"
 msgstr "Что-то пошло не так"
 
-#: src/app/playback.rs:708 src/app/widgets.rs:675 src/controls.rs:967
+#: src/app/playback.rs:708 src/app/widgets.rs:675 src/controls.rs:990
 msgid "Back"
 msgstr "Назад"
 
@@ -725,7 +725,7 @@ msgstr "Предпочитаемый язык"
 msgid "Prefer Audio Description"
 msgstr "Предпочитать тифлокомментарий"
 
-#: src/app/settings.rs:25 src/controls.rs:642
+#: src/app/settings.rs:25 src/controls.rs:665
 msgid "Volume"
 msgstr "Громкость"
 
@@ -863,63 +863,63 @@ msgstr ""
 "\n"
 "Не удалось создать резервную копию: {reason}"
 
-#: src/controls.rs:1070 src/controls.rs:2637
+#: src/controls.rs:1093 src/controls.rs:2771
 msgid "Playback controls"
 msgstr "Управление воспроизведением"
 
-#: src/controls.rs:2635
+#: src/controls.rs:2769
 msgid "Playback position"
 msgstr "Позиция воспроизведения"
 
-#: src/controls.rs:558
+#: src/controls.rs:581
 msgid "Play or pause"
 msgstr "Воспроизвести или приостановить"
 
-#: src/controls.rs:569
+#: src/controls.rs:592
 msgid "Skip back"
 msgstr "Назад"
 
-#: src/controls.rs:576
+#: src/controls.rs:599
 msgid "Skip forward"
 msgstr "Вперёд"
 
-#: src/controls.rs:585
+#: src/controls.rs:608
 msgid "Stop"
 msgstr "Стоп"
 
-#: src/controls.rs:611
+#: src/controls.rs:634
 msgid "Position"
 msgstr "Позиция"
 
-#: src/controls.rs:628
+#: src/controls.rs:651
 msgid "Show or hide subtitles"
 msgstr "Показать или скрыть субтитры"
 
-#: src/controls.rs:713
+#: src/controls.rs:736
 msgid "Mute {name}"
 msgstr "Заглушить {name}"
 
-#: src/controls.rs:720 src/controls.rs:733
+#: src/controls.rs:743 src/controls.rs:756
 msgid "Volume, {name}"
 msgstr "Громкость, {name}"
 
-#: src/controls.rs:748 src/controls.rs:771
+#: src/controls.rs:771 src/controls.rs:794
 msgid "Audio sync, {name}"
 msgstr "Синхронизация звука, {name}"
 
-#: src/controls.rs:759
+#: src/controls.rs:782
 msgid "Use audio sync, {name}"
 msgstr "Использовать синхронизацию звука, {name}"
 
-#: src/controls.rs:856
+#: src/controls.rs:879
 msgid "All Outputs"
 msgstr "Все выходы"
 
-#: src/controls.rs:865
+#: src/controls.rs:888
 msgid "Silence all outputs"
 msgstr "Заглушить все выходы"
 
-#: src/controls.rs:872 src/controls.rs:882
+#: src/controls.rs:895 src/controls.rs:905
 msgid "Volume, all outputs"
 msgstr "Громкость, все выходы"
 
