@@ -108,6 +108,22 @@ impl App {
             //
             // Armed on every screen, unlike the rebuild, because the size is
             // the whole interface and settings can be resized too.
+            //
+            // **Except while a film is playing.** The control strip takes its
+            // scale once, when `Controls::new` builds it, and holds it in a
+            // plain field: the panel widths, the list heights and every icon
+            // are sized in Rust at that moment, and nothing rebuilds them.
+            // Restyling underneath moves the CSS around those fixed sizes, and
+            // the strip stops agreeing with itself about where each button is.
+            // Nothing should be resizing the interface out from under a film
+            // anyway.
+            //
+            // This is the narrow half of the fix. Toggling fullscreen during
+            // playback restyles by another route and has the same problem,
+            // which is a matter for `Controls` rather than for here.
+            if app.playback.borrow().is_some() {
+                return;
+            }
             let before = app.scale.get();
             app.follow_automatic_scale(&app.window.clone());
             // `restyle` rebuilds the menu itself when the size moved, so

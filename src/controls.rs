@@ -286,17 +286,22 @@ const MOVEMENT: f64 = 4.0;
 
 /// Play's place in the button order, which is where a controller starts every
 /// time it takes hold of the row.
-const PLAY: usize = 3;
+///
+/// These three count from a strip without the Stop button, which is the
+/// ordinary one: Stop is drawn only under a launcher. Add [`Controls::shift`]
+/// to any of them - the accessors below do - because a strip that has Stop has
+/// everything after Back one place further along.
+const PLAY: usize = 2;
 
 /// Where the first output's button sits in the same order. One button follows
 /// per output, and fullscreen comes after them all. Each output's menu keeps
 /// its own button highlighted while it is open, so it is clear where closing
 /// the menu goes back to.
-const FIRST_OUTPUT: usize = 6;
+const FIRST_OUTPUT: usize = 5;
 
 /// Subtitles' place in the same order, and for the same reason: the chooser
 /// keeps it highlighted while it is open.
-const SUBTITLES: usize = 5;
+const SUBTITLES: usize = 4;
 
 /// How long an output's button has to be held for it to mean "silence this
 /// output" rather than "show me its menu". Long enough not to fire under an
@@ -531,6 +536,16 @@ pub struct Controls {
     /// is chosen for the strip's own near-black background rather than for the
     /// window's theme, so there is nothing here for a theme to decide.
     scale: f64,
+    /// How far the Stop button pushes everything after Back along: one under a
+    /// launcher, nothing otherwise.
+    ///
+    /// The button order is built with Stop in it only when it is drawn, while
+    /// `PLAY`, `SUBTITLES` and `FIRST_OUTPUT` are fixed numbers. Without this
+    /// they described the launcher's strip and named the button one to the
+    /// right of the intended one everywhere else - so opening the soundtracks
+    /// highlighted the speaker, and the chooser and the highlight disagreed
+    /// about which control was in hand.
+    shift: usize,
     fullscreen_state: RefCell<bool>,
 }
 
@@ -1132,6 +1147,32 @@ impl Controls {
             .reveal_child(false)
             .child(&shortcuts_scroll)
             .build();
+        // **Out of the layout entirely while it is down, not merely faded.**
+        //
+        // A `GtkRevealer` only scales its measured size by how far it is
+        // revealed for the *slide* transitions. A crossfade keeps the child's
+        // full size and just fades it out, so this one went on claiming the
+        // whole block the key list occupies - measured at 775 by 864 in a
+        // 1790-wide window - while showing nothing at all.
+        //
+        // It is the last overlay added, so it is the topmost, and a hidden
+        // widget on top wins every pick underneath it. Play and the two skips
+        // sit in the middle of the strip, which is exactly where a centered
+        // block lands: they were half covered, so a click near the top of one
+        // did nothing and a click near the bottom worked. Back, subtitles, the
+        // soundtracks, volume and fullscreen are outside its edges and were
+        // never affected, which is what made this look like anything but a
+        // widget that was not on screen.
+        //
+        // Toggled in step with the reveal below rather than swapped for a
+        // slide transition, because the crossfade is the right animation for a
+        // panel that appears over the middle of the picture.
+        shortcuts.set_visible(false);
+        shortcuts.connect_child_revealed_notify(|revealer| {
+            if !revealer.is_child_revealed() && !revealer.reveals_child() {
+                revealer.set_visible(false);
+            }
+        });
 
         let root = gtk::Overlay::new();
         root.set_child(Some(video));
@@ -1177,7 +1218,7 @@ impl Controls {
             updating: Cell::new(false),
             generation: Rc::new(Cell::new(0)),
             order,
-            focused: Cell::new(PLAY),
+            focused: Cell::new(PLAY + usize::from(external)),
             row: Cell::new(Row::None),
             on_volume: RefCell::new(None),
             on_sync: RefCell::new(None),
@@ -1211,6 +1252,7 @@ impl Controls {
             swallow_click: Cell::new(false),
             selected: Cell::new(false),
             scale,
+            shift: usize::from(external),
             fullscreen_state: RefCell::new(fullscreen_now),
         });
 
@@ -1444,7 +1486,7 @@ impl Controls {
                 // than wherever it was left. Coming back to a highlight
                 // somewhere down the row means hunting for it.
                 if was == Row::None {
-                    self.focused.set(PLAY);
+                    self.focused.set(self.play_index());
                 }
                 // Nothing insensitive, so a file without subtitles does not
                 // land on a button that cannot do anything.
@@ -1488,8 +1530,8 @@ impl Controls {
             Row::Audio => {
                 self.timeline_active(false);
                 let index = self.output.get();
-                self.focused.set(FIRST_OUTPUT + index);
-                self.highlight(Some(FIRST_OUTPUT + index));
+                self.focused.set(self.first_output() + index);
+                self.highlight(Some(self.first_output() + index));
                 // One scroller holds them all, so which output's list this is
                 // comes down to which box inside it is showing.
                 for (at, output) in self.outputs.iter().enumerate() {
@@ -1510,8 +1552,8 @@ impl Controls {
             }
             Row::Subtitles => {
                 self.timeline_active(false);
-                self.focused.set(SUBTITLES);
-                self.highlight(Some(SUBTITLES));
+                self.focused.set(self.subtitles_index());
+                self.highlight(Some(self.subtitles_index()));
                 // Opened on whatever is already in force, and marked at once.
                 //
                 // Unlike the volume panel, which opens with nothing marked
@@ -1554,7 +1596,22 @@ impl Controls {
     /// Where the speaker sits in the button order: after one soundtrack chooser
     /// per output, however many there are, and before fullscreen.
     fn volume_index(&self) -> usize {
-        FIRST_OUTPUT + self.outputs.len()
+        self.first_output() + self.outputs.len()
+    }
+
+    /// Play's place on this strip.
+    fn play_index(&self) -> usize {
+        PLAY + self.shift
+    }
+
+    /// The subtitle chooser's place on this strip.
+    fn subtitles_index(&self) -> usize {
+        SUBTITLES + self.shift
+    }
+
+    /// Where the first output's button sits on this strip.
+    fn first_output(&self) -> usize {
+        FIRST_OUTPUT + self.shift
     }
 
     /// Silences one output, or puts it back. What holding that output's button
@@ -1622,13 +1679,13 @@ impl Controls {
             return None;
         }
         let focused = self.focused.get();
-        if focused == SUBTITLES {
+        if focused == self.subtitles_index() {
             return Some(Hold::Subtitles);
         }
         if focused == self.volume_index() {
             return Some(Hold::Main);
         }
-        let index = focused.checked_sub(FIRST_OUTPUT)?;
+        let index = focused.checked_sub(self.first_output())?;
         (index < self.outputs.len()).then_some(Hold::Output(index))
     }
 
@@ -2417,6 +2474,11 @@ impl Controls {
                 self.shortcuts_scroll.set_max_content_height(room);
             }
         }
+        // Back into the layout before it is revealed; the handler set up in
+        // `new` takes it out again once it has faded away.
+        if opening {
+            self.shortcuts.set_visible(true);
+        }
         self.shortcuts.set_reveal_child(opening);
     }
 
@@ -2514,10 +2576,9 @@ impl Controls {
             // pointer, and these are buttons where the difference shows, since
             // a press may yet turn out to be a hold.
             Row::Buttons
-                if (FIRST_OUTPUT..FIRST_OUTPUT + self.outputs.len())
-                    .contains(&self.focused.get()) =>
+                if (self.first_output()..self.volume_index()).contains(&self.focused.get()) =>
             {
-                self.open_audio(self.focused.get() - FIRST_OUTPUT)
+                self.open_audio(self.focused.get() - self.first_output())
             }
             // The speaker, for the same reason again: it is held to silence
             // everything, so a press cannot be acted on until it is known not
@@ -2526,7 +2587,7 @@ impl Controls {
             // The same, and for the same reason: the click handler cannot
             // tell a press from a pointer, and this is a button where the
             // difference shows - a press may yet turn out to be a hold.
-            Row::Buttons if self.focused.get() == SUBTITLES => self.open_subtitles(),
+            Row::Buttons if self.focused.get() == self.subtitles_index() => self.open_subtitles(),
             Row::Buttons => {
                 if let Some(button) = self.order.get(self.focused.get()) {
                     button.emit_clicked();
