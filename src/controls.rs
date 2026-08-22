@@ -1267,7 +1267,7 @@ impl Controls {
                     return;
                 }
                 if handle.row.get() == Row::Audio && handle.output.get() == index {
-                    handle.set_row(Row::Buttons);
+                    handle.let_go();
                 } else {
                     handle.open_audio(index);
                 }
@@ -1312,7 +1312,7 @@ impl Controls {
                     return;
                 }
                 if handle.row.get() == Row::Subtitles {
-                    handle.set_row(Row::Buttons);
+                    handle.let_go();
                 } else {
                     handle.open_subtitles();
                 }
@@ -1345,7 +1345,7 @@ impl Controls {
                     return;
                 }
                 if handle.row.get() == Row::Volume {
-                    handle.set_row(Row::Buttons);
+                    handle.let_go();
                 } else {
                     handle.open_levels();
                 }
@@ -1992,7 +1992,15 @@ impl Controls {
             {
                 let handle = self.clone();
                 let gesture = gtk::GestureClick::new();
-                gesture.connect_released(move |_, _, _, _| handle.choose_audio(index, at));
+                // Chosen, then handed back. `choose_audio` lands on the
+                // button for the controller's sake, which is right when a
+                // press picked the row and wrong when a pointer did: the
+                // pointer is finished with the strip, and leaving it held
+                // keeps it on screen for the twelve seconds a held strip gets.
+                gesture.connect_released(move |_, _, _, _| {
+                    handle.choose_audio(index, at);
+                    handle.let_go();
+                });
                 row.add_controller(gesture);
             }
             output.tracks.append(&row);
@@ -2056,7 +2064,12 @@ impl Controls {
             {
                 let handle = self.clone();
                 let gesture = gtk::GestureClick::new();
-                gesture.connect_released(move |_, _, _, _| handle.choose_subtitle(index));
+                // As above: the choice is made through the same path a press
+                // takes, and then the pointer hands the strip back.
+                gesture.connect_released(move |_, _, _, _| {
+                    handle.choose_subtitle(index);
+                    handle.let_go();
+                });
                 row.add_controller(gesture);
             }
             self.subtitle_list.append(&row);
@@ -2530,6 +2543,27 @@ impl Controls {
                 return;
             }
         }
+    }
+
+    /// Closes what a click opened, and hands the strip back entirely.
+    ///
+    /// A pointer that shuts a menu is done with the strip. Settling on the
+    /// button behind it - which is what `Row::Buttons` means - left the strip
+    /// held, and a held strip is given `LINGER_HELD` rather than `LINGER`, so
+    /// it sat there for twelve seconds looking as though it would never go.
+    /// The arrows also went on working from inside a menu that was no longer
+    /// open.
+    ///
+    /// Let go and then flashed, in that order: `show` reads the row to decide
+    /// how long to wait, so the countdown has to be started after the strip
+    /// has stopped being held, not before.
+    ///
+    /// A controller closing the same menu still lands on `Row::Buttons`. It
+    /// has nowhere else to be - there is no pointer to take over - and the
+    /// button it opened is where the next press should start from.
+    pub fn let_go(self: &Rc<Self>) {
+        self.release();
+        self.flash(false);
     }
 
     /// Lets go of the strip without touching whether it is on screen.
