@@ -364,7 +364,7 @@ msgstr "Чтобы отменить:"
 msgid "Done"
 msgstr "Готово"
 
-#: src/app/levels.rs:163
+#: src/app/levels.rs:178
 msgid "Auto"
 msgstr "Авто"
 

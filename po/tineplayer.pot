@@ -337,7 +337,7 @@ msgstr ""
 msgid "Done"
 msgstr ""
 
-#: src/app/levels.rs:163
+#: src/app/levels.rs:178
 msgid "Auto"
 msgstr ""
 
