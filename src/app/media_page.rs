@@ -93,15 +93,28 @@ impl App {
         /// seeing the page settle reads as one action rather than two.
         const SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
 
-        if *self.screen.borrow() != Screen::Menu {
-            return;
-        }
         if let Some(pending) = self.resize_settle.borrow_mut().take() {
             pending.remove();
         }
         let app = self.clone();
         let source = glib::timeout_add_local_once(SETTLE, move || {
             *app.resize_settle.borrow_mut() = None;
+            // The automatic size follows the window now, not only the screen,
+            // so a drag that changes its height changes the size everything is
+            // drawn at. It waits out the drag with the rebuild below rather
+            // than answering every layout event: restyling reloads the sheet
+            // and rebuilds the page, and doing that on each frame of a drag
+            // takes the page out from under the pointer holding the edge.
+            //
+            // Armed on every screen, unlike the rebuild, because the size is
+            // the whole interface and settings can be resized too.
+            let before = app.scale.get();
+            app.follow_automatic_scale(&app.window.clone());
+            // `restyle` rebuilds the menu itself when the size moved, so
+            // going on would only build the same page a second time.
+            if app.scale.get() != before {
+                return;
+            }
             if *app.screen.borrow() != Screen::Menu {
                 return;
             }

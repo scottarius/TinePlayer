@@ -147,7 +147,7 @@ msgstr "Сведения о программе"
 
 #: src/app/alignment.rs:102 src/app/alignment.rs:188 src/app/alignment.rs:329
 #: src/app/browsing.rs:168 src/app/browsing.rs:309 src/app/browsing.rs:656
-#: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:795
+#: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:808
 #: src/app/pairing.rs:123 src/app/pairing.rs:318 src/app/pairing.rs:591
 #: src/app/pairing.rs:679 src/app/playback.rs:645
 msgid "Cancel"
@@ -219,8 +219,8 @@ msgctxt "subtitle track"
 msgid "None"
 msgstr "Нет"
 
-#: src/app/choosers.rs:120 src/app/choosers.rs:182 src/app/media_page.rs:721
-#: src/app/media_page.rs:725
+#: src/app/choosers.rs:120 src/app/choosers.rs:182 src/app/media_page.rs:734
+#: src/app/media_page.rs:738
 msgid "Browse..."
 msgstr "Обзор..."
 
@@ -258,7 +258,7 @@ msgstr "Выберите аудиофайл"
 msgid "Choose a subtitle file"
 msgstr "Выберите файл субтитров"
 
-#: src/app/files.rs:18 src/app/media_page.rs:942 src/app/media_page.rs:943
+#: src/app/files.rs:18 src/app/media_page.rs:955 src/app/media_page.rs:956
 msgid "Choose a video"
 msgstr "Выберите видео"
 
@@ -368,76 +368,77 @@ msgstr "Готово"
 msgid "Auto"
 msgstr "Авто"
 
-#: src/app/media_page.rs:420
+#: src/app/media_page.rs:1008 src/app/media_page.rs:1009
+#: src/app/settings.rs:469
+msgid "Settings"
+msgstr "Настройки"
+
+#: src/app/media_page.rs:433
 msgid "Resolution"
 msgstr "Разрешение"
 
-#: src/app/media_page.rs:421
+#: src/app/media_page.rs:434
 msgid "Codec"
 msgstr "Кодек"
 
-#: src/app/media_page.rs:422
+#: src/app/media_page.rs:435
 msgid "Framerate"
 msgstr "Частота кадров"
 
-#: src/app/media_page.rs:423
+#: src/app/media_page.rs:436
 msgid "Bitrate"
 msgstr "Битрейт"
 
-#: src/app/media_page.rs:425
+#: src/app/media_page.rs:438
 msgid "Container"
 msgstr "Контейнер"
 
-#: src/app/media_page.rs:430
+#: src/app/media_page.rs:443
 msgid "File size"
 msgstr "Размер файла"
 
-#: src/app/media_page.rs:568
+#: src/app/media_page.rs:581
 msgid "Audio"
 msgstr "Звук"
 
-#: src/app/media_page.rs:569
+#: src/app/media_page.rs:582
 msgctxt "media page heading"
 msgid "Subtitles"
 msgstr "Субтитры"
 
-#: src/app/media_page.rs:606
+#: src/app/media_page.rs:619
 msgid "{language} (Described)"
 msgstr "{language} (с тифлокомментарием)"
 
-#: src/app/media_page.rs:691
+#: src/app/media_page.rs:704
 msgid "Drop a video file here, browse for a local file, or enter a URL"
 msgstr "Перетащите сюда видеофайл, выберите файл на диске или введите ссылку"
 
-#: src/app/media_page.rs:730 src/app/media_page.rs:734
+#: src/app/media_page.rs:743 src/app/media_page.rs:747
 msgid "Enter URL"
 msgstr "Ввести ссылку"
 
-#: src/app/media_page.rs:756 src/app/media_page.rs:761 src/app/pairing.rs:75
+#: src/app/media_page.rs:769 src/app/media_page.rs:774 src/app/pairing.rs:75
 #: src/app/settings.rs:39
 msgid "Connect to Jellyfin"
 msgstr "Подключиться к Jellyfin"
 
-#: src/app/media_page.rs:772
+#: src/app/media_page.rs:785
 msgid "Connected to Jellyfin ({server})"
 msgstr "Подключено к Jellyfin ({server})"
 
-#: src/app/media_page.rs:774
+#: src/app/media_page.rs:787
 msgid "Connected to Jellyfin"
 msgstr "Подключено к Jellyfin"
 
-#: src/app/media_page.rs:918 src/app/media_page.rs:919
+#: src/app/media_page.rs:931 src/app/media_page.rs:932
 msgid "Close the player"
 msgstr "Закрыть проигрыватель"
 
-#: src/app/media_page.rs:972 src/app/media_page.rs:973 src/controls.rs:616
+#: src/app/media_page.rs:985 src/app/media_page.rs:986 src/controls.rs:616
 #: src/shortcuts.rs:134
 msgid "Toggle fullscreen"
 msgstr "Полноэкранный режим"
-
-#: src/app/media_page.rs:995 src/app/media_page.rs:996 src/app/settings.rs:469
-msgid "Settings"
-msgstr "Настройки"
 
 #: src/app/menu.rs:139 src/app.rs:707
 msgid "FIRST OUTPUT"
