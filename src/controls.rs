@@ -401,6 +401,14 @@ pub struct Controls {
     /// as that happens, so arriving there is announced as "Playback position"
     /// rather than as the strip in general.
     holder: gtk::Box,
+    /// The black band itself - the timeline and the button row - without the
+    /// full-width box that also carries the panels.
+    ///
+    /// The strip and `holder` are both as wide as the window, so a point
+    /// beside a panel that sits in the corner is inside them while being over
+    /// nothing but picture. Dismissing has to know what is actually drawn,
+    /// which is this and whichever panel is open.
+    bar: gtk::Box,
     icon: gtk::Image,
     play: gtk::Button,
     stop: gtk::Button,
@@ -1202,6 +1210,7 @@ impl Controls {
             shortcuts_scroll,
             strip,
             holder: row.clone(),
+            bar: bar.clone(),
             buttons: button_row.clone(),
             icon,
             play,
@@ -1411,6 +1420,36 @@ impl Controls {
                 handle.set_sync(index, value.clamp(-max, max));
                 glib::Propagation::Proceed
             });
+        }
+
+        // A click on the picture puts away whatever is open, the same way
+        // clicking the button that opened it does.
+        //
+        // Measured against the bar and the open panel rather than against the
+        // strip. The strip is as wide as the window, so beside a panel that
+        // sits in its corner it covers a stretch of plain picture - clicking
+        // above a menu closed it and clicking to the left of it did nothing.
+        //
+        // On the press rather than the release, so the menu is gone before
+        // anything else the click means happens. Nothing else acts on a single
+        // press over the picture, and a double click still reaches fullscreen,
+        // having closed the menu with its first press on the way.
+        {
+            let handle = controls.clone();
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_pressed(move |_, _, x, y| {
+                let panel = match handle.row.get() {
+                    Row::Volume => &handle.panel,
+                    Row::Subtitles => &handle.subtitle_panel,
+                    Row::Audio => &handle.audio_panel,
+                    _ => return,
+                };
+                if handle.within(&handle.bar, x, y) || handle.within(panel, x, y) {
+                    return;
+                }
+                handle.let_go();
+            });
+            controls.root.add_controller(gesture);
         }
 
         controls
@@ -2910,6 +2949,20 @@ impl Controls {
             handler();
         });
         self.root.add_controller(gesture);
+    }
+
+    /// Whether a point, in the root's coordinates, is over a given widget.
+    fn within(&self, widget: &impl IsA<gtk::Widget>, x: f64, y: f64) -> bool {
+        widget
+            .as_ref()
+            .compute_bounds(&self.root)
+            .is_some_and(|area| {
+                let (left, top) = (f64::from(area.x()), f64::from(area.y()));
+                x >= left
+                    && x < left + f64::from(area.width())
+                    && y >= top
+                    && y < top + f64::from(area.height())
+            })
     }
 
     /// Whether a point, in the coordinates of the widget the video sits in,
