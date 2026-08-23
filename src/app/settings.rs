@@ -14,11 +14,12 @@ impl App {
             Item::StartFullscreen => tr!("Always Start Fullscreen").into_owned(),
             Item::ReadMetadata => tr!("Read Metadata Beside Files").into_owned(),
             Item::ShowBackdrop => tr!("Show Backdrop Artwork").into_owned(),
+            Item::RememberPositions => tr!("Remember Where You Left Off").into_owned(),
             Item::ResumeThreshold => tr!("Resume Threshold").into_owned(),
             Item::WatchedThreshold => tr!("Watched Threshold").into_owned(),
             Item::Updates => tr!("Check for updates").into_owned(),
             Item::UpdateStatus => self.version_label(),
-            Item::ClearData => tr!("Clear Saved Playback Data").into_owned(),
+            Item::ClearData => tr!("Clear Saved Video Data").into_owned(),
             Item::Device(_) => tr!("Output Device").into_owned(),
             Item::Language(_) => tr!("Preferred Language").into_owned(),
             Item::Description(_) => tr!("Prefer Audio Description").into_owned(),
@@ -141,6 +142,7 @@ impl App {
             Item::StartFullscreen => config.fullscreen,
             Item::ReadMetadata => config.read_metadata,
             Item::ShowBackdrop => config.show_backdrop,
+            Item::RememberPositions => config.remember_positions,
             Item::Description(Role::Primary) => config.primary_audio_description,
             Item::Description(Role::Secondary) => config.secondary_audio_description,
             Item::Volume(role) => !config.muted(role.key()),
@@ -175,6 +177,9 @@ impl App {
             Item::ShowBackdrop => {
                 tr!("If backdrop artwork is found, display it behind the video details.")
             }
+            Item::RememberPositions => {
+                tr!("Save watch progress and track choices for every video.")
+            }
             Item::ResumeThreshold => {
                 tr!(
                     "How much of a video should be viewed before offering the choice to resume a previously watched video."
@@ -194,7 +199,7 @@ impl App {
             }
             Item::SubtitlePreference => tr!("Attempt to auto-select subtitles when available."),
             Item::ClearData => {
-                tr!("Delete remembered video preferences, track choices, and resume positions.")
+                tr!("Delete saved watch progress and track choices.")
             }
             Item::KodiPermission(_) => {
                 tr!("This Kodi installation is sandboxed and needs permission to start TinePlayer.")
@@ -287,6 +292,21 @@ impl App {
     fn item_enabled(&self, item: Item) -> bool {
         match item {
             Item::ShowBackdrop => self.config.borrow().read_metadata,
+            // Nothing to clear until something has been written down. Asked of
+            // the file rather than of what was loaded, because that is exactly
+            // what the row does: `clear_all_resume` deletes `positions.json`
+            // and reports success without it, so a row offering to remove a
+            // file that is not there is offering nothing.
+            //
+            // Independent of the switch above: turning off remembering stops
+            // adding to the file, and clearing what is already in it has to
+            // stay available either way.
+            Item::ClearData => crate::config::positions_path().exists(),
+            // Both decide when a position counts, which is nothing to decide
+            // while none are being kept.
+            Item::ResumeThreshold | Item::WatchedThreshold => {
+                self.config.borrow().remember_positions
+            }
             Item::KodiType(index) => self.with_kodi(index, |setup| setup.confinement.supported()),
             Item::KodiHandover(index) | Item::KodiPermission(index) => self
                 .with_kodi(index, |setup| {
@@ -1157,6 +1177,7 @@ impl App {
             Item::StartFullscreen => self.toggle_start_fullscreen(),
             Item::ReadMetadata => self.toggle_read_metadata(),
             Item::ShowBackdrop => self.toggle_show_backdrop(),
+            Item::RememberPositions => self.toggle_remember_positions(),
             Item::Description(role) => self.toggle_audio_description(role == Role::Primary),
             Item::Volume(_) => self.toggle_settings_mute(item),
             Item::Sync(_) => self.toggle_settings_offset(item),
@@ -1213,6 +1234,47 @@ impl App {
             .iter()
             .position(|item| *item == Item::ShowBackdrop)
         else {
+            return;
+        };
+        let list = self.settings_list.borrow().clone();
+        if let Some(row) = list.and_then(|list| list.row_at_index(index as i32)) {
+            row.set_sensitive(enabled);
+        }
+    }
+
+    /// Starts or stops writing down where each video got to.
+    ///
+    /// `Config::save` is what tells `config::save_all` the answer, so nothing
+    /// has to be pushed anywhere separately: the switch is in force from the
+    /// moment the settings file is written, and the position being tracked for
+    /// whatever is playing simply stops being saved.
+    fn toggle_remember_positions(self: &Rc<Self>) {
+        {
+            let mut config = self.config.borrow_mut();
+            config.remember_positions = !config.remember_positions;
+            let _ = config.save();
+        }
+        // The two rows this governs, redrawn where they stand - the same
+        // reasoning as `refresh_backdrop_row`: rebuilding the screen would
+        // move the cursor off the switch just pressed.
+        let enabled = self.config.borrow().remember_positions;
+        for item in [Item::ResumeThreshold, Item::WatchedThreshold] {
+            self.refresh_row(item, enabled);
+        }
+    }
+
+    /// Enables or disables one settings row where it stands, without
+    /// disturbing the screen around it.
+    fn refresh_row(&self, item: Item, enabled: bool) {
+        if let Some((_, switch)) = self
+            .settings_switches
+            .borrow()
+            .iter()
+            .find(|(row, _)| *row == item)
+        {
+            switch.set_sensitive(enabled);
+        }
+        let Some(index) = self.pane_items.borrow().iter().position(|row| *row == item) else {
             return;
         };
         let list = self.settings_list.borrow().clone();

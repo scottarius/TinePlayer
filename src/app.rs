@@ -499,6 +499,7 @@ enum Item {
     StartFullscreen,
     ReadMetadata,
     ShowBackdrop,
+    RememberPositions,
     ResumeThreshold,
     WatchedThreshold,
     Updates,
@@ -579,6 +580,7 @@ impl Item {
                 | Item::StartFullscreen
                 | Item::ReadMetadata
                 | Item::ShowBackdrop
+                | Item::RememberPositions
                 | Item::Description(_)
                 | Item::Volume(_)
                 | Item::Sync(_)
@@ -695,13 +697,21 @@ impl Category {
                 (None, Item::StartFullscreen),
                 (Some(tr!("LIBRARY")), Item::ReadMetadata),
                 (None, Item::ShowBackdrop),
+                // Above the two thresholds rather than below them: it decides
+                // whether they apply at all, and a switch that governs the
+                // rows under it reads better before them than after.
+                (Some(tr!("RESUMING")), Item::RememberPositions),
                 (None, Item::ResumeThreshold),
                 (None, Item::WatchedThreshold),
+                // With the settings that decide what gets saved, rather than
+                // alone under a heading of its own at the end. It is still the
+                // one thing here that destroys something, but it destroys
+                // exactly what the three rows above it govern, and a row that
+                // says "clear this" reads better under them than a screen
+                // away.
+                (None, Item::ClearData),
                 (Some(tr!("UPDATES")), Item::Updates),
                 (None, Item::UpdateStatus),
-                // Last, and alone under its own heading: it is the one thing
-                // on this screen that destroys something.
-                (Some(tr!("DATA")), Item::ClearData),
             ],
             Category::Outputs => vec![
                 (Some(tr!("FIRST OUTPUT")), Item::Device(Role::Primary)),
@@ -1394,7 +1404,7 @@ mod settings_rows {
             // placed once for each output, and the Kodi category holds a group
             // of rows per Kodi found, plus the one row that belongs to no
             // installation and names another by hand.
-            let elsewhere = 25;
+            let elsewhere = 26;
             let kodi = ROWS_PER_KODI * kodis().len() + 1;
             // One row either way: the way in, or the way out.
             let paired = 1;
@@ -1536,12 +1546,24 @@ mod settings_rows {
         assert_eq!(status, switch.map(|at| at + 1));
     }
 
-    /// Clear Data destroys something, and was asked to sit at the end of
-    /// General rather than among the everyday toggles.
+    /// Clear Data destroys something, and belongs with the settings that
+    /// decide what there is to destroy: it closes the resuming group rather
+    /// than sitting alone at the end of the screen, which is where it was
+    /// until the switch above it existed.
     #[test]
-    fn clearing_data_comes_last() {
-        let general = Category::General.items(&kodis(), JellyfinPane::NotConnected);
-        assert_eq!(general.last().map(|(_, item)| *item), Some(Item::ClearData));
+    fn clearing_data_closes_the_resuming_group() {
+        let general: Vec<Item> = Category::General
+            .items(&kodis(), JellyfinPane::NotConnected)
+            .into_iter()
+            .map(|(_, item)| item)
+            .collect();
+        let at = |item: Item| general.iter().position(|other| *other == item);
+        assert_eq!(
+            at(Item::ClearData),
+            at(Item::WatchedThreshold).map(|n| n + 1)
+        );
+        // And the group it closes is the one the switch opens.
+        assert!(at(Item::RememberPositions) < at(Item::ClearData));
     }
 
     /// A row carries a switch or a bar or neither, and the two that carry
