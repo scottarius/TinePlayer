@@ -254,7 +254,7 @@ msgstr ""
 msgid "Video files"
 msgstr ""
 
-#: src/app/files.rs:449
+#: src/app/files.rs:406
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -262,7 +262,7 @@ msgid ""
 "{reason}"
 msgstr ""
 
-#: src/app/files.rs:459
+#: src/app/files.rs:416
 msgid ""
 "\n"
 "\n"

@@ -308,16 +308,18 @@ impl App {
             // them as one run and so does `--list-tracks`.
             let apply =
                 |spec: &str, track: &RefCell<Option<u32>>, file: &RefCell<Option<Source>>| {
-                    match crate::probe::resolve_audio(
-                        spec,
+                    // The same list the chooser draws and `--list-tracks`
+                    // prints, resolved by the same call the preferences use.
+                    let offered = crate::audio::options(
+                        app.file.borrow().as_ref().and_then(|source| source.local()),
                         &app.tracks.borrow(),
-                        &app.audio_files.borrow(),
-                    ) {
-                        Ok(crate::probe::AudioChoice::Silent) => *track.borrow_mut() = None,
-                        Ok(crate::probe::AudioChoice::Track(index)) => {
+                    );
+                    match crate::audio::resolve(spec, &offered) {
+                        Ok(crate::audio::AudioChoice::Silent) => *track.borrow_mut() = None,
+                        Ok(crate::audio::AudioChoice::Track(index)) => {
                             *track.borrow_mut() = Some(index)
                         }
-                        Ok(crate::probe::AudioChoice::File(path)) => {
+                        Ok(crate::audio::AudioChoice::File(path)) => {
                             *file.borrow_mut() = Some(Source::File(path))
                         }
                         // Reported rather than obeyed silently, the same way a

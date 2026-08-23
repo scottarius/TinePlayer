@@ -282,7 +282,7 @@ pub fn named_after_nothing(name: &str, kind_of: fn(&str) -> Option<Kind>) -> Str
 /// standing in for a tag - because the whole of it is then the caller's to
 /// show as written: handing back a `rest` there would print it twice, once as
 /// the row's own name and once as its reading.
-fn split_tag(tag: &str) -> (&str, &str) {
+pub(crate) fn split_tag(tag: &str) -> (&str, &str) {
     let (first, rest) = tag.split_once('.').unwrap_or((tag, ""));
     if languages::known(first) {
         (first, rest)

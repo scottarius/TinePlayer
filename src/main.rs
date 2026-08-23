@@ -14,6 +14,7 @@ mod align;
 mod app;
 mod appearance;
 mod artwork;
+mod audio;
 mod awake;
 mod beside;
 mod browser;
@@ -383,17 +384,15 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     // and reaching a server would mean pairing before answering it.
     let subtitles = subtitles::options(source.local(), &media.subtitles, &[]);
 
-    // And the soundtracks beside it, on the same terms: the chooser offers
-    // these alongside the tracks inside the file, so the numbers here have to
-    // cover both or the menu is offering something the command line cannot ask
-    // for. That was the state of it until now - subtitle files were listed and
-    // numbered, audio files were not.
-    let audio_files = source.local().map(beside::audio).unwrap_or_default();
+    // The same list the chooser draws and `--primary` counts through - see
+    // `crate::audio`. Tracks inside the video, then the soundtracks beside it.
+    let offered = audio::options(source.local(), &media.audio);
 
-    // Indices right-aligned to the widest of them, so a file with ten or more
-    // tracks keeps its numbers in a column instead of stepping sideways. Both
+    // Indices right-aligned to the widest of them, so a video with ten or more
+    // entries keeps its numbers in a column instead of stepping sideways. Both
     // lists share one width, so the two blocks line up with each other too.
-    let width = (media.audio.len() + audio_files.len())
+    let width = offered
+        .len()
         .max(subtitles.len())
         .to_string()
         .chars()
@@ -402,32 +401,17 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     // See list_devices for why this starts with a blank line.
     println!();
     println!();
-    println!("Audio tracks ({}):", media.audio.len() + audio_files.len());
+    println!("Audio ({}):", offered.len());
     println!();
     println!("  {:>width$}  None", 0);
     // The same rows the choosers show - see `crate::label` - but keeping the
     // language tag, because this printed list is where somebody finds out what
     // to hand to `--primary` or `--subtitle`.
-    for (position, track) in media.audio.iter().enumerate() {
-        let name = label::line(
-            &label::Parts {
-                language: &track.language,
-                technical: format!("{} {}ch", track.codec, track.channels),
-                kind: track.kind(),
-                title: &track.title,
-            },
-            label::Naming::WithTag,
-            &format!("Track {}", position + 1),
-        );
-        println!("  {:>width$}  {name}", position + 1);
-    }
-    // Numbered straight on from the tracks inside the file, which is how the
-    // chooser lists them and so what `--primary` and `--secondary` take.
-    for (position, file) in audio_files.iter().enumerate() {
+    for (position, entry) in offered.iter().enumerate() {
         println!(
             "  {:>width$}  {}",
-            media.audio.len() + position + 1,
-            file.label()
+            position + 1,
+            entry.label(label::Naming::WithTag, position + 1)
         );
     }
 

@@ -228,85 +228,50 @@ impl App {
                 ),
             )
         };
-        let describes = |track: &crate::probe::AudioTrack| track.is_described();
-
-        // What ordinary selection is allowed to pick from: everything except
-        // the described tracks, which are only ever chosen by asking for them.
-        // Without this, a file whose first English track happens to be the
-        // described one would hand narration to someone who never wanted it.
-        //
-        // Unless description is all there is. A file with nothing else would
-        // otherwise start silent, which reads as the player being broken
-        // rather than as a preference being honored.
-        let pool: Vec<&crate::probe::AudioTrack> = {
-            let plain: Vec<_> = tracks.iter().filter(|track| !describes(track)).collect();
-            if plain.is_empty() {
-                tracks.iter().collect()
-            } else {
-                plain
-            }
-        };
-
-        // First track in the preferred language, if one was named.
-        let by_language = |preferred: &Option<String>| -> Option<u32> {
-            let code = preferred.as_deref()?;
-            pool.iter()
-                .find(|track| crate::languages::matches(&track.language, code))
-                .map(|track| track.index)
-        };
-        // A described track for an output that asked for one. Not finding one
-        // is not a failure - most files have none - so it falls back to the
-        // ordinary choice rather than leaving the output silent.
-        //
-        // A named language is a hard requirement, not a preference to relax:
-        // description narrated in a language you do not speak is worse than no
-        // description at all, so the fallback is the right language undescribed
-        // rather than the wrong language described.
-        let described_track = |want: bool, preferred: &Option<String>| -> Option<u32> {
-            if !want {
-                return None;
-            }
-            let Some(code) = preferred.as_deref() else {
-                return tracks
-                    .iter()
-                    .find(|track| describes(track))
-                    .map(|track| track.index);
-            };
-            tracks
-                .iter()
-                .find(|track| describes(track) && crate::languages::matches(&track.language, code))
-                // Then one whose language is not stated. Unknown is not the
-                // same as wrong: a track tagged for another language is
-                // rejected, but plenty of description carries no tag at all -
-                // the tool most people use to add one sets a title and no
-                // language - and refusing those would mean finding nothing in
-                // the commonest case of all.
-                .or_else(|| {
-                    tracks
-                        .iter()
-                        .find(|track| describes(track) && !crate::languages::known(&track.language))
-                })
-                .map(|track| track.index)
-        };
+        // Everything an output could be put onto, tracks then files, which is
+        // the order the chooser draws and `--list-tracks` prints - see
+        // `crate::audio`. The preferences below and `--primary` go through the
+        // same call on the same list, so they cannot answer differently.
+        let offered = crate::audio::options(source.local(), &tracks);
+        let pool = crate::audio::ordinary(&offered);
 
         // Keyed on the video being loaded rather than the one still current,
         // which is not this one until the end of this function.
         let saved = crate::config::load_resume(&self.storage_key_for(source))
             .and_then(|resume| resume.tracks);
-        let (primary, secondary) = match saved.clone() {
+        // What the preferences choose, split into the two cells an output
+        // reads it from: an entry may now be a file beside the video as well
+        // as a track inside it. `at` is the positional fallback where the
+        // preferences find nothing - the first entry for one output and the
+        // next for the other, so two outputs do not both land on the same one.
+        let preferred = |language: &Option<String>,
+                         described: bool,
+                         at: usize|
+         -> (Option<u32>, Option<std::path::PathBuf>) {
+            match crate::audio::automatic(&offered, language.as_deref(), described)
+                .or_else(|| pool.get(at).map(|entry| entry.choice()))
+            {
+                Some(crate::audio::AudioChoice::Track(index)) => (Some(index), None),
+                Some(crate::audio::AudioChoice::File(path)) => (None, Some(path)),
+                Some(crate::audio::AudioChoice::Silent) | None => (None, None),
+            }
+        };
+        let (primary, primary_path, secondary, secondary_path) = match saved.clone() {
             // A saved None is a real choice ("no audio on that output"), so a
             // saved pair is taken as it stands rather than filled in.
-            Some(choice) => (choice.primary, choice.secondary),
-            // Otherwise the preferred languages decide, falling back to the
-            // old behavior of the first track and a different one.
-            None => (
-                described_track(described.0, &primary_language)
-                    .or_else(|| by_language(&primary_language))
-                    .or_else(|| pool.first().map(|t| t.index)),
-                described_track(described.1, &secondary_language)
-                    .or_else(|| by_language(&secondary_language))
-                    .or_else(|| pool.get(1).map(|t| t.index)),
+            Some(choice) => (
+                choice.primary,
+                choice.primary_file,
+                choice.secondary,
+                choice.secondary_file,
             ),
+            // Otherwise the preferred languages decide, falling back to the
+            // old behavior of the first entry and a different one.
+            None => {
+                let (track, file) = preferred(&primary_language, described.0, 0);
+                let (other, other_file) = preferred(&secondary_language, described.1, 1);
+                (track, file, other, other_file)
+            }
         };
         // The file may have been re-encoded since it was last played.
         let known = |choice: Option<u32>| choice.filter(|i| tracks.iter().any(|t| t.index == *i));
@@ -327,17 +292,9 @@ impl App {
             path.filter(|path| path.exists())
                 .map(|path| Source::File(path.clone()))
         };
-        *self.primary_file.borrow_mut() = still_there(
-            saved
-                .as_ref()
-                .and_then(|choice| choice.primary_file.as_ref()),
-        );
+        *self.primary_file.borrow_mut() = still_there(primary_path.as_ref());
         *self.secondary_file.borrow_mut() = if self.config.borrow().secondary_sink.is_some() {
-            still_there(
-                saved
-                    .as_ref()
-                    .and_then(|choice| choice.secondary_file.as_ref()),
-            )
+            still_there(secondary_path.as_ref())
         } else {
             None
         };
