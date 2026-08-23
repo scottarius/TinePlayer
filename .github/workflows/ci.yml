@@ -46,6 +46,13 @@ jobs:
     # and changes every apt package version underneath setup-linux.sh.
     runs-on: ${{ matrix.runner }}
     name: Linux ${{ matrix.arch }}
+    # A ceiling, not an estimate. Without one a job inherits GitHub's default
+    # of six hours, so a step that hangs rather than fails holds the run - and
+    # the pull request - for the rest of the day. Set at roughly three times
+    # the longest this job has honestly taken: loose enough that a slow runner
+    # or a cold cache never trips it, tight enough that a hang is answered in
+    # minutes.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -138,6 +145,8 @@ jobs:
   scripts:
     name: Shell scripts
     runs-on: ubuntu-24.04
+    # Seconds in practice; see the Linux job for why there is a ceiling at all.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -153,6 +162,15 @@ jobs:
   windows:
     name: Windows
     runs-on: windows-latest
+    # The loosest of the four, and the job this was added for. Installing
+    # GStreamer through winget pulls an 840 MB installer from
+    # gstreamer.freedesktop.org - the whole MSVC bundle, every plugin set and
+    # the GTK 4 stack with it - from outside GitHub's network and outside its
+    # cache, on every run. A slow day at that end is indistinguishable from a
+    # stall, because winget prints nothing until the progress bar starts, which
+    # is what this looked like on 2026-08-23. Thirty minutes is about four
+    # times a normal run and still leaves room for the download to crawl.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -169,6 +187,30 @@ jobs:
       # current release. There is no equivalent on the Linux side: apt on a
       # released Ubuntu serves a frozen GStreamer, so pinning the runner image
       # pins the dependency too.
+      # Restored before the install below, which then finds GStreamer already
+      # in place and skips it: `Resolve-GstRoot` looks for `gtk4.pc` under this
+      # very path, needing no registry entry and no environment variable, so a
+      # directory put back by the cache is indistinguishable from one the
+      # installer wrote.
+      #
+      # **The download is what this is for.** winget fetches an 840 MB
+      # installer from gstreamer.freedesktop.org, outside GitHub's network and
+      # outside its cache, on every run. On 2026-08-23 that transfer stalled
+      # twice at around 776 MB and simply stopped - winget has no download
+      # timeout, so the job sat there until it was cancelled by hand, twice,
+      # while every other job finished in under five minutes. A cache hit means
+      # the download does not happen at all, which is a better answer than
+      # surviving it.
+      #
+      # Keyed on the pinned version alone, with no `restore-keys`: a cache from
+      # a different version is not a partial answer, it is the wrong GStreamer,
+      # and the build would go on to link against it. Bumping
+      # `GSTREAMER_VERSION` therefore downloads once and caches that.
+      - uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\Programs\gstreamer
+          key: windows-gstreamer-${{ env.GSTREAMER_VERSION }}
+
       - name: Install dependencies
         shell: pwsh
         run: .\setup-windows.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
@@ -246,6 +288,9 @@ jobs:
     # that upgrade comes: keeping the two on one OS version is what makes a
     # difference between them an architecture difference rather than an OS one.
     runs-on: ${{ matrix.runner }}
+    # Higher than Linux: the x86_64 runner is emulated and has taken over six
+    # minutes with everything cached.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
