@@ -898,7 +898,7 @@ msgstr ""
 msgid "Use the system language"
 msgstr ""
 
-#: src/jellyfin.rs:1198
+#: src/jellyfin.rs:1191
 msgctxt "subtitle track"
 msgid "Subtitles"
 msgstr ""
@@ -927,15 +927,15 @@ msgstr ""
 msgid "Default Player"
 msgstr ""
 
-#: src/kodi_setup.rs:682
+#: src/kodi_setup.rs:710
 msgid "Allow Kodi to start programs outside its sandbox"
 msgstr ""
 
-#: src/kodi_setup.rs:683
+#: src/kodi_setup.rs:711
 msgid "Kodi is installed as a Flatpak. It starts an external player inside its own sandbox, where TinePlayer is not installed and your files are not visible, so it has to be allowed to run the command on the machine instead."
 msgstr ""
 
-#: src/kodi_setup.rs:691
+#: src/kodi_setup.rs:719
 msgid "This lets Kodi run anything on this machine, not only TinePlayer. TinePlayer will not run it for you."
 msgstr ""
 

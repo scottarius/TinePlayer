@@ -150,16 +150,7 @@ impl App {
     /// changing and is the same whichever form of the path is in play.
     /// Otherwise the source names itself.
     pub(super) fn storage_key(&self) -> Option<String> {
-        if let Some(item) = self.kodi_item.borrow().as_ref() {
-            return Some(item.key());
-        }
-        // The item id, never the stream address: that carries an access token
-        // which changes when it is regenerated, and every position filed
-        // against the old one would be orphaned.
-        if let Some(item) = self.jellyfin_item.borrow().as_ref() {
-            return Some(format!("jellyfin:{}", item.id));
-        }
-        self.file.borrow().as_ref().map(Source::key)
+        self.key_for(None)
     }
 
     /// The same key for a video that is not the current one yet.
@@ -170,9 +161,39 @@ impl App {
     /// none at all on the first file of a session, which is why remembered
     /// choices were quietly ignored at startup.
     pub(super) fn storage_key_for(&self, source: &Source) -> String {
-        match self.kodi_item.borrow().as_ref() {
-            Some(item) => item.key(),
-            None => source.key(),
+        // Always an answer, because naming the video removes the only reason
+        // `storage_key` can fail.
+        self.key_for(Some(source)).unwrap_or_else(|| source.key())
+    }
+
+    /// The one place that decides, for both of the callers above.
+    ///
+    /// **They used to decide separately, and disagreed.** `storage_key`
+    /// checked Kodi, then Jellyfin, then the source; `storage_key_for` checked
+    /// Kodi and fell straight through to the source, with no Jellyfin branch
+    /// at all. So a cast video was *written* under `jellyfin:<id>` by every
+    /// saver and *read back* under its stream URL by `apply_media`, and the
+    /// audio and subtitle choices remembered for it were never found again.
+    /// Nothing reported it: the language preferences answered instead, which
+    /// looks exactly like a video being opened for the first time.
+    ///
+    /// `source` is what separates the two callers, and it is not decoration.
+    /// `self.file` is not the video being loaded until the end of
+    /// `apply_media`, so a caller part-way through has to name the video it
+    /// means - which is the whole reason there were two functions to disagree.
+    fn key_for(&self, source: Option<&Source>) -> Option<String> {
+        if let Some(item) = self.kodi_item.borrow().as_ref() {
+            return Some(item.key());
+        }
+        // The item id, never the stream address: that carries an access token
+        // which changes when it is regenerated, and every position filed
+        // against the old one would be orphaned.
+        if let Some(item) = self.jellyfin_item.borrow().as_ref() {
+            return Some(format!("jellyfin:{}", item.id));
+        }
+        match source {
+            Some(source) => Some(source.key()),
+            None => self.file.borrow().as_ref().map(Source::key),
         }
     }
 

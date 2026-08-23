@@ -347,29 +347,22 @@ pub fn load() -> Option<Pairing> {
 /// Writes it, readable only by this account where the platform can say so.
 ///
 /// The mode is set as the file is created rather than afterwards, so there is
-/// no moment when it exists and is readable by everyone. On Windows this
+/// no moment when it exists and is readable by everyone - which is why this
+/// goes through `config::write_atomically` with `private` set rather than
+/// writing the file itself: that helper creates the temp file with the mode
+/// and renames it into place, so the file that appears has never been
+/// readable. On Windows this
 /// inherits the profile folder's own permissions, which already exclude other
 /// accounts; a portable copy on a memory stick has no permissions to set at
 /// all, which is worth knowing rather than working around - a lost stick is a
 /// leaked credential, and that is the deal a portable install makes.
 pub fn save(pairing: &Pairing) -> Result<(), String> {
-    let path = path();
     let text = serde_json::to_string_pretty(pairing).map_err(|e| e.to_string())?;
-
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    use std::io::Write;
-    let mut file = options
-        .open(&path)
-        .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
-    file.write_all(text.as_bytes())
-        .map_err(|e| format!("Failed to write {}: {e}", path.display()))
+    // `private` is this file's requirement, and `write_atomically` sets the
+    // mode on the temp file for the reason this function always has: it must
+    // never exist readable by everyone, not even for the instant between being
+    // created and being chmodded.
+    crate::config::write_atomically(&path(), &text, true)
 }
 
 /// Forgets the server entirely, which is what disconnecting means.
