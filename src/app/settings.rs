@@ -233,51 +233,20 @@ impl App {
         })
     }
 
-    /// The note drawn under a row: its explanation, and for one row a link
-    /// beside it.
-    fn item_note(self: &Rc<Self>, item: Item, scale: f64) -> Option<gtk::Widget> {
-        let text = row_note(&self.item_description(item)?, scale);
-
-        // Where the data this clears actually lives, openable rather than
-        // printed. A path read off a television is a path nobody is going to
-        // type, and the folder is the thing wanted anyway - to take a copy of
-        // it before pressing the row above, or to see that it is really gone
-        // afterwards.
-        //
-        // The data folder rather than the config one: they are not the same
-        // place, and this row does not touch settings.
-        //
-        // A Kodi's own folder is offered the same way, but under its group
-        // heading rather than on a row - see `GroupNote`.
-        if item != Item::ClearData {
-            return Some(text.upcast());
-        }
-        let Some(folder) = crate::config::positions_path()
-            .parent()
-            .map(|folder| folder.to_path_buf())
-        else {
-            return Some(text.upcast());
-        };
-        let sentence = text.text().to_string();
-        // On the same line as the sentence it belongs to, rather than under
-        // it: two lines of small print under one row reads as a paragraph.
-        text.set_markup(&format!(
-            "{}  <a href=\"{}\">{}</a>",
-            glib::markup_escape_text(&sentence),
-            glib::markup_escape_text(&gtk::gio::File::for_path(&folder).uri()),
-            glib::markup_escape_text(&tr!("Open user data folder")),
-        ));
-        // Reported rather than swallowed: a link that does nothing looks like
-        // a link that was pressed wrongly.
-        {
-            let folder = folder.clone();
-            text.connect_activate_link(move |_, _| {
-                show_folder(&folder);
-                glib::Propagation::Stop
-            });
-        }
-
-        Some(text.upcast())
+    /// The note drawn under a row: its explanation, and nothing else.
+    ///
+    /// The user data folder used to be offered here, on the Clear Data row,
+    /// which understated it: `positions.json` is one of six things in that
+    /// folder, alongside `config.yaml`, the Jellyfin pairing and the version
+    /// check's state. It is now a line under App Details on the About screen,
+    /// which is the one place on that screen about the installation rather
+    /// than about a setting - and it no longer disappears with the row when
+    /// there is no file to clear.
+    ///
+    /// A Kodi's own folder is still offered under its group heading rather
+    /// than on a row - see `GroupNote`.
+    fn item_note(&self, item: Item, scale: f64) -> Option<gtk::Widget> {
+        Some(row_note(&self.item_description(item)?, scale).upcast())
     }
 
     /// Whether the row can be worked at all.

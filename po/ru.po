@@ -104,11 +104,19 @@ msgctxt "a track's language"
 msgid "Unknown"
 msgstr "Неизвестно"
 
-#: src/app/about.rs:156 src/app/settings.rs:47
+#: src/app/about.rs:131
+msgid "Settings and saved data are kept in"
+msgstr ""
+
+#: src/app/about.rs:133
+msgid "your user data folder"
+msgstr ""
+
+#: src/app/about.rs:184 src/app/settings.rs:47
 msgid "Third-Party Notices"
 msgstr "Сторонние компоненты"
 
-#: src/app/about.rs:205 src/app/keys.rs:71 src/app/playback.rs:647
+#: src/app/about.rs:233 src/app/keys.rs:71 src/app/playback.rs:647
 #: src/app/playback.rs:708
 msgid "Close"
 msgstr "Закрыть"
@@ -435,7 +443,7 @@ msgstr "Закрыть проигрыватель"
 msgid "Toggle fullscreen"
 msgstr "Полноэкранный режим"
 
-#: src/app/media_page.rs:995 src/app/media_page.rs:996 src/app/settings.rs:489
+#: src/app/media_page.rs:995 src/app/media_page.rs:996 src/app/settings.rs:458
 msgid "Settings"
 msgstr "Настройки"
 
@@ -619,15 +627,15 @@ msgstr "Требуется действие"
 msgid "Navigation Sounds"
 msgstr "Звуки навигации"
 
-#: src/app/settings.rs:1356
+#: src/app/settings.rs:1325
 msgid "Current Version: v{version}"
 msgstr "Текущая версия: v{version}"
 
-#: src/app/settings.rs:1372
+#: src/app/settings.rs:1341
 msgid "Update available: v{version}"
 msgstr "Доступно обновление: v{version}"
 
-#: src/app/settings.rs:1377
+#: src/app/settings.rs:1346
 msgid "Up to date"
 msgstr "Обновлений нет"
 
@@ -736,10 +744,6 @@ msgstr "Предпочитать тифлокомментарий"
 msgid "Volume"
 msgstr "Громкость"
 
-#: src/app/settings.rs:268
-msgid "Open user data folder"
-msgstr ""
-
 #: src/app/settings.rs:27
 msgid "Audio Sync"
 msgstr "Синхронизация звука"
@@ -772,33 +776,33 @@ msgstr "Разрешение песочницы"
 msgid "No Kodi installations were found on this system"
 msgstr "В этой системе не найдено ни одной установки Kodi"
 
+#: src/app/settings.rs:367
+msgid "Connected to {server} as {who}."
+msgstr "Подключено к {server} как {who}."
+
+#: src/app/settings.rs:373
+msgid "Connected to {server}."
+msgstr "Подключено к {server}."
+
+#: src/app/settings.rs:379
+msgid "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet."
+msgstr "Подключите сервер Jellyfin, чтобы транслировать видео в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
+
+#: src/app/settings.rs:383
+msgid "{connected} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet."
+msgstr "{connected} Видео можно транслировать в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
+
 #: src/app/settings.rs:39
 msgid "Add User Data Folder"
 msgstr "Добавить папку пользовательских данных"
 
-#: src/app/settings.rs:398
-msgid "Connected to {server} as {who}."
-msgstr "Подключено к {server} как {who}."
-
-#: src/app/settings.rs:404
-msgid "Connected to {server}."
-msgstr "Подключено к {server}."
-
-#: src/app/settings.rs:410
-msgid "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet."
-msgstr "Подключите сервер Jellyfin, чтобы транслировать видео в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
-
-#: src/app/settings.rs:414
-msgid "{connected} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet."
-msgstr "{connected} Видео можно транслировать в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
+#: src/app/settings.rs:409
+msgid "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect."
+msgstr "Файл playercorefactory.xml этой установки будет изменён. Перезапустите Kodi, чтобы изменения вступили в силу."
 
 #: src/app/settings.rs:44
 msgid "Disconnect from {server}"
 msgstr "Отключиться от {server}"
-
-#: src/app/settings.rs:440
-msgid "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect."
-msgstr "Файл playercorefactory.xml этой установки будет изменён. Перезапустите Kodi, чтобы изменения вступили в силу."
 
 #: src/app/settings.rs:45
 msgid "Disconnect"
