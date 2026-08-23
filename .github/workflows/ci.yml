@@ -183,6 +183,40 @@ jobs:
           printf '%s\n' "${scripts[@]}"
           shellcheck -x -S warning "${scripts[@]}"
 
+  # What the dependency tree is allowed to contain: the licences, and whether
+  # anything arrived from somewhere other than crates.io. `deny.toml` says
+  # which, and why each entry is there.
+  #
+  # Here rather than in upstream.yml because it is deterministic - the same
+  # tree gives the same answer forever, so a red means this commit added
+  # something. The *advisories* half is the opposite kind of question and runs
+  # weekly there instead: a new advisory appears against a crate we shipped
+  # months ago, and failing somebody's unrelated pull request for it would be
+  # blaming the wrong commit.
+  #
+  # This exists because the claim it replaces was wrong. Cargo.toml said
+  # nothing in the tree was copyleft, checked by hand, and MPL-2.0 had been
+  # statically linked in the whole time.
+  licences:
+    name: Dependencies
+    runs-on: ubuntu-24.04
+    # Seconds once the tool is cached; the install is the slow part.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned like every other third-party action here, and to a released
+      # version of the tool rather than whatever is current: a new cargo-deny
+      # can add a check, and that would fail a commit which did nothing.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check bans licenses sources
+          # These precede the subcommand, which is where cargo-deny wants
+          # them. `--locked` because the lockfile is committed and there is
+          # nothing to resolve; `--all-features` is the action's own default
+          # and is kept rather than lost by overriding this input.
+          arguments: --locked --all-features
+
   windows:
     name: Windows
     runs-on: windows-latest
