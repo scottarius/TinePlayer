@@ -31,6 +31,7 @@ mod kodi_setup;
 mod label;
 mod languages;
 mod lockup;
+mod log;
 mod matroska;
 mod media_keys;
 mod metadata;
@@ -307,7 +308,7 @@ fn silence_upstream_unref_spam() {
             if message.contains("g_object_unref") && message.contains("assertion") {
                 return;
             }
-            eprintln!(
+            crate::log!(
                 "{}-{}: {message}",
                 domain.unwrap_or("GLib"),
                 match level {
@@ -773,6 +774,10 @@ fn use_bundled_fonts() {
 
 fn main() -> std::process::ExitCode {
     attach_parent_console();
+    // Before anything has something to say, and before any thread exists to
+    // say it from. `attach_parent_console` comes first only so that the
+    // standard-error half of this reaches the terminal that started us.
+    log::start();
     // Before any window is made, which is when the identity is stamped on.
     name_this_process();
     // Before anything reads the environment, and before GStreamer starts.
@@ -890,7 +895,7 @@ fn main() -> std::process::ExitCode {
     // fix it out of reach.
     let (mut config, config_problem) = Config::load();
     if let Some(problem) = config_problem.as_deref() {
-        eprintln!("{problem}");
+        crate::log!("{problem}");
     }
 
     // Before any label exists, which is the only ordering that matters: every
@@ -920,7 +925,7 @@ fn main() -> std::process::ExitCode {
     {
         config.primary_sink = Some(device);
         if let Err(e) = config.save() {
-            eprintln!("Could not save the default audio output: {e}");
+            crate::log!("Could not save the default audio output: {e}");
         }
     }
 

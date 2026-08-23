@@ -653,6 +653,19 @@ pub fn positions_path() -> PathBuf {
     app_dir(glib::user_data_dir()).join("positions.json")
 }
 
+/// Where the diagnostic logs go: beside the positions and the pairing, in the
+/// per-user data directory.
+///
+/// An `Option` where its neighbours return a bare path, because those are
+/// paths a caller is about to read or write and can report a failure on. This
+/// one is asked for by the logger, before there is anywhere to report a
+/// failure to - so "there is no such folder" has to be an answer it can be
+/// given rather than a file operation that fails later.
+pub fn log_dir() -> Option<PathBuf> {
+    let dir = app_dir(glib::user_data_dir());
+    dir.is_dir().then_some(dir)
+}
+
 /// Which Jellyfin server this installation is paired with, and the token that
 /// says so.
 ///
