@@ -130,6 +130,17 @@ pub fn discover(wait: std::time::Duration) -> Vec<Found> {
     // By name, so a list of them is in the same order every time rather than
     // in whatever order the replies happened to arrive.
     found.sort_by_key(|server| server.name.to_lowercase());
+    match found.is_empty() {
+        true => log::info!("Jellyfin discovery: no server answered the broadcast"),
+        false => log::info!(
+            "Jellyfin discovery: {}",
+            found
+                .iter()
+                .map(|server| format!("{} at {}", server.name, server.address))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
     found
 }
 
@@ -1397,6 +1408,13 @@ pub fn quick_connect_poll(
             .unwrap_or_default()
             .to_string()
     };
+    // The account, never the token. Who this machine is signed in as is the
+    // thing a reader needs - a library that looks wrong is usually the wrong
+    // user rather than the wrong server.
+    log::info!(
+        "Jellyfin: Quick Connect approved, signed in as {:?}",
+        field("Name")
+    );
     Ok(Some(Account {
         token: token.to_string(),
         user_id: field("Id"),
@@ -1500,6 +1518,13 @@ pub fn connect(pairing: &Pairing, handler: impl Fn(Command) + 'static) -> Option
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let alive = running.clone();
 
+    // The address without the token on it, for the log. `redact` would take
+    // the query string off anyway; saying which server and which scheme is the
+    // whole of what a reader needs, and building it deliberately is clearer
+    // than relying on something downstream to remove the rest.
+    let where_to = url.split('?').next().unwrap_or_default().to_string();
+    log::info!("Jellyfin: connecting to {where_to}");
+
     std::thread::Builder::new()
         .name("jellyfin".to_string())
         .spawn(move || {
@@ -1508,17 +1533,24 @@ pub fn connect(pairing: &Pairing, handler: impl Fn(Command) + 'static) -> Option
                 match hold(&url, &alive) {
                     // Refused outright. The pairing is gone; stop.
                     Err(Error::Unauthorized) => {
+                        log::error!(
+                            "Jellyfin: the server refused this connection, so the pairing is \
+                             gone. Not retrying."
+                        );
                         deliver(Command::SignedOut);
                         return;
                     }
                     Err(Error::Failed(why)) => {
                         log::error!("Jellyfin connection lost: {why}");
                     }
-                    Ok(()) => {}
+                    // Closed cleanly, which is ordinary: a server restarting
+                    // says goodbye before it goes.
+                    Ok(()) => log::info!("Jellyfin: the server closed the connection"),
                 }
                 if !alive.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
+                log::info!("Jellyfin: reconnecting in {}s", wait.as_secs());
                 std::thread::sleep(wait);
                 // Up to half a minute: long enough not to hammer a server that
                 // is down, short enough that somebody who restarts theirs does
@@ -1570,6 +1602,8 @@ fn hold(url: &str, alive: &std::sync::atomic::AtomicBool) -> Result<(), Error> {
         return Err(Error::Unauthorized);
     }
 
+    log::info!("Jellyfin: connected, and available to cast to");
+
     // Non-blocking so the loop can notice it has been asked to stop, rather
     // than sitting in a read until the server happens to say something.
     if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_ref() {
@@ -1606,6 +1640,11 @@ fn hold(url: &str, alive: &std::sync::atomic::AtomicBool) -> Result<(), Error> {
 
 /// Hands a command to the thread that can act on it.
 fn deliver(command: Command) {
+    // Every command from a phone passes through here, so one line covers all
+    // of them - and a command arriving is the fact worth having. "I pressed
+    // pause on my phone and nothing happened" is answered by whether this line
+    // is present: absent means the socket or the server, present means us.
+    log::info!("Jellyfin: {command:?}");
     glib::idle_add_once(move || {
         let handler = HANDLER.with(|held| held.borrow().clone());
         if let Some(handler) = handler {

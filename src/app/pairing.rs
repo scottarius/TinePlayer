@@ -245,6 +245,8 @@ impl App {
             false => format!("http://{typed}"),
         };
 
+        log::info!("Jellyfin: starting Quick Connect against {address}");
+
         let pairing = match self.jellyfin_pairing.borrow().clone() {
             Some(mut pairing) => {
                 pairing.set_server(&address);
@@ -485,6 +487,7 @@ impl App {
     /// already decided the answer to - and what they asked for is to stop being
     /// paired, which is true the moment the token is gone from this machine.
     fn disconnect_jellyfin(self: &Rc<Self>) {
+        log::info!("Jellyfin: disconnecting and forgetting the token");
         let client = self
             .jellyfin_pairing
             .borrow()
