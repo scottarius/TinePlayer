@@ -3,6 +3,8 @@
 If none of this covers what you are seeing, please
 [open an issue](https://github.com/scottarius/TinePlayer/issues). Something
 going wrong and not being listed here is itself worth knowing about.
+Please attach the log - see [Send the log](#send-the-log) for where it is and
+what it contains.
 
 ## It will not start
 
@@ -226,3 +228,40 @@ Positions are keyed by the video's full path, so moving or renaming a file
 loses its entry. A position under ten seconds is also treated as no position
 at all. See [Saved Playback Resume
 Data](configuration.md#saved-playback-resume-data).
+
+
+## Reporting a problem
+
+### Send the log
+
+TinePlayer writes what it is doing to a file beside the saved positions. If
+something goes wrong and nothing on this page covers it, that file is the most
+useful thing to attach to a report.
+
+* Windows: `%LOCALAPPDATA%\TinePlayer\tineplayer.log`
+* macOS: `~/.local/share/tineplayer/tineplayer.log`
+* Linux: `~/.local/share/tineplayer/tineplayer.log`
+
+A portable copy keeps its log in the `user` folder beside the executable,
+along with everything else it remembers.
+
+**The last three runs are kept**, which matters because a problem is usually
+noticed after the fact. `tineplayer.log` is the run that just finished,
+`tineplayer.1.log` the one before it, and `tineplayer.2.log` the one before
+that. If TinePlayer stopped working and you restarted it twice before thinking
+to look, the run you want is still there - but a third restart will lose it,
+so copy the file somewhere before experimenting further.
+
+### What is in it
+
+Only what TinePlayer itself reports: which file it opened, which audio devices
+it found, what GStreamer complained about, and a full account of any crash.
+
+Access tokens are removed before anything is written, so a log from a machine
+paired with a Jellyfin server does not carry the credential for it. Server
+addresses, file paths and item names are kept, because they are what make the
+report readable - worth knowing if the names of your files are something you
+would rather not share.
+
+Nothing is sent anywhere. The file is written locally and stays there until
+you attach it to something.
