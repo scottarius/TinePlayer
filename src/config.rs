@@ -634,9 +634,7 @@ impl Config {
         let path = config_path();
         let text = serde_yaml::to_string(self).map_err(|e| e.to_string())?;
         note_changes(&text);
-        std::fs::write(&path, text)
-            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
-        Ok(())
+        write_atomically(&path, &text, false)
     }
 
     /// Records which desktop session was active when the config was
@@ -751,6 +749,68 @@ fn changed_settings(before: &str, after: &str) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Writes a file so that a crash or a power cut leaves either the old contents
+/// or the new ones, never half of either.
+///
+/// `std::fs::write` truncates and then writes, so there is a window - short,
+/// but real - where the file on disk is empty or partial. Every state file
+/// this application keeps went through it. **TinePlayer's stated home is a Pi
+/// wired to a television, and the way televisions get turned off is at the
+/// wall**, so that window is not theoretical here the way it might be on a
+/// desktop. `Config::preserve_unreadable` exists because a config has already
+/// been found unreadable at least once.
+///
+/// Temp file, flush, then rename over the target. The rename is what makes it
+/// atomic: it is a single directory operation on every filesystem this runs
+/// on, and Windows replaces an existing destination as POSIX does. `sync_all`
+/// before it matters as much as the rename - without it the rename can reach
+/// the disk before the bytes do, which turns a torn file into an empty one.
+///
+/// `private` sets `0o600` as the file is created, for the Jellyfin token. It
+/// has to be the *temp* file that gets the mode, since that is the one that
+/// becomes the real file - setting it afterwards would leave a moment where a
+/// credential is world-readable. Windows has no equivalent and inherits the
+/// profile folder's permissions, which already exclude other accounts.
+///
+/// The temp file sits beside the target rather than in a system temp folder,
+/// because a rename across filesystems is not atomic and may not be a rename
+/// at all. A leftover `.tmp` means this failed partway; it is overwritten on
+/// the next attempt rather than being cleaned up separately, which would be
+/// one more thing to fail.
+pub fn write_atomically(path: &Path, text: &str, private: bool) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".to_string());
+    let temp = path.with_file_name(format!("{name}.tmp"));
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+
+    let failed =
+        |what: &str, e: std::io::Error| format!("Failed to {what} {}: {e}", path.display());
+
+    {
+        use std::io::Write;
+        let mut file = options
+            .open(&temp)
+            .map_err(|e| failed("open a temporary file beside", e))?;
+        file.write_all(text.as_bytes())
+            .map_err(|e| failed("write", e))?;
+        // Before the rename, not after: see above.
+        file.sync_all().map_err(|e| failed("flush", e))?;
+    }
+
+    std::fs::rename(&temp, path).map_err(|e| failed("replace", e))
 }
 /// Resume positions are state rather than settings, so they live in the
 /// per-user data directory - but for the same reason as the config, they
@@ -951,7 +1011,7 @@ fn save_all(entries: &std::collections::HashMap<String, Resume>) {
         return;
     }
     if let Ok(text) = serde_json::to_string(entries) {
-        let _ = std::fs::write(positions_path(), text);
+        let _ = write_atomically(&positions_path(), &text, false);
     }
 }
 
@@ -1214,5 +1274,56 @@ mod change_tests {
             ),
             vec!["sounds: true -> false", "ui_scale: 1.0 -> 2.0"]
         );
+    }
+}
+
+#[cfg(test)]
+mod atomic_tests {
+    use super::write_atomically;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("tp-atomic");
+        std::fs::create_dir_all(&dir).expect("the temporary directory is writable");
+        dir.join(name)
+    }
+
+    #[test]
+    fn it_writes_the_content() {
+        let path = scratch("plain.json");
+        let _ = std::fs::remove_file(&path);
+        write_atomically(&path, "{\"a\":1}", false).expect("it writes");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\":1}");
+    }
+
+    #[test]
+    fn it_replaces_what_was_there() {
+        let path = scratch("replaced.json");
+        std::fs::write(&path, "old and longer than the new one").unwrap();
+        write_atomically(&path, "new", false).expect("it writes");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    }
+
+    /// The temp file is an implementation detail and must not be left in the
+    /// user's data folder beside their settings.
+    #[test]
+    fn it_leaves_no_temporary_file_behind() {
+        let path = scratch("tidy.json");
+        let _ = std::fs::remove_file(&path);
+        write_atomically(&path, "x", false).expect("it writes");
+        assert!(!path.with_file_name("tidy.json.tmp").exists());
+    }
+
+    /// The Jellyfin token's requirement, and the reason `private` exists: the
+    /// file that appears must never have been readable by anyone else, so the
+    /// mode belongs on the temp file rather than being applied afterwards.
+    #[cfg(unix)]
+    #[test]
+    fn a_private_file_is_readable_only_by_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("secret.json");
+        let _ = std::fs::remove_file(&path);
+        write_atomically(&path, "token", true).expect("it writes");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "mode was {:o}", mode & 0o777);
     }
 }

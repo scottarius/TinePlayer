@@ -68,7 +68,7 @@ pub fn load() -> State {
 
 pub fn save(state: &State) {
     if let Ok(text) = serde_json::to_string_pretty(state) {
-        let _ = std::fs::write(crate::config::updates_path(), text);
+        let _ = crate::config::write_atomically(&crate::config::updates_path(), &text, false);
     }
 }
 
