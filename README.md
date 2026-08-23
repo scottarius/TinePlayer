@@ -197,6 +197,13 @@ falls short for, what's missing or simply wrong.
 This only works if it suits everyone watching at once, and I genuinely want
 your feedback in order to make it better.
 
+If something has gone wrong, the log is the most useful thing to attach - see
+[Send the log](docs/troubleshooting.md#send-the-log) for where it is and what
+is in it. **Security problems go
+[privately](https://github.com/scottarius/TinePlayer/security/advisories/new)**
+rather than into an issue; [SECURITY.md](SECURITY.md) says what is already
+known and deliberate.
+
 ## Compatibility
 
 TinePlayer targets a deliberately conservative baseline of **GTK 4.6** and
