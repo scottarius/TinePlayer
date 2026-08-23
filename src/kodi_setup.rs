@@ -328,11 +328,39 @@ struct Launch {
 
 impl Launch {
     /// Puts this command into a piece of the template.
+    ///
+    /// Both substitutions are escaped, because both are paths and a path is
+    /// not XML text. `&` is legal in a Windows account name - so
+    /// `C:\Users\Ben & Sue\...` is an ordinary thing to be installed under -
+    /// and `<`, `>`, `"` and `'` are all legal in a POSIX filename besides.
+    ///
+    /// **Kodi's answer to a file it cannot parse is to ignore it, silently.**
+    /// So without this the symptom is TinePlayer reporting that it registered
+    /// successfully and then never appearing under "Play using...", with
+    /// nothing anywhere to say why - a fault nobody would reproduce, because
+    /// it depends entirely on what somebody's home folder is called.
     fn fill(&self, xml: &str) -> String {
-        xml.replace(PLACEHOLDER, &self.filename)
-            .replace(PLACEHOLDER_ARGS, &self.prefix)
+        xml.replace(PLACEHOLDER, &escape_xml(&self.filename))
+            .replace(PLACEHOLDER_ARGS, &escape_xml(&self.prefix))
             .replace(PLACEHOLDER_PLAY, if self.play { " --play" } else { "" })
     }
+}
+
+/// The five characters XML reserves, in the one order that works.
+///
+/// `&` first: doing it later would go back over the ampersands the other four
+/// just introduced and turn `&lt;` into `&amp;lt;`.
+///
+/// All five rather than the three a text node strictly needs. `<filename>` is
+/// a text node and `<args>` is too, so `"` and `'` would pass - but the
+/// template quotes `{1}` inside `<args>`, and anything that ever moves one of
+/// these into an attribute would break in a way that is invisible here.
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// Everywhere Kodi is known to keep its userdata, in the order worth trying.
@@ -1211,5 +1239,72 @@ mod tests {
         assert_eq!(read_state(&fresh(&direct(), false)), Registration::Offered);
         assert_eq!(read_state(&fresh(&direct(), true)), Registration::Default);
         assert!(!fresh(&direct(), false).contains("RULES START"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn the_five_reserved_characters_are_escaped() {
+        assert_eq!(
+            escape_xml(r#"a & b < c > d " e ' f"#),
+            "a &amp; b &lt; c &gt; d &quot; e &apos; f"
+        );
+    }
+
+    /// The ampersand has to go first, or it re-escapes what the others wrote.
+    #[test]
+    fn escaping_is_not_applied_twice() {
+        assert_eq!(escape_xml("<"), "&lt;");
+        assert!(!escape_xml("<").contains("&amp;"));
+    }
+
+    #[test]
+    fn an_ordinary_path_is_untouched() {
+        let path = r"C:\Program Files\TinePlayer\TinePlayer.exe";
+        assert_eq!(escape_xml(path), path);
+    }
+
+    /// The case this exists for: a Windows account name may contain `&`, and
+    /// the file Kodi gets has to still be well-formed XML.
+    #[test]
+    fn an_ampersand_in_the_path_survives_into_the_file() {
+        let launch = Launch {
+            filename: r"C:\Users\Ben & Sue\TinePlayer.exe".to_string(),
+            prefix: String::new(),
+            play: false,
+        };
+        let out = fresh(&launch, false);
+        assert!(
+            out.contains(r"<filename>C:\Users\Ben &amp; Sue\TinePlayer.exe</filename>"),
+            "{out}"
+        );
+        // A bare ampersand anywhere is what makes Kodi discard the file, so
+        // the whole document is checked rather than just the one element.
+        for (at, _) in out.match_indices('&') {
+            let tail = &out[at..];
+            assert!(
+                ["&amp;", "&lt;", "&gt;", "&quot;", "&apos;"]
+                    .iter()
+                    .any(|entity| tail.starts_with(entity)),
+                "bare & at {at}: {}",
+                &tail[..tail.len().min(40)]
+            );
+        }
+    }
+
+    /// A Flatpak writes its path into `<args>` rather than `<filename>`, so
+    /// that substitution needs the same treatment.
+    #[test]
+    fn the_args_prefix_is_escaped_too() {
+        let launch = Launch {
+            filename: "/usr/bin/flatpak-spawn".to_string(),
+            prefix: "--host /home/a & b/tineplayer ".to_string(),
+            play: false,
+        };
+        let out = fresh(&launch, false);
+        assert!(out.contains("/home/a &amp; b/tineplayer"), "{out}");
     }
 }
