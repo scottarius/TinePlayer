@@ -245,6 +245,8 @@ impl App {
             false => format!("http://{typed}"),
         };
 
+        log::info!("Jellyfin: starting Quick Connect against {address}");
+
         let pairing = match self.jellyfin_pairing.borrow().clone() {
             Some(mut pairing) => {
                 pairing.set_server(&address);
@@ -485,6 +487,7 @@ impl App {
     /// already decided the answer to - and what they asked for is to stop being
     /// paired, which is true the moment the token is gone from this machine.
     fn disconnect_jellyfin(self: &Rc<Self>) {
+        log::info!("Jellyfin: disconnecting and forgetting the token");
         let client = self
             .jellyfin_pairing
             .borrow()
@@ -508,7 +511,7 @@ impl App {
                     // asked from: a panel arriving over a film minutes later
                     // would be a worse fault than the one it reports.
                     Ok(Err(e)) => {
-                        eprintln!("Jellyfin was not told about the disconnection: {e}");
+                        log::error!("Jellyfin was not told about the disconnection: {e}");
                         if app.showing_jellyfin_pane() {
                             app.jellyfin_notice(
                                 &tr!("Disconnected Here Only"),
@@ -536,7 +539,7 @@ impl App {
         // everybody's phone.
         *self.jellyfin_session.borrow_mut() = None;
         if let Err(e) = crate::jellyfin::remove() {
-            eprintln!("Couldn't remove the Jellyfin pairing: {e}");
+            log::error!("Couldn't remove the Jellyfin pairing: {e}");
         }
         *self.jellyfin_pairing.borrow_mut() = None;
         self.return_to_jellyfin_settings();
@@ -631,7 +634,7 @@ impl App {
             &tr!("Clear"),
             move || {
                 if let Err(e) = crate::config::clear_all_resume() {
-                    eprintln!("{e}");
+                    log::error!("{e}");
                 }
                 // The loaded file keeps its choices for this session; only
                 // what was written down is gone.

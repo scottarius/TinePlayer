@@ -68,7 +68,7 @@ pub fn install<F: Fn(Action) + 'static>(handler: F) {
     let mut gilrs = match Gilrs::new() {
         Ok(gilrs) => gilrs,
         Err(e) => {
-            eprintln!("Gamepad support unavailable: {e}");
+            log::error!("Gamepad support unavailable: {e}");
             return;
         }
     };

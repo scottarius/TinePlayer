@@ -156,8 +156,8 @@ msgstr "Сведения о программе"
 #: src/app/alignment.rs:102 src/app/alignment.rs:188 src/app/alignment.rs:329
 #: src/app/browsing.rs:168 src/app/browsing.rs:309 src/app/browsing.rs:656
 #: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:824
-#: src/app/pairing.rs:123 src/app/pairing.rs:318 src/app/pairing.rs:591
-#: src/app/pairing.rs:679 src/app/playback.rs:645
+#: src/app/pairing.rs:123 src/app/pairing.rs:320 src/app/pairing.rs:594
+#: src/app/pairing.rs:682 src/app/playback.rs:645
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -221,42 +221,42 @@ msgstr "Открытие"
 msgid "Open System Browser"
 msgstr "Открыть системный диалог"
 
-#: src/app/choosers.rs:102 src/app/choosers.rs:656 src/app/choosers.rs:663
+#: src/app/choosers.rs:100
+msgid "Searching for outputs..."
+msgstr "Поиск устройств вывода..."
+
+#: src/app/choosers.rs:110 src/app/choosers.rs:664 src/app/choosers.rs:671
 #: src/app/outputs.rs:22
 msgctxt "subtitle track"
 msgid "None"
 msgstr "Нет"
 
-#: src/app/choosers.rs:120 src/app/choosers.rs:182 src/app/media_page.rs:750
+#: src/app/choosers.rs:128 src/app/choosers.rs:190 src/app/media_page.rs:750
 #: src/app/media_page.rs:754
 msgid "Browse..."
 msgstr "Обзор..."
 
-#: src/app/choosers.rs:125 src/app/outputs.rs:21 src/app/tracks.rs:98
+#: src/app/choosers.rs:133 src/app/outputs.rs:21 src/app/tracks.rs:98
 msgctxt "audio track"
 msgid "None"
 msgstr "Нет"
 
-#: src/app/choosers.rs:158 src/controls.rs:2018
+#: src/app/choosers.rs:166 src/controls.rs:2018
 msgid "AUDIO FILES"
 msgstr ""
 
-#: src/app/choosers.rs:204 src/app/settings.rs:73
+#: src/app/choosers.rs:212 src/app/settings.rs:73
 msgid "First track"
 msgstr "Первая дорожка"
 
-#: src/app/choosers.rs:206 src/app/settings.rs:74
+#: src/app/choosers.rs:214 src/app/settings.rs:74
 msgid "Second track"
 msgstr "Вторая дорожка"
 
-#: src/app/choosers.rs:72 src/app/menu.rs:172 src/app/settings.rs:68
+#: src/app/choosers.rs:80 src/app/menu.rs:172 src/app/settings.rs:68
 msgctxt "audio output device"
 msgid "None"
 msgstr "Нет"
-
-#: src/app/choosers.rs:92
-msgid "Searching for outputs..."
-msgstr "Поиск устройств вывода..."
 
 #: src/app/files.rs:16
 msgid "Choose an audio file"
@@ -282,7 +282,7 @@ msgstr "Аудиофайлы"
 msgid "Video files"
 msgstr "Видеофайлы"
 
-#: src/app/files.rs:406
+#: src/app/files.rs:473
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -294,7 +294,7 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app/files.rs:416
+#: src/app/files.rs:483
 msgid ""
 "\n"
 "\n"
@@ -356,7 +356,7 @@ msgstr "TinePlayer будет удалён из {label} как внешний п
 msgid "Configuration Error"
 msgstr "Ошибка настройки"
 
-#: src/app/kodi_screens.rs:689 src/app/pairing.rs:553
+#: src/app/kodi_screens.rs:689 src/app/pairing.rs:556
 msgid "OK"
 msgstr "OK"
 
@@ -517,7 +517,7 @@ msgstr "В этой сети найден {server}."
 msgid "No server answered on this network. Enter an address manually."
 msgstr "В этой сети сервер не ответил. Введите адрес вручную."
 
-#: src/app/pairing.rs:256 src/app/pairing.rs:449
+#: src/app/pairing.rs:258 src/app/pairing.rs:451
 msgid "Could Not Save"
 msgstr "Не удалось сохранить"
 
@@ -526,59 +526,59 @@ msgstr "Не удалось сохранить"
 #. translating it afresh - this text sends somebody to find it in their own
 #. Jellyfin app, and a different wording sends them looking for something
 #. that is not there.
-#: src/app/pairing.rs:304
+#: src/app/pairing.rs:306
 msgid "Quick Connect"
 msgstr "Быстрое подключение"
 
 #. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
 #. Jellyfin's translation into your language calls it, rather than
 #. translating it afresh.
-#: src/app/pairing.rs:315
+#: src/app/pairing.rs:317
 msgid "Obtaining Quick Connect code..."
 msgstr "Получение кода быстрого подключения..."
 
-#: src/app/pairing.rs:385
+#: src/app/pairing.rs:387
 msgid "The code was not approved in time."
 msgstr "Код не был подтверждён вовремя."
 
 #. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
 #. Jellyfin's translation into your language calls it, rather than
 #. translating it afresh.
-#: src/app/pairing.rs:421
+#: src/app/pairing.rs:423
 msgid "In a Jellyfin app you are signed in to, open Quick Connect from the user menu and enter this code."
 msgstr "В приложении Jellyfin, где вы вошли в учётную запись, откройте «Быстрое подключение» в меню пользователя и введите этот код."
 
-#: src/app/pairing.rs:430
+#: src/app/pairing.rs:432
 msgid "Could Not Connect"
 msgstr "Не удалось подключиться"
 
-#: src/app/pairing.rs:467
+#: src/app/pairing.rs:469
 msgid "Disconnect from Jellyfin?"
 msgstr "Отключиться от Jellyfin?"
 
-#: src/app/pairing.rs:468
+#: src/app/pairing.rs:470
 msgid "TinePlayer will no longer appear as a player in {server}."
 msgstr "TinePlayer больше не будет отображаться как проигрыватель в {server}."
 
-#: src/app/pairing.rs:514
+#: src/app/pairing.rs:517
 msgid "Disconnected Here Only"
 msgstr "Отключено только здесь"
 
-#: src/app/pairing.rs:516
+#: src/app/pairing.rs:519
 msgid "The access token stored on this machine has been removed."
 msgstr "Токен доступа, хранившийся на этом компьютере, удалён."
 
 #. "Devices" is the name of a page in Jellyfin's own dashboard. Use whatever
 #. Jellyfin's translation calls that page.
-#: src/app/pairing.rs:519
+#: src/app/pairing.rs:522
 msgid "The server could not be reached. Remove TinePlayer under Devices in the Jellyfin dashboard to revoke access."
 msgstr "Сервер недоступен. Удалите TinePlayer в разделе «Устройства» панели управления Jellyfin, чтобы отозвать доступ."
 
-#: src/app/pairing.rs:630
+#: src/app/pairing.rs:633
 msgid "Clear all saved playback data?"
 msgstr "Удалить все сохранённые данные воспроизведения?"
 
-#: src/app/pairing.rs:631
+#: src/app/pairing.rs:634
 msgid "Clear"
 msgstr "Очистить"
 
@@ -841,7 +841,7 @@ msgstr "Вверх, к списку дисков"
 msgid "Nothing here"
 msgstr "Здесь пусто"
 
-#: src/config.rs:483
+#: src/config.rs:490
 msgid ""
 "Couldn't read your settings from {path}.\n"
 "\n"
@@ -855,7 +855,7 @@ msgstr ""
 "\n"
 "TinePlayer запущен с настройками по умолчанию."
 
-#: src/config.rs:490
+#: src/config.rs:497
 msgid ""
 "\n"
 "\n"
@@ -865,7 +865,7 @@ msgstr ""
 "\n"
 "Файл сохранён как {path}."
 
-#: src/config.rs:496
+#: src/config.rs:503
 msgid ""
 "\n"
 "\n"
@@ -939,7 +939,7 @@ msgstr "Громкость, все выходы"
 msgid "Use the system language"
 msgstr "Использовать язык системы"
 
-#: src/jellyfin.rs:1187
+#: src/jellyfin.rs:1198
 msgctxt "subtitle track"
 msgid "Subtitles"
 msgstr "Субтитры"

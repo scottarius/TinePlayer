@@ -186,7 +186,7 @@ pub fn current_item() -> Option<Item> {
                 .to_string()
         };
 
-        return Some(Item {
+        let found = Item {
             kind: string("type"),
             id: item.get("id").and_then(serde_json::Value::as_i64)?,
             file: string("file"),
@@ -196,8 +196,24 @@ pub fn current_item() -> Option<Item> {
                 .get("runtime")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0),
-        });
+        };
+        // Kodi's library is the authority on where a film resumes and what it
+        // is called, so what it said is worth having verbatim: a title or a
+        // position that looks wrong on screen is answered here, by whether it
+        // arrived wrong or was mishandled afterwards.
+        log::info!(
+            "Kodi handed over {:?} ({}), resume {}, runtime {}s",
+            found.title,
+            found.key(),
+            match found.resume_ns {
+                Some(at) => crate::controls::format_time(gstreamer::ClockTime::from_nseconds(at)),
+                None => "none".to_string(),
+            },
+            found.runtime_s,
+        );
+        return Some(found);
     }
+    log::info!("Kodi did not report an external video player, so it is not driving this playback");
     None
 }
 

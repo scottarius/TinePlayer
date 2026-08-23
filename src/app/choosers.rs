@@ -47,6 +47,14 @@ impl App {
             if *app.device_names.borrow() == names {
                 return glib::ControlFlow::Break;
             }
+            // Written down whenever it changes, because "no devices are
+            // offered" and "the second output is silent" are both questions
+            // about this list, and neither can be answered without seeing what
+            // the machine actually reported.
+            match names.is_empty() {
+                true => log::info!("Audio outputs: none found"),
+                false => log::info!("Audio outputs: {}", names.join(", ")),
+            }
             *app.device_names.borrow_mut() = names;
             then(&app);
             glib::ControlFlow::Break
@@ -703,7 +711,7 @@ impl App {
                     }
                     config.capture_display_session();
                     if let Err(e) = config.save() {
-                        eprintln!("Failed to save config: {e}");
+                        log::error!("Failed to save config: {e}");
                     }
                 }
 

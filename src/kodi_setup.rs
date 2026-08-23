@@ -884,6 +884,12 @@ pub fn apply(
     std::fs::write(&setup.file, xml)
         .map_err(|e| format!("Couldn't write {}: {e}", setup.file.display()))?;
 
+    // What was written and where. Kodi ignores a player file it cannot parse
+    // and says nothing about it, so "I set it up and TinePlayer never appears"
+    // is answered by this line plus the file it names - which is the only
+    // evidence there is that our side of it worked.
+    log::info!("Kodi: wrote {:?} to {}", want, setup.file.display());
+
     Ok(())
 }
 

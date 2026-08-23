@@ -89,6 +89,20 @@ minreq = { version = "2.14", features = ["https-rustls-probe", "json-using-serde
 serde_yaml = "0.9.34"
 gtk = { package = "gtk4", version = "0.9" }
 
+# The logging facade, which is already in this tree whether we name it or not:
+# gilrs, rustls and tungstenite all write through it. Without a backend
+# installed those macros compile to nothing at runtime, so every word any of
+# them has ever said has gone nowhere - including a TLS handshake failing,
+# which is the one thing that explains a Jellyfin connection refusing to come
+# up. Naming it here and installing `src/logging.rs` behind it is what turns
+# that back on, and it adds no crate that was not already being compiled.
+#
+# The facade only. No `env_logger`, `fern` or `flexi_logger`: the redaction in
+# `src/logging.rs` has to happen in the write path and none of them do it,
+# rotating per *run* is not a policy any of them offer, and what is left after
+# those two is short enough that a dependency could not earn its place.
+log = "0.4"
+
 # Statically linked into this binary rather than installed as a shared
 # GStreamer plugin - gtk4paintablesink isn't packaged for Debian or shipped
 # with the GStreamer Windows installer, so depending on it as a normal crate

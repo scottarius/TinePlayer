@@ -2192,6 +2192,7 @@ dependencies = [
  "gtk4",
  "if-addrs",
  "libc",
+ "log",
  "minreq",
  "objc2",
  "objc2-app-kit",

@@ -215,7 +215,7 @@ fn resolve(preference: Option<&str>) -> Active {
         let path = std::path::PathBuf::from(path);
         match load(&path) {
             Ok(loaded) => {
-                eprintln!(
+                log::info!(
                     "Interface language: {}, read from {}",
                     loaded.code,
                     path.display()
@@ -223,8 +223,8 @@ fn resolve(preference: Option<&str>) -> Active {
                 return Active::Loaded(loaded);
             }
             Err(e) => {
-                eprintln!("{CATALOG_ENV} could not be used: {e}");
-                eprintln!("Carrying on in English.");
+                log::error!("{CATALOG_ENV} could not be used: {e}");
+                log::error!("Carrying on in English.");
                 return Active::Untranslated;
             }
         }

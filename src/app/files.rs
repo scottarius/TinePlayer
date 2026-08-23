@@ -106,7 +106,7 @@ impl App {
         match crate::probe::probe_media(source) {
             Ok(media) => self.apply_media(source, media),
             Err(e) => {
-                eprintln!("Couldn't read {}: {e}", source.uri());
+                log::error!("Couldn't read {}: {e}", source.uri());
                 self.forget_file();
                 Err(e)
             }
@@ -161,7 +161,7 @@ impl App {
         {
             let ours = media.duration_ns / 1_000_000_000;
             if ours.abs_diff(runtime) > 5 {
-                eprintln!(
+                log::error!(
                     "Kodi reports a {runtime}s item but this source is {ours}s;                      ignoring what it said and keeping local positions."
                 );
                 *self.kodi_item.borrow_mut() = None;
@@ -239,6 +239,10 @@ impl App {
         // which is not this one until the end of this function.
         let saved = crate::config::load_resume(&self.storage_key_for(source))
             .and_then(|resume| resume.tracks);
+        // Which of the two answered, for the log below. "It keeps forgetting
+        // my tracks" and "it keeps choosing the wrong one" are different
+        // faults with the same symptom, and this is what tells them apart.
+        let remembered = saved.is_some();
         // What the preferences choose, split into the two cells an output
         // reads it from: an entry may now be a file beside the video as well
         // as a track inside it. `at` is the positional fallback where the
@@ -341,6 +345,69 @@ impl App {
         *self.subtitle.borrow_mut() =
             subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
         *self.subtitle_options.borrow_mut() = options;
+
+        // What was opened and what was decided about it, which between them
+        // answer most of what a report needs to say. The source goes through
+        // `log!`, so a library stream arrives here with its token already off.
+        //
+        // `remembered` is the important half: a choice restored from
+        // `positions.json` and a choice worked out from the language
+        // preferences look identical on screen and mean completely different
+        // things when somebody says the wrong track was picked.
+        // Named the way `--list-tracks` names them - `rus (Русский)` - rather
+        // than by index. An index is what the code passes around and means
+        // nothing to whoever reads the report; the tag is both readable and
+        // the thing they would type to change it.
+        let soundtrack = |index: Option<u32>| match index {
+            None => "none".to_string(),
+            Some(index) => offered
+                .iter()
+                .position(|entry| entry.choice() == crate::audio::AudioChoice::Track(index))
+                .map(|at| offered[at].label(crate::label::Naming::WithTag, at + 1))
+                .unwrap_or_else(|| format!("track {index}, no longer in the file")),
+        };
+        let chosen_subtitle = match self.subtitle.borrow().as_ref() {
+            None => "none".to_string(),
+            Some(choice) => self
+                .subtitle_options
+                .borrow()
+                .iter()
+                .find(|option| option.choice() == *choice)
+                .map(|option| crate::subtitles::row(option, crate::label::Naming::WithTag))
+                .unwrap_or_else(|| "none".to_string()),
+        };
+        // A separate file wins over the track underneath it, so it is what the
+        // output is actually going to play and what the log has to say.
+        let played_by = |role: Role| match self.file_for(role).borrow().as_ref() {
+            Some(file) => format!("{} (file beside the video)", file.label()),
+            None => soundtrack(*self.track_for(role).borrow()),
+        };
+
+        // Plain English rather than `trn!`: the log is read by whoever is
+        // handed the report, not by the person running the player, so it stays
+        // in one language however the interface is set.
+        let count = |n: usize, thing: &str| match n {
+            1 => format!("1 {thing}"),
+            n => format!("{n} {thing}s"),
+        };
+        log::info!(
+            "Opened {}\n  {}, {}, {}",
+            source.uri(),
+            crate::controls::format_time(gstreamer::ClockTime::from_nseconds(duration_ns)),
+            count(offered.len(), "soundtrack"),
+            count(self.subtitle_options.borrow().len(), "subtitle"),
+        );
+        log::info!(
+            "Tracks chosen from {}:\n  primary   {}\n  secondary {}\n  subtitle  {}",
+            match remembered {
+                true => "the choices saved for this video",
+                false => "the language preferences",
+            },
+            played_by(Role::Primary),
+            played_by(Role::Secondary),
+            chosen_subtitle,
+        );
+
         *self.tracks.borrow_mut() = tracks;
         // Separate soundtracks beside the video, found by the same convention
         // and the same code as the subtitle files above. Only for a local

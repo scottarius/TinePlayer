@@ -159,7 +159,7 @@ impl AudioRouting {
         links.sort();
         let mut hubs: Vec<String> = self.hubs.keys().cloned().collect();
         hubs.sort();
-        eprintln!(
+        log::error!(
             "[audio] {what}\n  wanted:   {}\n  carrying: {}\n  links:    {}\n  hubs:     {}",
             list(&self.wanted),
             list(&self.carrying),
@@ -369,11 +369,11 @@ impl AudioRouting {
 
         let Some(hub) = hub else { return };
         let Some(src) = hub.request_pad_simple("src_%u") else {
-            eprintln!("Failed to get a tee pad for the {role} output");
+            log::error!("Failed to get a tee pad for the {role} output");
             return;
         };
         if let Err(e) = src.link(&sink) {
-            eprintln!("Failed to feed the {role} output: {e}");
+            log::error!("Failed to feed the {role} output: {e}");
             hub.release_request_pad(&src);
             return;
         }
@@ -402,7 +402,7 @@ pub fn tracing_audio() -> bool {
 /// One line of that trace.
 pub fn trace(what: std::fmt::Arguments<'_>) {
     if tracing_audio() {
-        eprintln!("[audio] {what}");
+        log::error!("[audio] {what}");
     }
 }
 
@@ -523,11 +523,11 @@ pub fn build_pipeline(
                 .request_pad_simple("sink_%u")
                 .or_else(|| decode.static_pad("sink"))
             else {
-                eprintln!("Failed to get a decoder sink pad for {}", pad.name());
+                log::error!("Failed to get a decoder sink pad for {}", pad.name());
                 return;
             };
             if let Err(e) = pad.link(&sink) {
-                eprintln!("Failed to link source to decoder: {e}");
+                log::error!("Failed to link source to decoder: {e}");
             }
         });
     }
@@ -757,11 +757,11 @@ fn attach_external_audio(
                 .request_pad_simple("sink_%u")
                 .or_else(|| decode.static_pad("sink"))
             else {
-                eprintln!("Failed to get a decoder sink pad for the audio file");
+                log::error!("Failed to get a decoder sink pad for the audio file");
                 return;
             };
             if let Err(e) = pad.link(&sink) {
-                eprintln!("Failed to link the audio file to its decoder: {e}");
+                log::error!("Failed to link the audio file to its decoder: {e}");
             }
         });
     }
@@ -846,7 +846,7 @@ pub fn attach_external_subtitle(
                 return;
             }
             if let Err(e) = pad.link(&sink) {
-                eprintln!("Failed to link the subtitle source: {e}");
+                log::error!("Failed to link the subtitle source: {e}");
             }
         });
     }
@@ -955,7 +955,7 @@ fn add_audio_hub(
 ) {
     let name = hub_key(pad);
     let Ok(tee) = gst::ElementFactory::make("tee").build() else {
-        eprintln!("Missing GStreamer element \"tee\". Check the install.");
+        log::error!("Missing GStreamer element \"tee\". Check the install.");
         return;
     };
     // A hub often exists for a moment with nothing drawing from it - between a
@@ -963,20 +963,20 @@ fn add_audio_hub(
     // and a tee with no branches is an error rather than a pause by default.
     tee.set_property("allow-not-linked", true);
     if let Err(e) = pipeline.add(&tee) {
-        eprintln!("Failed to add the tee for {name}: {e}");
+        log::error!("Failed to add the tee for {name}: {e}");
         return;
     }
     // Added to a pipeline that may already be running, so it starts itself
     // rather than waiting for a state change that has already happened.
     if tee.sync_state_with_parent().is_err() {
-        eprintln!("Failed to start the tee for {name}");
+        log::error!("Failed to start the tee for {name}");
         return;
     }
     let Some(sink) = tee.static_pad("sink") else {
         return;
     };
     if let Err(e) = pad.link(&sink) {
-        eprintln!("Failed to connect decoded audio on {name}: {e}");
+        log::error!("Failed to connect decoded audio on {name}: {e}");
         return;
     }
 
@@ -1037,7 +1037,7 @@ fn attach_pacer(pipeline: &gst::Pipeline, tee: &gst::Element) {
         gst::ElementFactory::make("queue").build(),
         gst::ElementFactory::make("fakesink").build(),
     ) else {
-        eprintln!("Could not build the pacing branch for an external audio file");
+        log::error!("Could not build the pacing branch for an external audio file");
         return;
     };
     queue.set_property("name", format!("pacerq_{}", tee.name()));
@@ -1046,16 +1046,16 @@ fn attach_pacer(pipeline: &gst::Pipeline, tee: &gst::Element) {
     sink.set_property("async", false);
     sink.unset_element_flags(gst::ElementFlags::SINK);
     if pipeline.add_many([&queue, &sink]).is_err() {
-        eprintln!("Failed to add the pacing branch for an external audio file");
+        log::error!("Failed to add the pacing branch for an external audio file");
         return;
     }
     if gst::Element::link_many([tee, &queue, &sink]).is_err() {
-        eprintln!("Failed to link the pacing branch for an external audio file");
+        log::error!("Failed to link the pacing branch for an external audio file");
         return;
     }
     for element in [&queue, &sink] {
         if element.sync_state_with_parent().is_err() {
-            eprintln!("Failed to start the pacing branch for an external audio file");
+            log::error!("Failed to start the pacing branch for an external audio file");
             return;
         }
     }
@@ -1300,7 +1300,7 @@ fn connect_pad_added(
             return;
         }
         let Some(id) = pad.stream_id() else {
-            eprintln!(
+            log::error!(
                 "Decoded pad {} has no stream id, so nothing knows what it was \
                  selected for; ignoring it. Caps: {:?}",
                 pad.name(),
@@ -1346,7 +1346,7 @@ fn connect_pad_added(
         if let Target::Audio = target {
             let playing = targets.audio.lock().unwrap().track_on(pad);
             let Some(playing) = playing else {
-                eprintln!("Decoded audio on {} names no track we know", pad.name());
+                log::error!("Decoded audio on {} names no track we know", pad.name());
                 return;
             };
             add_audio_hub(&pipeline, &targets.audio, pad, playing);
@@ -1366,7 +1366,7 @@ fn connect_pad_added(
             return;
         };
         if let Err(e) = pad.link(&sink_pad) {
-            eprintln!("Failed to connect decoded stream {id}: {e}");
+            log::error!("Failed to connect decoded stream {id}: {e}");
             discard(&pipeline, pad);
         }
     });
@@ -1402,11 +1402,11 @@ fn discard(pipeline: &gst::Pipeline, pad: &gst::Pad) {
         return;
     };
     if let Err(e) = pad.link(&target) {
-        eprintln!("Couldn't discard the stream either: {e}");
+        log::error!("Couldn't discard the stream either: {e}");
         return;
     }
     if sink.sync_state_with_parent().is_err() {
-        eprintln!("The discarded stream's sink would not start");
+        log::error!("The discarded stream's sink would not start");
     }
 }
 

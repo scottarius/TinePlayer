@@ -439,7 +439,7 @@ impl App {
         glib::timeout_add_local_once(std::time::Duration::from_secs(1), move || {
             app.volume_save_pending.set(false);
             if let Err(e) = app.config.borrow().save() {
-                eprintln!("Could not save volume: {e}");
+                log::error!("Could not save volume: {e}");
             }
         });
     }

@@ -532,7 +532,7 @@ pub(crate) fn marked_image(bytes: &'static [u8], size: f64) -> gtk::Image {
         Ok(texture) => image.set_paintable(Some(&texture)),
         // Said out loud: a mark that silently fails to appear looks like a
         // button with nothing on it, which is not a clue anyone can act on.
-        Err(e) => eprintln!("Could not load an interface mark: {e}"),
+        Err(e) => log::error!("Could not load an interface mark: {e}"),
     }
     image.set_pixel_size(size.round().max(1.0) as i32);
     image
@@ -624,7 +624,7 @@ pub(crate) fn show_folder(folder: &std::path::Path) {
     let mut opener = std::process::Command::new("xdg-open");
 
     if let Err(e) = opener.arg(folder).spawn() {
-        eprintln!("Could not open {}: {e}", folder.display());
+        log::error!("Could not open {}: {e}", folder.display());
     }
 }
 
