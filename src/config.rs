@@ -445,6 +445,13 @@ impl Config {
             (Some(storage), None) => Some(storage),
             (None, rest) => rest,
         };
+        // What the settings were when this run began, so the *first* change
+        // made in a session is reported like every other one. Seeding on the
+        // first save instead would swallow exactly the change most likely to
+        // be the one somebody is asking about.
+        if let Ok(text) = serde_yaml::to_string(&config) {
+            seed_changes(&text);
+        }
         (config, problem)
     }
 
@@ -626,6 +633,7 @@ impl Config {
         set_remember_positions(self.remember_positions);
         let path = config_path();
         let text = serde_yaml::to_string(self).map_err(|e| e.to_string())?;
+        note_changes(&text);
         std::fs::write(&path, text)
             .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
         Ok(())
@@ -646,6 +654,104 @@ impl Config {
     }
 }
 
+/// Says which settings just changed, by comparing this save against the last.
+///
+/// Here rather than at the eight places that call `save`, and by comparison
+/// rather than by each of them naming what it touched, for one reason: a
+/// setting added next year is covered by this without anybody remembering to
+/// cover it. The settings screen is exactly where "it stopped working after I
+/// changed something" comes from, and the answer is usually a setting the
+/// person no longer recalls touching.
+///
+/// The first save of a session is seeded rather than reported. Everything
+/// would otherwise read as a change on the first write, which is noise: what
+/// the settings were at startup is a different question, and `main` already
+/// logs the two that matter.
+///
+/// Values are compared as YAML, so an unset field reads as `null` and a
+/// changed one carries both sides. Nothing here can fail in a way worth
+/// reporting - a config that will not serialise has already been caught by the
+/// caller - so every error is a silent return.
+static LAST_SAVED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Records the settings as they stood, without reporting anything.
+fn seed_changes(text: &str) {
+    if let Ok(mut last) = LAST_SAVED.lock() {
+        *last = Some(text.to_string());
+    }
+}
+
+fn note_changes(text: &str) {
+    let Ok(mut last) = LAST_SAVED.lock() else {
+        return;
+    };
+    let Some(before) = last.replace(text.to_string()) else {
+        return;
+    };
+    let changed = changed_settings(&before, text);
+    if !changed.is_empty() {
+        // One entry, so a burst of changes from one screen reads as one event
+        // rather than as five things that happened at the same instant.
+        log::info!(
+            "Settings changed:{}",
+            changed
+                .iter()
+                .map(|line| format!("\n  {line}"))
+                .collect::<String>()
+        );
+    }
+}
+
+/// Which settings differ between two serialisations, as `key: old -> new`.
+///
+/// Split from the reporting above so it can be tested: the caller holds a
+/// process-wide snapshot, which a test cannot set up twice.
+fn changed_settings(before: &str, after: &str) -> Vec<String> {
+    if before == after {
+        return Vec::new();
+    }
+    let parse = |text: &str| {
+        serde_yaml::from_str::<std::collections::BTreeMap<String, serde_yaml::Value>>(text).ok()
+    };
+    let (Some(before), Some(after)) = (parse(before), parse(after)) else {
+        return Vec::new();
+    };
+
+    let show = |value: Option<&serde_yaml::Value>| match value {
+        // Absent and explicitly null are the same answer to a reader, and
+        // several of these fields mean "work it out" when unset.
+        None | Some(serde_yaml::Value::Null) => "unset".to_string(),
+        // Quoted, so a device name with trailing space or punctuation in it is
+        // visible rather than being read as part of the sentence.
+        Some(serde_yaml::Value::String(text)) => format!("{text:?}"),
+        Some(value) => serde_yaml::to_string(value)
+            .map(|text| text.trim().to_string())
+            .unwrap_or_else(|_| "?".to_string()),
+    };
+
+    // Absent and explicitly null are compared as one, not merely displayed
+    // as one. Several fields here are left out of the file when unset, so a
+    // version that started writing an explicit null would otherwise report
+    // every one of them as `unset -> unset` on the first save.
+    let value = |map: &std::collections::BTreeMap<String, serde_yaml::Value>, key: &str| {
+        map.get(key).cloned().unwrap_or(serde_yaml::Value::Null)
+    };
+
+    after
+        .keys()
+        .chain(before.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|key| value(&before, key) != value(&after, key))
+        .map(|key| {
+            format!(
+                "{key}: {} -> {}",
+                show(before.get(key)),
+                show(after.get(key))
+            )
+        })
+        .collect()
+}
 /// Resume positions are state rather than settings, so they live in the
 /// per-user data directory - but for the same reason as the config, they
 /// must not be relative to the working directory.
@@ -1053,5 +1159,60 @@ mod offsets {
         assert_eq!(config.offset_ms("primary"), 13.0);
         config.set_offset_ms("secondary", -12.6);
         assert_eq!(config.offset_ms("secondary"), -13.0);
+    }
+}
+
+#[cfg(test)]
+mod change_tests {
+    use super::changed_settings;
+
+    #[test]
+    fn an_unchanged_config_reports_nothing() {
+        let text = "sounds: true\nprimary_sink: Speakers\n";
+        assert!(changed_settings(text, text).is_empty());
+    }
+
+    #[test]
+    fn a_changed_value_carries_both_sides() {
+        assert_eq!(
+            changed_settings("sounds: true\n", "sounds: false\n"),
+            vec!["sounds: true -> false"]
+        );
+    }
+
+    /// The commonest real change, and the one a device name has to survive
+    /// intact: they carry spaces, parentheses and punctuation.
+    #[test]
+    fn a_device_name_is_quoted() {
+        assert_eq!(
+            changed_settings(
+                "secondary_sink: null\n",
+                "secondary_sink: Headphones (2- Arctis Nova Pro Wireless)\n"
+            ),
+            vec![r#"secondary_sink: unset -> "Headphones (2- Arctis Nova Pro Wireless)""#]
+        );
+    }
+
+    /// An absent key and an explicit null mean the same thing to a reader, so
+    /// moving between them is not a change worth reporting.
+    #[test]
+    fn absent_and_null_are_the_same_answer() {
+        assert!(
+            changed_settings("ui_scale: null\n", "sounds: true\n")
+                .iter()
+                .all(|line| !line.starts_with("ui_scale"))
+        );
+    }
+
+    /// Several at once read as one event, in a stable order.
+    #[test]
+    fn every_change_is_listed_and_sorted() {
+        assert_eq!(
+            changed_settings(
+                "sounds: true\nui_scale: 1.0\n",
+                "sounds: false\nui_scale: 2.0\n"
+            ),
+            vec!["sounds: true -> false", "ui_scale: 1.0 -> 2.0"]
+        );
     }
 }
