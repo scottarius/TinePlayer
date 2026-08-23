@@ -20,6 +20,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Nothing here writes to the repository - this workflow builds, lints and
+# tests. Declared explicitly rather than left to the repository default,
+# which is currently read but is a setting rather than a promise: a change
+# made in the web interface years from now should not quietly widen what
+# every pull request's token can do.
+permissions:
+  contents: read
+
 jobs:
   linux:
     name: Linux (current)

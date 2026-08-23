@@ -28,8 +28,12 @@ env:
   RUST_VERSION: "1.97.1"
   GSTREAMER_VERSION: "1.28.5"
 
+# Read by default, and write only where it is actually used - which is the
+# `release` job below and nothing else. The three build jobs handle the
+# signing secrets and run the packaging scripts, and none of them has any
+# business being able to write to the repository while doing it.
 permissions:
-  contents: write # creating the release and uploading to it
+  contents: read
 
 jobs:
   windows:
@@ -316,6 +320,8 @@ jobs:
           path: dist/linux/*.deb
 
   release:
+    permissions:
+      contents: write # creating the release and uploading to it
     name: Publish
     needs: [windows, macos, linux]
     runs-on: ubuntu-24.04
@@ -325,9 +331,18 @@ jobs:
     steps:
       # The full history, so the previous tag can be found. A shallow
       # checkout is a single commit, with nothing to compare against.
+      #
+      # `persist-credentials: false` because this is the one job whose token
+      # can write to the repository, and `actions/checkout` otherwise leaves
+      # it in `.git/config` for every later step to find. Nothing here needs
+      # it: the history is read locally and the release is created by the
+      # action below, which is handed a token directly. The other checkouts
+      # in this file and in ci.yml do not set it, because `contents: read`
+      # above already means their token can do nothing worth stealing.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/download-artifact@v8
         with:
@@ -402,7 +417,13 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v3
+        # Pinned to a commit for the same reason `rust-cache` is in ci.yml: a
+        # moving tag is someone else's code changing under a build that is
+        # trusted to be reproducible. It matters more here than there - this
+        # is the workflow holding the signing certificate, the notarization
+        # key and `contents: write` - and it was the one that did not have it.
+        # v3.0.2.
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: |
             artifacts/windows/*
