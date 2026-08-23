@@ -1,0 +1,22 @@
+# The template above is for faults. Everything else has a better home than a
+# bug report, and saying so here is what keeps the tracker readable.
+blank_issues_enabled: true
+contact_links:
+  - name: A question, or an idea
+    url: https://github.com/scottarius/TinePlayer/discussions
+    about: >
+      How something works, whether a setup would suit, or something you would
+      like TinePlayer to do. Discussions rather than issues, so an answer
+      stays findable.
+
+  - name: A security problem
+    url: https://github.com/scottarius/TinePlayer/security/advisories/new
+    about: >
+      Reported privately, so it is not public before there is a fix. See
+      SECURITY.md for what is already known and deliberate.
+
+  - name: Translating TinePlayer
+    url: https://github.com/scottarius/TinePlayer/blob/main/docs/translating.md
+    about: >
+      You need no Rust toolchain and nothing to build - a release can be
+      pointed at the file you are editing.
