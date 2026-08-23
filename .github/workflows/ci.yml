@@ -46,6 +46,13 @@ jobs:
     # and changes every apt package version underneath setup-linux.sh.
     runs-on: ${{ matrix.runner }}
     name: Linux ${{ matrix.arch }}
+    # A ceiling, not an estimate. Without one a job inherits GitHub's default
+    # of six hours, so a step that hangs rather than fails holds the run - and
+    # the pull request - for the rest of the day. Set at roughly three times
+    # the longest this job has honestly taken: loose enough that a slow runner
+    # or a cold cache never trips it, tight enough that a hang is answered in
+    # minutes.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -69,14 +76,30 @@ jobs:
       # recompiles the GTK and GStreamer bindings from scratch, which is the
       # slowest part by far. The key includes the lockfile so a dependency
       # change correctly invalidates it.
-      - uses: actions/cache@v6
+      # Dependencies only, and pruned as it goes.
+      #
+      # This was `actions/cache` over `~/.cargo` plus the whole of `target`,
+      # keyed on `hashFiles('Cargo.lock')` with a prefix `restore-keys`. That
+      # combination refills the quota by design: the exact key stops matching
+      # the moment the lockfile moves, so every run restores through the
+      # prefix and then saves a *new* copy, five platforms at a time and
+      # nothing ever deleted. It reached 24 caches and 10.78 GB of the 10 GB
+      # allowance, at which point GitHub was evicting entries mid-run.
+      #
+      # Pinned to a commit rather than `@v2`: this is the one action here that
+      # is not GitHub's own, and a moving tag is someone else's code changing
+      # under a build that is trusted to be reproducible.
+      #
+      # `rust-cache` keys on the rustc version as well as the lockfile, cleans
+      # this crate's own artifacts out of `target` before saving - they are
+      # rebuilt every run regardless, and they were most of the size - and
+      # deletes the entry it restored from when it saves a new one. Nothing
+      # incremental is lost: release builds are non-incremental by default and
+      # `target/release/incremental` is empty, so what was ever worth keeping
+      # is the compiled dependency rlibs, which is exactly what this keeps.
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-${{ matrix.arch }}-cargo-
+          prefix-key: linux-${{ matrix.arch }}
 
       - name: Build
         run: cargo build --release --locked
@@ -138,6 +161,8 @@ jobs:
   scripts:
     name: Shell scripts
     runs-on: ubuntu-24.04
+    # Seconds in practice; see the Linux job for why there is a ceiling at all.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -153,6 +178,15 @@ jobs:
   windows:
     name: Windows
     runs-on: windows-latest
+    # The loosest of the four, and the job this was added for. Installing
+    # GStreamer through winget pulls an 840 MB installer from
+    # gstreamer.freedesktop.org - the whole MSVC bundle, every plugin set and
+    # the GTK 4 stack with it - from outside GitHub's network and outside its
+    # cache, on every run. A slow day at that end is indistinguishable from a
+    # stall, because winget prints nothing until the progress bar starts, which
+    # is what this looked like on 2026-08-23. Thirty minutes is about four
+    # times a normal run and still leaves room for the download to crawl.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -169,6 +203,30 @@ jobs:
       # current release. There is no equivalent on the Linux side: apt on a
       # released Ubuntu serves a frozen GStreamer, so pinning the runner image
       # pins the dependency too.
+      # Restored before the install below, which then finds GStreamer already
+      # in place and skips it: `Resolve-GstRoot` looks for `gtk4.pc` under this
+      # very path, needing no registry entry and no environment variable, so a
+      # directory put back by the cache is indistinguishable from one the
+      # installer wrote.
+      #
+      # **The download is what this is for.** winget fetches an 840 MB
+      # installer from gstreamer.freedesktop.org, outside GitHub's network and
+      # outside its cache, on every run. On 2026-08-23 that transfer stalled
+      # twice at around 776 MB and simply stopped - winget has no download
+      # timeout, so the job sat there until it was cancelled by hand, twice,
+      # while every other job finished in under five minutes. A cache hit means
+      # the download does not happen at all, which is a better answer than
+      # surviving it.
+      #
+      # Keyed on the pinned version alone, with no `restore-keys`: a cache from
+      # a different version is not a partial answer, it is the wrong GStreamer,
+      # and the build would go on to link against it. Bumping
+      # `GSTREAMER_VERSION` therefore downloads once and caches that.
+      - uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\Programs\gstreamer
+          key: windows-gstreamer-${{ env.GSTREAMER_VERSION }}
+
       - name: Install dependencies
         shell: pwsh
         run: .\setup-windows.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
@@ -188,14 +246,10 @@ jobs:
           "PKG_CONFIG_PATH=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-      - uses: actions/cache@v6
+      # See the Linux job for why this is `rust-cache` and not `actions/cache`.
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: windows-cargo-
+          prefix-key: windows
 
       - name: Verify GTK 4 comes from GStreamer
         shell: pwsh
@@ -246,6 +300,9 @@ jobs:
     # that upgrade comes: keeping the two on one OS version is what makes a
     # difference between them an architecture difference rather than an OS one.
     runs-on: ${{ matrix.runner }}
+    # Higher than Linux: the x86_64 runner is emulated and has taken over six
+    # minutes with everything cached.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -273,17 +330,12 @@ jobs:
           chmod +x setup-mac.sh
           ./setup-mac.sh
 
-      - uses: actions/cache@v6
+      # See the Linux job for why this is `rust-cache` and not `actions/cache`.
+      # Keyed on the architecture as well: the artifacts are for one of them,
+      # and a cache shared between the two would restore the wrong ones.
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          # Keyed on the architecture as well: target/ holds compiled objects
-          # for one of them, and a cache shared between the two would restore
-          # the wrong ones.
-          key: macos-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-${{ matrix.arch }}-cargo-
+          prefix-key: macos-${{ matrix.arch }}
 
       - name: Verify GTK 4 and GStreamer share one prefix
         run: |

@@ -40,7 +40,17 @@ const STEP: f64 = 0.25;
 /// reports 2160 and gets 2.0. That cancellation is why the compositor's own
 /// scaling never has to be consulted.
 pub fn scale_for(monitor: &gdk::Monitor) -> f64 {
-    let height = monitor.geometry().height() as f64;
+    scale_for_height(monitor.geometry().height() as f64)
+}
+
+/// Scale for any height in the same logical pixels, which is what lets a
+/// window be measured by the rule a screen is.
+///
+/// `MIN_SCALE` is the whole of "never smaller than designed": a window shorter
+/// than `REFERENCE_HEIGHT` produces a ratio below one and is held at one, so
+/// making a window small shrinks how much fits rather than how large it is
+/// drawn. There is no separate floor to apply.
+pub fn scale_for_height(height: f64) -> f64 {
     if height <= 0.0 {
         return MIN_SCALE;
     }
