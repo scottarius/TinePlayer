@@ -20,7 +20,7 @@ It lives in the per-user config directory:
 
 | Setting                                                  | Key                  | Default     | Description                                                                                                                                    |
 |----------------------------------------------------------|----------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| [Interface Size](#interface-size)                        | `ui_scale`           | Unset       | Interface scale, such as `1.5`, from `0.33` to `3` <br/>If unset it defaults to 1.0 and auto-scales to the display resolution in fullscreen    |
+| [Interface Size](#interface-size)                        | `ui_scale`           | Unset       | Interface scale, such as `1.5`, from `0.33` to `3` <br/>If unset it auto-scales to the display when fullscreen and to the window otherwise, never below 1.0 |
 | Navigation Sounds                                        | `sounds`             | `true`      | Navigation clicks, `true` or `false`                                                                                                           |
 | Check for updates                                        | `check_for_updates`  | `true`      | Asks GitHub once a day whether a newer TinePlayer has been released, `true` or `false` <br/>Nothing is ever downloaded or installed            |
 | [Primary Audio Device](#output-devices)                  | `primary_sink`       | System default | Primary output device name <br/>If unset the system default output is chosen on the first run |
@@ -79,10 +79,12 @@ subtitle_font: Sans Bold
 
 The interface can be scaled to your liking, or left to auto-scale itself.
 
-When auto-scaling is enabled (default) the normal scale will be 1.0x when
-windowed, and when fullscreen it scales to the display's height, using 1080p as
-the 1.0x baseline, so a 4K TV goes to 2.0x. The scale is based on the display
-height the desktop reports, which takes into account its own scaling.
+When auto-scaling is enabled (default) the scale follows height, using 1080p as
+the 1.0x baseline, so a 4K TV goes to 2.0x. Fullscreen it follows the display's
+height; windowed it follows the window's own, so a tall window on a large
+screen is still drawn large. It never goes below 1.0x, so making a window
+smaller fits less on the page rather than shrinking the text. The heights are
+the ones the desktop reports, which take its own scaling into account.
 
 Auto-scaling can be disabled in the Settings menu or by setting `ui_scale`
 in the config file. A size set this way applies to both windowed and

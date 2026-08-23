@@ -1484,10 +1484,22 @@ impl App {
 
     /// Re-renders at whatever the automatic size should be now.
     ///
-    /// The screen's own scale while the window fills it, and 1x while it does
-    /// not. The automatic size exists for a television read from a sofa, and
-    /// a window on the same 4K monitor is read from arm's length - scaling
-    /// that up only leaves less room in a window somebody chose the size of.
+    /// Measured against the screen while the window fills it, and against the
+    /// window itself while it does not. Both go through the same rule, so a
+    /// window three quarters the height of a 4K screen is drawn at three
+    /// quarters of what that screen fullscreen would give it, rather than
+    /// dropping to the designed size the moment it stops being fullscreen.
+    ///
+    /// **This used to be a flat 1x whenever the window did not fill the
+    /// screen,** reasoning that a window on a 4K monitor is read from arm's
+    /// length while the automatic size exists for a television read from a
+    /// sofa. That holds for a window somebody sized on a desk monitor and not
+    /// for the case it was actually meeting: a large window on a 4K television
+    /// is still across the room, and it drew the whole interface at a quarter
+    /// of the area the same screen gave it one keypress earlier.
+    ///
+    /// Never below the designed size, which `scale_for_height` already holds
+    /// to - a window made small gets less of the page, not smaller type.
     ///
     /// A size set by hand is that size in both, which is what asking for one
     /// means.
@@ -1500,7 +1512,9 @@ impl App {
                 .map(|monitor| appearance::scale_for(&monitor))
                 .unwrap_or(1.0)
         } else {
-            1.0
+            // The window's own height, in the same logical pixels the monitor
+            // reports, so the two branches are one rule read off two things.
+            appearance::scale_for_height(f64::from(window.height()))
         };
         if wanted != self.scale.get() {
             self.restyle(wanted);

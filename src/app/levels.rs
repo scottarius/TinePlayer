@@ -37,6 +37,21 @@ impl App {
         let Some((kind, scale, value)) = found else {
             return false;
         };
+        // A bar that is switched off is not a bar to move. It is drawn greyed
+        // and the pointer cannot reach it, and the keyboard reaching it anyway
+        // is how one press turned automatic scaling off: the interface size
+        // row keeps its bar while automatic owns the size, so Left wrote a
+        // fixed size, and writing a size is what turning automatic off means.
+        // The whole of it was silent - the row said "Automatic" until the next
+        // time the page was built.
+        //
+        // Swallowed rather than declined, because the row still owns these
+        // keys. Handing them back would send them to whatever GTK found to the
+        // side, which is the wandering focus that Enter and Escape exist to
+        // replace.
+        if !scale.is_sensitive() {
+            return true;
+        }
         // Snapped to the step rather than added to: a value set finely with a
         // pointer, or from the panel during playback, otherwise carries its
         // odd remainder through every press that follows.
