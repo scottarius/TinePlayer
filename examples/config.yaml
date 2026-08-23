@@ -162,6 +162,13 @@ subtitle_font: Sans Bold
 
 # --- Resuming ------------------------------------------------------------
 
+# Whether where a video got to, and the tracks chosen for it, are written down
+# at all. Off stops every write to positions.json and leaves whatever is
+# already in it alone - the two settings below then decide nothing, and the
+# settings menu greys them out to say so. Clearing what is already saved is
+# under Settings > General > Data, and works either way.
+remember_positions: true
+
 # How far into a video you have to be for stopping to count as a place to
 # resume from, as a percentage of its running time. Below this it is treated as
 # a false start. Never less than ten seconds, however short the video.

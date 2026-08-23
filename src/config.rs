@@ -335,6 +335,22 @@ pub struct Config {
     /// the row that sets this is disabled rather than lying about it.
     #[serde(default = "yes")]
     pub show_backdrop: bool,
+    /// Whether where a video got to, and the tracks chosen for it, are written
+    /// down at all.
+    ///
+    /// On by default, because coming back to a film where you left it is most
+    /// of what the file is for. Off stops every write to `positions.json` and
+    /// leaves whatever is already in it alone: a shared machine, or a viewer
+    /// who would simply rather not have a list of what they have watched
+    /// sitting in their data directory, is a real answer rather than a corner
+    /// case. Clearing what is already saved is the row below, and stays
+    /// available either way.
+    ///
+    /// The two thresholds under it decide *when* a position counts, which is
+    /// nothing to decide when none are being kept, so they are disabled rather
+    /// than left offering settings that do nothing.
+    #[serde(default = "yes")]
+    pub remember_positions: bool,
     /// The size the window was last left at, in pixels, so it opens where it
     /// was rather than at a default every time.
     ///
@@ -396,6 +412,7 @@ impl Default for Config {
             last_video: None,
             fullscreen: false,
             read_metadata: true,
+            remember_positions: true,
             show_backdrop: true,
             window_width: None,
             window_height: None,
@@ -419,6 +436,7 @@ impl Config {
     /// a problem to report.
     pub fn load() -> (Config, Option<String>) {
         let (config, problem) = Self::read();
+        set_remember_positions(config.remember_positions);
         // A copy that could not use its portable folder looks, from the
         // inside, exactly like one whose settings went missing. Said first
         // when both happened, because it explains the other.
@@ -603,6 +621,9 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<(), String> {
+        // Before the write rather than after, so a save that fails still
+        // leaves the switch matching what the settings screen is showing.
+        set_remember_positions(self.remember_positions);
         let path = config_path();
         let text = serde_yaml::to_string(self).map_err(|e| e.to_string())?;
         std::fs::write(&path, text)
@@ -782,7 +803,34 @@ fn load_all() -> std::collections::HashMap<String, Resume> {
         .unwrap_or_default()
 }
 
+/// Whether positions and track choices may be written down.
+///
+/// A process-wide switch rather than an argument threaded through every
+/// writer: the functions below are free functions reached from all over the
+/// player - the tick that saves a position, the chooser that remembers a
+/// track, the aligner - and none of them otherwise needs to know what the
+/// settings say. Kept in step by `Config::load` and `Config::save`, which are
+/// the only two moments the answer can change.
+///
+/// Defaults to writing. A copy whose config could not be read falls back to
+/// defaults, and losing somebody's resume points because their settings file
+/// was unreadable would be a worse failure than the one it came from.
+static REMEMBER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Says whether positions may be written from here on.
+pub fn set_remember_positions(on: bool) {
+    REMEMBER.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn save_all(entries: &std::collections::HashMap<String, Resume>) {
+    // The one place every write goes through, which is why the switch sits
+    // here rather than at each caller. Reading is untouched: what was saved
+    // before the setting was turned off is still there and still resumed
+    // from, because turning it off says "stop keeping track", not "forget
+    // what you knew".
+    if !REMEMBER.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     if let Ok(text) = serde_json::to_string(entries) {
         let _ = std::fs::write(positions_path(), text);
     }

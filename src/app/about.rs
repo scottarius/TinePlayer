@@ -112,6 +112,34 @@ impl App {
             gtk::micro_version(),
             self.renderer_name(),
         )));
+
+        // Where everything this copy keeps actually lives: the settings file,
+        // the resume positions, the Jellyfin pairing, what the version check
+        // remembers. It sat on the Clear Data row in Settings until now, which
+        // named it after one of the six files in it - and put it behind a row
+        // that goes insensitive when that one file is missing.
+        //
+        // Here instead, because this is the section about the installation
+        // rather than about a setting, and because a bug report wants it for
+        // the same reason it wants the version numbers above.
+        //
+        // Opened rather than printed. A path read off a television is a path
+        // nobody is going to type, and the folder is the thing wanted anyway.
+        if let Some(folder) = crate::config::positions_path().parent() {
+            let folder = folder.to_path_buf();
+            let link = about_link(
+                &tr!("Settings and saved data are kept in"),
+                &gtk::gio::File::for_path(&folder).uri(),
+                &tr!("your user data folder"),
+            );
+            // Reported rather than swallowed: a link that does nothing looks
+            // like a link that was pressed wrongly.
+            link.connect_activate_link(move |_, _| {
+                show_folder(&folder);
+                glib::Propagation::Stop
+            });
+            body.append(&link);
+        }
         body
     }
 
