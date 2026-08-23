@@ -14,6 +14,7 @@ mod align;
 mod app;
 mod appearance;
 mod artwork;
+mod audio;
 mod awake;
 mod beside;
 mod browser;
@@ -76,13 +77,17 @@ struct Args {
     /// The video to play: a path, or a URL such as http:// or smb://
     file: Option<String>,
 
-    /// Audio for the primary output: a track number, a language code, `ad`
-    /// for described audio, or `en:ad` for both. 0 for no audio there
+    /// Audio for the primary output: a number from `--list-tracks`, which
+    /// covers the soundtracks beside the video as well as the tracks in it, a
+    /// language code, `ad` for described audio, or `en:ad` for both. A path to
+    /// an audio file works too. 0 for no audio there
     #[arg(long, value_name = "T")]
     primary: Option<String>,
 
-    /// Audio for the secondary output: a track number, a language code, `ad`
-    /// for described audio, or `en:ad` for both. 0 for no audio there
+    /// Audio for the secondary output: a number from `--list-tracks`, which
+    /// covers the soundtracks beside the video as well as the tracks in it, a
+    /// language code, `ad` for described audio, or `en:ad` for both. A path to
+    /// an audio file works too. 0 for no audio there
     #[arg(long, value_name = "T")]
     secondary: Option<String>,
 
@@ -379,11 +384,14 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     // and reaching a server would mean pairing before answering it.
     let subtitles = subtitles::options(source.local(), &media.subtitles, &[]);
 
-    // Indices right-aligned to the widest of them, so a file with ten or more
-    // tracks keeps its numbers in a column instead of stepping sideways. Both
+    // The same list the chooser draws and `--primary` counts through - see
+    // `crate::audio`. Tracks inside the video, then the soundtracks beside it.
+    let offered = audio::options(source.local(), &media.audio);
+
+    // Indices right-aligned to the widest of them, so a video with ten or more
+    // entries keeps its numbers in a column instead of stepping sideways. Both
     // lists share one width, so the two blocks line up with each other too.
-    let width = media
-        .audio
+    let width = offered
         .len()
         .max(subtitles.len())
         .to_string()
@@ -393,24 +401,18 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     // See list_devices for why this starts with a blank line.
     println!();
     println!();
-    println!("Audio tracks ({}):", media.audio.len());
+    println!("Audio ({}):", offered.len());
     println!();
     println!("  {:>width$}  None", 0);
     // The same rows the choosers show - see `crate::label` - but keeping the
     // language tag, because this printed list is where somebody finds out what
     // to hand to `--primary` or `--subtitle`.
-    for (position, track) in media.audio.iter().enumerate() {
-        let name = label::line(
-            &label::Parts {
-                language: &track.language,
-                technical: format!("{} {}ch", track.codec, track.channels),
-                kind: track.kind(),
-                title: &track.title,
-            },
-            label::Naming::WithTag,
-            &format!("Track {}", position + 1),
+    for (position, entry) in offered.iter().enumerate() {
+        println!(
+            "  {:>width$}  {}",
+            position + 1,
+            entry.label(label::Naming::WithTag, position + 1)
         );
-        println!("  {:>width$}  {name}", position + 1);
     }
 
     println!();

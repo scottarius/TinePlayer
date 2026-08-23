@@ -5,7 +5,7 @@ use gstreamer_pbutils as pbutils;
 
 use pbutils::prelude::*;
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AudioTrack {
     /// Position among the file's audio streams (0-based, in container
     /// order), not any global stream index. The pipeline selects tracks by
@@ -98,7 +98,7 @@ pub fn is_audio_description(title: &str) -> bool {
 /// Accepts the same kinds of thing `--subtitle` does, so neither argument
 /// needs its own vocabulary:
 ///
-/// - `3` - the third entry `--list-tracks` prints
+/// - `3` - the third entry `--list-tracks` prints, inside the file or beside it
 /// - `en` - the first track in that language
 /// - `ad` - the first described track
 /// - `en:ad` - the first described track in that language
@@ -106,64 +106,6 @@ pub fn is_audio_description(title: &str) -> bool {
 ///
 /// A plain language code will not select a described track, matching what the
 /// preference does: description is only ever chosen by asking for it.
-pub fn resolve_audio(spec: &str, tracks: &[AudioTrack]) -> Result<Option<u32>, String> {
-    let spec = spec.trim();
-    if spec.eq_ignore_ascii_case("none") {
-        return Ok(None);
-    }
-
-    if let Ok(number) = spec.parse::<usize>() {
-        // Zero means no audio on this output, however it is spelled - "0" and
-        // "00" are the same request. Checked after parsing rather than against
-        // the text, because `number - 1` below underflows otherwise: harmless
-        // in a release build, where it wraps and finds no track, and a panic
-        // in a debug one.
-        if number == 0 {
-            return Ok(None);
-        }
-        return tracks
-            .get(number - 1)
-            .map(|track| Some(track.index))
-            .ok_or_else(|| {
-                format!(
-                    "There is no audio track {number}. The file has {}.",
-                    tracks.len()
-                )
-            });
-    }
-
-    let (code, described) = match spec.split_once(':') {
-        Some((code, kind)) if kind.eq_ignore_ascii_case("ad") => (Some(code), true),
-        Some((_, kind)) => {
-            return Err(format!(
-                "Don't know what \"{kind}\" means. Use \"ad\" after the colon, as in \"en:ad\"."
-            ));
-        }
-        None if spec.eq_ignore_ascii_case("ad") => (None, true),
-        None => (Some(spec), false),
-    };
-
-    let matching = |track: &&AudioTrack| match code {
-        Some(code) => crate::languages::matches(&track.language, code),
-        None => true,
-    };
-    let found = tracks
-        .iter()
-        .find(|track| track.is_described() == described && matching(track));
-
-    found.map(|track| Some(track.index)).ok_or_else(|| {
-        let what = if described {
-            "described audio track"
-        } else {
-            "audio track"
-        };
-        match code {
-            Some(code) => format!("No {what} in {code}."),
-            None => format!("No {what} in this file."),
-        }
-    })
-}
-
 /// A subtitle stream carried inside the file.
 #[derive(Clone)]
 pub struct SubtitleTrack {
@@ -686,76 +628,6 @@ mod audio_description_tests {
     }
 }
 
-#[cfg(test)]
-mod resolve_audio_tests {
-    use super::*;
-
-    fn tracks() -> Vec<AudioTrack> {
-        [
-            ("en", "English"),
-            ("de", "German"),
-            ("en", "Descriptive"),
-            ("de", "Audio Description"),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, (language, title))| AudioTrack {
-            index: index as u32,
-            codec: "AC-3".to_string(),
-            channels: 2,
-            language: language.to_string(),
-            title: title.to_string(),
-            described: None,
-            commentary: None,
-        })
-        .collect()
-    }
-
-    #[test]
-    fn takes_a_number_none_or_a_language() {
-        let tracks = tracks();
-        assert_eq!(resolve_audio("2", &tracks), Ok(Some(1)));
-        assert_eq!(resolve_audio("0", &tracks), Ok(None));
-        assert_eq!(resolve_audio("none", &tracks), Ok(None));
-        assert_eq!(resolve_audio("de", &tracks), Ok(Some(1)));
-    }
-
-    /// Any spelling of zero, and any surrounding space, means the same thing.
-    /// "00" used to reach `number - 1` and underflow.
-    #[test]
-    fn every_spelling_of_zero_means_none() {
-        let tracks = tracks();
-        for spec in ["0", "00", "000", " 0 ", "none", "NONE", "None"] {
-            assert_eq!(resolve_audio(spec, &tracks), Ok(None), "for {spec:?}");
-        }
-    }
-
-    #[test]
-    fn a_language_alone_never_picks_a_described_track() {
-        // German track 4 is described and track 2 is not, so the plain code
-        // has to reach past the described one.
-        assert_eq!(resolve_audio("de", &tracks()), Ok(Some(1)));
-    }
-
-    #[test]
-    fn ad_picks_description() {
-        let tracks = tracks();
-        assert_eq!(resolve_audio("ad", &tracks), Ok(Some(2)));
-        assert_eq!(resolve_audio("de:ad", &tracks), Ok(Some(3)));
-        assert_eq!(resolve_audio("en:ad", &tracks), Ok(Some(2)));
-    }
-
-    #[test]
-    fn reports_what_it_could_not_find() {
-        let tracks = tracks();
-        assert!(resolve_audio("9", &tracks).is_err());
-        assert!(resolve_audio("fr", &tracks).is_err());
-        assert!(resolve_audio("fr:ad", &tracks).is_err());
-        assert!(resolve_audio("en:sdh", &tracks).is_err());
-    }
-}
-
-/// Preferring what the container states over what a track is called.
 #[cfg(test)]
 mod described_tests {
     use super::AudioTrack;

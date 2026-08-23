@@ -82,6 +82,7 @@ pub fn files(video: &Path, extensions: &[&str]) -> Vec<Found> {
 
 /// A separate soundtrack sitting beside the film: a described version, a dub,
 /// or a restored track, downloaded next to it and named after it.
+#[derive(Debug, Clone, PartialEq)]
 pub struct AudioFile {
     pub path: PathBuf,
     /// Whatever the convention left between the film's name and the
@@ -109,6 +110,46 @@ impl AudioFile {
     /// is the film's over again with two letters on the end, those letters are
     /// the whole of what tells one of these from another, and a name long
     /// enough to be cut off is no use across a room.
+    /// The language this file states, which is the first component of the tag
+    /// where a library named it after the film - the same convention a
+    /// subtitle file states its language by. Empty where nothing named it
+    /// after the film, or where the leading component is not a language code.
+    pub fn language(&self) -> &str {
+        match &self.tag {
+            Some(tag) => crate::label::split_tag(tag.trim()).0,
+            None => "",
+        }
+    }
+
+    /// Whether this is narration rather than a soundtrack, read from the same
+    /// words a track title is read for - so `Film.en.ad.mka` beside a video and
+    /// a stream titled "Audio Description" inside one arrive at the same
+    /// answer.
+    ///
+    /// The tag where there is one, and the file's own name otherwise: `AD.mp3`
+    /// is named after nothing and says what it is in the only place it can.
+    pub fn is_described(&self) -> bool {
+        let said = self.tag.as_deref().unwrap_or(&self.name);
+        matches!(
+            crate::label::kind_of_audio_tag(said),
+            Some(crate::label::Kind::Described)
+        )
+    }
+
+    /// How the row reads, at a given naming. See [`Self::label`] for the
+    /// interface's own wording, which is this at [`crate::label::Naming::Native`].
+    pub fn named(&self, naming: crate::label::Naming) -> String {
+        match &self.tag {
+            Some(tag) => crate::label::named_after_the_film(
+                tag,
+                &self.name,
+                crate::label::kind_of_audio_tag,
+                naming,
+            ),
+            None => crate::label::named_after_nothing(&self.name, crate::label::kind_of_audio_tag),
+        }
+    }
+
     pub fn label(&self) -> String {
         match &self.tag {
             Some(tag) => crate::label::named_after_the_film(

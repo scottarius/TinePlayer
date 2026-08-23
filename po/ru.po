@@ -54,48 +54,48 @@ msgstr "Показывать меню выбора дорожек"
 msgid "Play Video Immediately"
 msgstr "Сразу воспроизводить видео"
 
-#: src/app.rs:663 src/shortcuts.rs:104
+#: src/app.rs:665 src/shortcuts.rs:104
 msgid "General"
 msgstr "Общие"
 
-#: src/app.rs:664
+#: src/app.rs:666
 msgid "Outputs"
 msgstr "Выходы"
 
-#: src/app.rs:665
+#: src/app.rs:667
 msgctxt "settings category"
 msgid "Subtitles"
 msgstr "Субтитры"
 
-#: src/app.rs:669
+#: src/app.rs:671
 msgid "About"
 msgstr "О программе"
 
-#: src/app.rs:692
+#: src/app.rs:694
 msgid "INTERFACE"
 msgstr "ИНТЕРФЕЙС"
 
-#: src/app.rs:696
+#: src/app.rs:698
 msgid "LIBRARY"
 msgstr "МЕДИАТЕКА"
 
-#: src/app.rs:700
+#: src/app.rs:703
+msgid "RESUMING"
+msgstr ""
+
+#: src/app.rs:713
 msgid "UPDATES"
 msgstr "ОБНОВЛЕНИЯ"
 
-#: src/app.rs:704
-msgid "DATA"
-msgstr "ДАННЫЕ"
-
-#: src/app.rs:729
+#: src/app.rs:739
 msgid "KODI"
 msgstr "KODI"
 
-#: src/app.rs:749
+#: src/app.rs:759
 msgid "OTHER"
 msgstr "ПРОЧЕЕ"
 
-#: src/app.rs:760 src/app.rs:763
+#: src/app.rs:770 src/app.rs:773
 msgid "JELLYFIN"
 msgstr "JELLYFIN"
 
@@ -104,11 +104,19 @@ msgctxt "a track's language"
 msgid "Unknown"
 msgstr "Неизвестно"
 
-#: src/app/about.rs:156 src/app/settings.rs:46
+#: src/app/about.rs:131
+msgid "Settings and saved data are kept in"
+msgstr ""
+
+#: src/app/about.rs:133
+msgid "your user data folder"
+msgstr ""
+
+#: src/app/about.rs:184 src/app/settings.rs:47
 msgid "Third-Party Notices"
 msgstr "Сторонние компоненты"
 
-#: src/app/about.rs:205 src/app/keys.rs:71 src/app/playback.rs:647
+#: src/app/about.rs:233 src/app/keys.rs:71 src/app/playback.rs:647
 #: src/app/playback.rs:708
 msgid "Close"
 msgstr "Закрыть"
@@ -233,15 +241,15 @@ msgstr "Нет"
 msgid "AUDIO FILES"
 msgstr ""
 
-#: src/app/choosers.rs:204 src/app/settings.rs:72
+#: src/app/choosers.rs:204 src/app/settings.rs:73
 msgid "First track"
 msgstr "Первая дорожка"
 
-#: src/app/choosers.rs:206 src/app/settings.rs:73
+#: src/app/choosers.rs:206 src/app/settings.rs:74
 msgid "Second track"
 msgstr "Вторая дорожка"
 
-#: src/app/choosers.rs:72 src/app/menu.rs:172 src/app/settings.rs:67
+#: src/app/choosers.rs:72 src/app/menu.rs:172 src/app/settings.rs:68
 msgctxt "audio output device"
 msgid "None"
 msgstr "Нет"
@@ -274,7 +282,7 @@ msgstr "Аудиофайлы"
 msgid "Video files"
 msgstr "Видеофайлы"
 
-#: src/app/files.rs:449
+#: src/app/files.rs:406
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -286,7 +294,7 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app/files.rs:459
+#: src/app/files.rs:416
 msgid ""
 "\n"
 "\n"
@@ -374,7 +382,7 @@ msgid "Toggle fullscreen"
 msgstr "Полноэкранный режим"
 
 #: src/app/media_page.rs:1024 src/app/media_page.rs:1025
-#: src/app/settings.rs:469
+#: src/app/settings.rs:458
 msgid "Settings"
 msgstr "Настройки"
 
@@ -424,7 +432,7 @@ msgid "Enter URL"
 msgstr "Ввести ссылку"
 
 #: src/app/media_page.rs:785 src/app/media_page.rs:790 src/app/pairing.rs:75
-#: src/app/settings.rs:39
+#: src/app/settings.rs:40
 msgid "Connect to Jellyfin"
 msgstr "Подключиться к Jellyfin"
 
@@ -440,15 +448,15 @@ msgstr "Подключено к Jellyfin"
 msgid "Close the player"
 msgstr "Закрыть проигрыватель"
 
-#: src/app/menu.rs:139 src/app.rs:707
+#: src/app/menu.rs:139 src/app.rs:717
 msgid "FIRST OUTPUT"
 msgstr "ПЕРВЫЙ ВЫХОД"
 
-#: src/app/menu.rs:141 src/app/menu.rs:168 src/app/settings.rs:22
+#: src/app/menu.rs:141 src/app/menu.rs:168 src/app/settings.rs:23
 msgid "Output Device"
 msgstr "Устройство вывода"
 
-#: src/app/menu.rs:145 src/app/settings.rs:66
+#: src/app/menu.rs:145 src/app/settings.rs:67
 msgctxt "audio output device"
 msgid "Not set"
 msgstr "Не задано"
@@ -457,7 +465,7 @@ msgstr "Не задано"
 msgid "Audio Track"
 msgstr "Звуковая дорожка"
 
-#: src/app/menu.rs:166 src/app.rs:712
+#: src/app/menu.rs:166 src/app.rs:722
 msgid "SECOND OUTPUT"
 msgstr "ВТОРОЙ ВЫХОД"
 
@@ -604,7 +612,7 @@ msgstr "Назад"
 msgid "Interface Size"
 msgstr "Размер интерфейса"
 
-#: src/app/settings.rs:111
+#: src/app/settings.rs:112
 msgid "Not supported"
 msgstr "Не поддерживается"
 
@@ -612,23 +620,23 @@ msgstr "Не поддерживается"
 msgid "Interface Language"
 msgstr "Язык интерфейса"
 
-#: src/app/settings.rs:124
+#: src/app/settings.rs:125
 msgid "Action needed"
 msgstr "Требуется действие"
-
-#: src/app/settings.rs:1294
-msgid "Current Version: v{version}"
-msgstr "Текущая версия: v{version}"
 
 #: src/app/settings.rs:13
 msgid "Navigation Sounds"
 msgstr "Звуки навигации"
 
-#: src/app/settings.rs:1310
+#: src/app/settings.rs:1325
+msgid "Current Version: v{version}"
+msgstr "Текущая версия: v{version}"
+
+#: src/app/settings.rs:1341
 msgid "Update available: v{version}"
 msgstr "Доступно обновление: v{version}"
 
-#: src/app/settings.rs:1315
+#: src/app/settings.rs:1346
 msgid "Up to date"
 msgstr "Обновлений нет"
 
@@ -645,155 +653,159 @@ msgid "Show Backdrop Artwork"
 msgstr "Показывать фоновое изображение"
 
 #: src/app/settings.rs:17
-msgid "Resume Threshold"
-msgstr "Порог продолжения"
+msgid "Remember Where You Left Off"
+msgstr ""
 
-#: src/app/settings.rs:171
+#: src/app/settings.rs:173
 msgid "Find and read metadata beside video files like .nfo and images often provided by media libraries."
 msgstr "Находить и читать метаданные рядом с видеофайлами — файлы .nfo и изображения, которые часто добавляют медиатеки."
 
-#: src/app/settings.rs:176
+#: src/app/settings.rs:178
 msgid "If backdrop artwork is found, display it behind the video details."
 msgstr "Если найдено фоновое изображение, показывать его позади сведениями о видео."
 
-#: src/app/settings.rs:179
+#: src/app/settings.rs:18
+msgid "Resume Threshold"
+msgstr "Порог продолжения"
+
+#: src/app/settings.rs:181
+msgid "Save watch progress and track choices for every video."
+msgstr ""
+
+#: src/app/settings.rs:184
 msgid "How much of a video should be viewed before offering the choice to resume a previously watched video."
 msgstr "Какую часть видео нужно посмотреть, чтобы предлагалось продолжить просмотр."
 
-#: src/app/settings.rs:18
-msgid "Watched Threshold"
-msgstr "Порог просмотра"
-
-#: src/app/settings.rs:184
+#: src/app/settings.rs:189
 msgid "How much of a video should be viewed to consider it as watched."
 msgstr "Какую часть видео нужно посмотреть, чтобы считать его просмотренным."
 
-#: src/app/settings.rs:186
+#: src/app/settings.rs:19
+msgid "Watched Threshold"
+msgstr "Порог просмотра"
+
+#: src/app/settings.rs:191
 msgid "Attempt to auto-select a language track for the output."
 msgstr "Пытаться автоматически выбирать дорожку на нужном языке для этого выхода."
 
-#: src/app/settings.rs:188
+#: src/app/settings.rs:193
 msgid "Attempt to auto-select an Audio Description track for the output."
 msgstr "Пытаться автоматически выбирать дорожку с тифлокомментарием для этого выхода."
 
-#: src/app/settings.rs:19
-msgid "Check for updates"
-msgstr "Проверять обновления"
-
-#: src/app/settings.rs:191
+#: src/app/settings.rs:196
 msgid "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
 msgstr "Регулировка синхронизации звука для этого выхода. Помогает компенсировать задержку Bluetooth-колонок и наушников."
 
-#: src/app/settings.rs:195
+#: src/app/settings.rs:20
+msgid "Check for updates"
+msgstr "Проверять обновления"
+
+#: src/app/settings.rs:200
 msgid "Attempt to auto-select subtitles when available."
 msgstr "Пытаться автоматически выбирать субтитры, когда они есть."
 
-#: src/app/settings.rs:197
-msgid "Delete remembered video preferences, track choices, and resume positions."
-msgstr "Удалить сохранённые настройки видео, выбранные дорожки и позиции воспроизведения."
+#: src/app/settings.rs:202
+msgid "Delete saved watch progress and track choices."
+msgstr ""
 
-#: src/app/settings.rs:200
+#: src/app/settings.rs:205
 msgid "This Kodi installation is sandboxed and needs permission to start TinePlayer."
 msgstr "Эта установка Kodi работает в песочнице, для запуска TinePlayer нужно разрешение."
 
-#: src/app/settings.rs:206
+#: src/app/settings.rs:211
 msgid "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
 msgstr "Для установки Kodi в нестандартном месте, например на переносном устройстве. Папка пользовательских данных — та, в которой лежит guisettings.xml, а не та, куда установлен сам Kodi."
 
-#: src/app/settings.rs:21
-msgid "Clear Saved Playback Data"
-msgstr "Очистить сохранённые данные воспроизведения"
+#: src/app/settings.rs:22
+msgid "Clear Saved Video Data"
+msgstr ""
 
 #. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
 #. Jellyfin's translation into your language calls it, rather than
 #. translating it afresh - this text sends somebody to find it in their own
 #. Jellyfin app, and a different wording sends them looking for something
 #. that is not there.
-#: src/app/settings.rs:220
+#: src/app/settings.rs:225
 msgid "Find and connect to a Jellyfin server using Quick Connect."
 msgstr "Найти сервер Jellyfin и подключиться к нему через «Быстрое подключение»."
 
-#: src/app/settings.rs:223
+#: src/app/settings.rs:228
 msgid "Removes the access token stored on this machine and signs this device out of the server."
 msgstr "Удаляет токен доступа, хранящийся на этом компьютере, и отключает это устройство от сервера."
 
-#: src/app/settings.rs:23
+#: src/app/settings.rs:24
 msgid "Preferred Language"
 msgstr "Предпочитаемый язык"
 
-#: src/app/settings.rs:24
+#: src/app/settings.rs:25
 msgid "Prefer Audio Description"
 msgstr "Предпочитать тифлокомментарий"
 
-#: src/app/settings.rs:25 src/controls.rs:665
+#: src/app/settings.rs:26 src/controls.rs:665
 msgid "Volume"
 msgstr "Громкость"
 
-#: src/app/settings.rs:26
+#: src/app/settings.rs:27
 msgid "Audio Sync"
 msgstr "Синхронизация звука"
 
-#: src/app/settings.rs:263
-msgid "Open user data folder"
-msgstr "Открыть папку пользовательских данных"
-
-#: src/app/settings.rs:27
+#: src/app/settings.rs:28
 msgid "Subtitle Preference"
 msgstr "Предпочтения субтитров"
 
-#: src/app/settings.rs:28
+#: src/app/settings.rs:29
 msgid "Subtitle Size"
 msgstr "Размер субтитров"
 
-#: src/app/settings.rs:29
+#: src/app/settings.rs:30
 msgid "Subtitle Font"
 msgstr "Шрифт субтитров"
 
-#: src/app/settings.rs:30
+#: src/app/settings.rs:31
 msgid "Configure As"
 msgstr "Настроить как"
 
-#: src/app/settings.rs:31
+#: src/app/settings.rs:32
 msgid "When Kodi Opens TinePlayer"
 msgstr "Когда Kodi открывает TinePlayer"
 
-#: src/app/settings.rs:32
+#: src/app/settings.rs:33
 msgid "Sandbox Permission"
 msgstr "Разрешение песочницы"
 
-#: src/app/settings.rs:33
+#: src/app/settings.rs:34
 msgid "No Kodi installations were found on this system"
 msgstr "В этой системе не найдено ни одной установки Kodi"
 
-#: src/app/settings.rs:378
+#: src/app/settings.rs:367
 msgid "Connected to {server} as {who}."
 msgstr "Подключено к {server} как {who}."
 
-#: src/app/settings.rs:38
-msgid "Add User Data Folder"
-msgstr "Добавить папку пользовательских данных"
-
-#: src/app/settings.rs:384
+#: src/app/settings.rs:373
 msgid "Connected to {server}."
 msgstr "Подключено к {server}."
 
-#: src/app/settings.rs:390
+#: src/app/settings.rs:379
 msgid "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet."
 msgstr "Подключите сервер Jellyfin, чтобы транслировать видео в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
 
-#: src/app/settings.rs:394
+#: src/app/settings.rs:383
 msgid "{connected} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet."
 msgstr "{connected} Видео можно транслировать в TinePlayer из приложения Jellyfin в браузере, на телефоне или планшете."
 
-#: src/app/settings.rs:420
+#: src/app/settings.rs:39
+msgid "Add User Data Folder"
+msgstr "Добавить папку пользовательских данных"
+
+#: src/app/settings.rs:409
 msgid "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect."
 msgstr "Файл playercorefactory.xml этой установки будет изменён. Перезапустите Kodi, чтобы изменения вступили в силу."
 
-#: src/app/settings.rs:43
+#: src/app/settings.rs:44
 msgid "Disconnect from {server}"
 msgstr "Отключиться от {server}"
 
-#: src/app/settings.rs:44
+#: src/app/settings.rs:45
 msgid "Disconnect"
 msgstr "Отключиться"
 
@@ -829,7 +841,7 @@ msgstr "Вверх, к списку дисков"
 msgid "Nothing here"
 msgstr "Здесь пусто"
 
-#: src/config.rs:465
+#: src/config.rs:483
 msgid ""
 "Couldn't read your settings from {path}.\n"
 "\n"
@@ -843,7 +855,7 @@ msgstr ""
 "\n"
 "TinePlayer запущен с настройками по умолчанию."
 
-#: src/config.rs:472
+#: src/config.rs:490
 msgid ""
 "\n"
 "\n"
@@ -853,7 +865,7 @@ msgstr ""
 "\n"
 "Файл сохранён как {path}."
 
-#: src/config.rs:478
+#: src/config.rs:496
 msgid ""
 "\n"
 "\n"
