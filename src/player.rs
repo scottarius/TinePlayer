@@ -405,6 +405,18 @@ impl Playback {
             .set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start playback: {e}"))?;
 
+        // The moment the pipeline is actually running, and where it started
+        // from. A resume that goes to the wrong place is one of the harder
+        // things to describe from a sofa, and this is the number to compare
+        // against whatever the viewer says they saw.
+        match resume_ns {
+            Some(at) => log::info!(
+                "Playback started at {}",
+                crate::controls::format_time(gst::ClockTime::from_nseconds(at))
+            ),
+            None => log::info!("Playback started from the beginning"),
+        }
+
         Ok(playback)
     }
 
@@ -759,6 +771,16 @@ impl Playback {
             }
         }
 
+        // One per gesture rather than one per press - a held direction moves
+        // the target and issues a single seek when it settles - so this is not
+        // the flood it looks like. It is also the event behind the open Linux
+        // bug where the audio does not come back, so a report of that has the
+        // seek and whatever followed it in the same file.
+        log::info!(
+            "Seeking to {}",
+            crate::controls::format_time(gst::ClockTime::from_nseconds(target.nseconds()))
+        );
+
         let result = seek_through_video(
             &self.pipeline,
             gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
@@ -816,6 +838,20 @@ impl Playback {
         // and issue the wrong transition, leaving playback stuck.
         self.playing.set(!self.playing.get());
 
+        // Discrete, and therefore worth a line each. The progress reports on
+        // the timer are not logged at all: one every few seconds for the
+        // length of a film would bury everything else in the file.
+        log::info!(
+            "Playback {} at {}",
+            match self.playing.get() {
+                true => "resumed",
+                false => "paused",
+            },
+            self.position()
+                .map(crate::controls::format_time)
+                .unwrap_or_else(|| "an unknown position".to_string())
+        );
+
         // Pausing is the clearest signal that someone has stopped watching,
         // so it is worth a report of its own rather than waiting for the timer.
         self.report_to_kodi();
@@ -847,6 +883,19 @@ impl Playback {
             return;
         }
 
+        // Which of the two ways a film ends, and where. Watched to the end
+        // clears the resume point and stopping part-way writes one, so this
+        // is the line that explains whichever of those a viewer then finds.
+        match self.reached_eos.get() {
+            true => log::info!("Playback reached the end"),
+            false => log::info!(
+                "Playback stopped at {}",
+                self.position()
+                    .map(crate::controls::format_time)
+                    .unwrap_or_else(|| "an unknown position".to_string())
+            ),
+        }
+
         if self.reached_eos.get() {
             clear_position(&self.key);
             // Watched to the end, which Kodi records as a play rather than a
@@ -855,6 +904,7 @@ impl Playback {
             if !self.kodi_file.is_empty()
                 && let Some(duration) = self.pipeline.query_duration::<gst::ClockTime>()
             {
+                log::info!("Telling Kodi the video was watched to the end");
                 *self.final_report.borrow_mut() = crate::kodi::report_position(
                     &self.kodi_file,
                     duration.nseconds(),
@@ -900,6 +950,13 @@ impl Playback {
     /// for the rest of its duration in the language somebody just changed
     /// away from, which reads as a switch that did nothing.
     pub fn set_subtitle(&self, subtitle: Option<&SubtitleSource>) -> Result<(), String> {
+        log::info!(
+            "Switching subtitles to {}",
+            match subtitle {
+                Some(subtitle) => format!("{subtitle:?}"),
+                None => "off".to_string(),
+            }
+        );
         let Some(overlay) = self.pipeline.by_name("suboverlay") else {
             // No overlay means the film offered no subtitles when it opened,
             // and nothing can be switched on that was never there.
@@ -1061,6 +1118,17 @@ impl Playback {
     /// afterwards would leave the pad to arrive at a routing that had never
     /// heard of it, which is the shape of the subtitle bug in `de2e116`.
     pub fn set_audio(&self, role: &str, playing: Option<Playing>) -> Result<(), String> {
+        // A change made while the film is running, as opposed to the choices
+        // logged when it opened. Both matter and they answer different
+        // questions: this one is what somebody did, not what was decided for
+        // them.
+        log::info!(
+            "Switching the {role} soundtrack to {}",
+            match &playing {
+                Some(playing) => format!("{playing:?}"),
+                None => "nothing".to_string(),
+            }
+        );
         // Nothing is seeked here, deliberately. An external file's chain is
         // kept walking by a branch of its own for as long as no output is
         // drawing from it - see `pipeline::attach_pacer` - so coming back to
