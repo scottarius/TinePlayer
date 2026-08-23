@@ -354,33 +354,58 @@ impl App {
         // `positions.json` and a choice worked out from the language
         // preferences look identical on screen and mean completely different
         // things when somebody says the wrong track was picked.
-        let name_of = |index: Option<u32>| match index {
-            Some(index) => tracks
-                .iter()
-                .find(|track| track.index == index)
-                .map(|track| format!("{index} ({})", track.language))
-                .unwrap_or_else(|| format!("{index}")),
+        // Named the way `--list-tracks` names them - `rus (Русский)` - rather
+        // than by index. An index is what the code passes around and means
+        // nothing to whoever reads the report; the tag is both readable and
+        // the thing they would type to change it.
+        let soundtrack = |index: Option<u32>| match index {
             None => "none".to_string(),
+            Some(index) => offered
+                .iter()
+                .position(|entry| entry.choice() == crate::audio::AudioChoice::Track(index))
+                .map(|at| offered[at].label(crate::label::Naming::WithTag, at + 1))
+                .unwrap_or_else(|| format!("track {index}, no longer in the file")),
+        };
+        let chosen_subtitle = match self.subtitle.borrow().as_ref() {
+            None => "none".to_string(),
+            Some(choice) => self
+                .subtitle_options
+                .borrow()
+                .iter()
+                .find(|option| option.choice() == *choice)
+                .map(|option| crate::subtitles::row(option, crate::label::Naming::WithTag))
+                .unwrap_or_else(|| "none".to_string()),
+        };
+        // A separate file wins over the track underneath it, so it is what the
+        // output is actually going to play and what the log has to say.
+        let played_by = |role: Role| match self.file_for(role).borrow().as_ref() {
+            Some(file) => format!("{} (file beside the video)", file.label()),
+            None => soundtrack(*self.track_for(role).borrow()),
+        };
+
+        // Plain English rather than `trn!`: the log is read by whoever is
+        // handed the report, not by the person running the player, so it stays
+        // in one language however the interface is set.
+        let count = |n: usize, thing: &str| match n {
+            1 => format!("1 {thing}"),
+            n => format!("{n} {thing}s"),
         };
         log::info!(
-            "Opened {} - {:.0}s, {} audio track(s), {} subtitle(s)",
+            "Opened {}\n  {}, {}, {}",
             source.uri(),
-            duration_ns as f64 / 1e9,
-            tracks.len(),
-            self.subtitle_options.borrow().len(),
+            crate::controls::format_time(gstreamer::ClockTime::from_nseconds(duration_ns)),
+            count(offered.len(), "soundtrack"),
+            count(self.subtitle_options.borrow().len(), "subtitle"),
         );
         log::info!(
-            "Chose from {}: primary {}, secondary {}, subtitle {}",
+            "Tracks chosen from {}:\n  primary   {}\n  secondary {}\n  subtitle  {}",
             match remembered {
-                true => "saved choices",
-                false => "language preferences",
+                true => "the choices saved for this video",
+                false => "the language preferences",
             },
-            name_of(*self.primary_track.borrow()),
-            name_of(*self.secondary_track.borrow()),
-            match self.subtitle.borrow().as_ref() {
-                Some(choice) => format!("{choice:?}"),
-                None => "none".to_string(),
-            },
+            played_by(Role::Primary),
+            played_by(Role::Secondary),
+            chosen_subtitle,
         );
 
         *self.tracks.borrow_mut() = tracks;
