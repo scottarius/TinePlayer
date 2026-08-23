@@ -1,0 +1,148 @@
+# What the dependency tree is allowed to contain.
+#
+# Two checks run from this file and they run in different places, because they
+# answer different questions - the same split ci.yml and upstream.yml already
+# draw between "this commit is broken" and "the world moved".
+#
+#   licences and bans -> ci.yml, on every pull request. Deterministic: the
+#                        same tree gives the same answer forever, so a red
+#                        here means this commit added something.
+#   advisories        -> upstream.yml, weekly. A new advisory appears against
+#                        a crate we shipped months ago, with no commit
+#                        involved, so gating merges on it would fail
+#                        somebody's unrelated change for something they did
+#                        not do.
+#
+# `cargo deny check bans licenses` and `cargo audit` respectively.
+
+[graph]
+# Every target the project actually ships, so a crate pulled in only on one
+# platform is still checked. Without this the answer depends on whichever
+# machine ran it, which is the kind of check that passes locally and fails in
+# CI for reasons nobody can see.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+# ---------------------------------------------------------------------------
+# Licences
+# ---------------------------------------------------------------------------
+#
+# **This list replaces a claim that was wrong.** The comment in Cargo.toml said
+# "Every crate in this tree is MIT, Apache-2.0 or Zlib ... Nothing is copyleft,
+# which the packaging depends on", checked by hand on 2026-08-13 and found
+# wrong on 2026-08-23: MPL-2.0 is in the tree and statically linked. A hand
+# check is a claim about one afternoon; this is a claim the build enforces.
+#
+# Deliberately minimal. An `OR` expression only needs one of its options
+# allowed, so `Zlib OR Apache-2.0 OR MIT` needs no Zlib entry and
+# `MIT OR Apache-2.0 OR LGPL-2.1-or-later` needs no LGPL entry. Pasting every
+# identifier that appears anywhere in the tree would quietly permit LGPL
+# across all 268 crates in order to satisfy one that offers MIT anyway.
+#
+# Each entry below names what actually needs it. If an entry ever has nothing
+# behind it, remove it rather than leaving it as permission nobody is using.
+[licenses]
+allow = [
+    # The bulk of the tree, and what satisfies almost every `OR`.
+    "MIT",
+    "Apache-2.0",
+
+    # `minreq`, `untrusted`, `rustls-webpki` and `inotify` are ISC alone, with
+    # no alternative offered. `ring` is `Apache-2.0 AND ISC` - a conjunction,
+    # so both halves are genuinely required rather than being a choice.
+    "ISC",
+
+    # `target-lexicon`, alone.
+    "Apache-2.0 WITH LLVM-exception",
+
+    # `subtle`, alone. (`if-addrs` offers `MIT OR BSD-3-Clause` and is covered
+    # by MIT above.)
+    "BSD-3-Clause",
+
+    # `unicode-ident`, which is `(MIT OR Apache-2.0) AND Unicode-3.0`. The AND
+    # is why this is here: the MIT half does not satisfy it.
+    "Unicode-3.0",
+
+    # **The one copyleft licence in the tree, and the reason this file exists
+    # rather than a comment.** `gst-plugin-gtk4` provides `gtk4paintablesink`
+    # and is statically linked into the binary, because that element is not
+    # packaged for Debian and not shipped with the GStreamer Windows
+    # installer. MPL-2.0 is file-scoped copyleft, so it combines with MIT
+    # without infecting anything - but it carries an obligation to make the
+    # covered source available, which README.md discharges. Removing this
+    # entry is not a licence cleanup; it would fail the build.
+    "MPL-2.0",
+]
+
+# A crate whose licence field is empty gets no exception. There are none today
+# and a new one should be looked at rather than waved through.
+[licenses.private]
+ignore = false
+
+# ---------------------------------------------------------------------------
+# Duplicates and sources
+# ---------------------------------------------------------------------------
+[bans]
+# Warn rather than deny. Duplicates are worth seeing and are not by themselves
+# a reason to refuse a merge - eighteen crates are duplicated today, almost
+# all of them the two TLS stacks described below and the `windows-*` family,
+# and turning that into a hard failure would block unrelated work until an
+# upstream we do not control moves.
+multiple-versions = "warn"
+wildcards = "deny"
+
+skip = [
+    # **Two TLS stacks, knowingly.** `minreq` pulls rustls 0.21 and
+    # `tungstenite` pulls rustls 0.23, so `rustls`, `rustls-webpki`,
+    # `rustls-native-certs`, `security-framework` and `openssl-probe` are each
+    # in the tree twice. Found in the audit on 2026-08-23 and not yet fixed:
+    # the answer is to move the HTTP side off `minreq`, which is its own piece
+    # of work. Skipped rather than left as noise so that a *new* duplicate is
+    # visible against a quiet baseline.
+    { crate = "rustls" },
+    { crate = "rustls-webpki" },
+    { crate = "rustls-native-certs" },
+    { crate = "security-framework" },
+    { crate = "openssl-probe" },
+]
+
+[sources]
+# Everything comes from crates.io. A git dependency is not forbidden on
+# principle, but it is not something to acquire by accident: it pins to a
+# revision nothing publishes advisories against.
+unknown-registry = "deny"
+unknown-git = "deny"
+
+# ---------------------------------------------------------------------------
+# Advisories
+# ---------------------------------------------------------------------------
+#
+# Read weekly by upstream.yml via `cargo audit`, not on pull requests.
+#
+# **When something turns up with no fix available, add it here with a date and
+# a reason rather than switching the check off.** A permanently red job is a
+# job people learn to ignore, which is the same argument ci.yml makes for
+# keeping shellcheck at warning level rather than at info.
+[advisories]
+# A vulnerability always fails. "Unmaintained" only counts for crates this
+# project depends on directly, because those are the only ones anybody here
+# can act on: `paste` is archived, is a proc macro somewhere three levels
+# down, and will stay archived until whichever crate depends on it moves - so
+# reporting it every Monday for years would train everyone to skim past the
+# week it says something that matters. A direct dependency going unmaintained
+# is a different thing entirely, and is ours to answer for.
+unmaintained = "workspace"
+
+ignore = [
+    # Nothing ignored. An entry looks like:
+    #   "RUSTSEC-0000-0000", # 2026-01-01, no fix upstream; we do not call the
+    #                        # affected function - see <link>
+    #
+    # A real vulnerability with a fix available does not belong here. If this
+    # list is ever long, that is the finding.
+]

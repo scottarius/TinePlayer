@@ -78,3 +78,38 @@ jobs:
 
       - name: Build
         run: cargo build --release
+
+  # Whether anything in the dependency tree has had a security advisory
+  # published against it since the last time anybody looked.
+  #
+  # **Here rather than in ci.yml, and that is the whole point of the split.**
+  # An advisory appears against a crate we shipped months ago, with no commit
+  # involved - so gating pull requests on it would fail somebody's unrelated
+  # change for something they did not do, which is exactly what this workflow
+  # exists to avoid. A failure here means the world moved, and the answer is a
+  # dependency bump rather than a fix to whatever was being worked on.
+  #
+  # The licence and duplicate checks are the opposite kind of question and run
+  # on every pull request in ci.yml instead: those are deterministic, so a red
+  # there really does mean the commit added something.
+  #
+  # Ignores live in `deny.toml` with a date and a reason, not as a flag here.
+  # An advisory with no fix available would otherwise leave this permanently
+  # red, and a gate people learn to ignore is not a gate.
+  advisories:
+    name: Security advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The same action ci.yml uses, so there is one tool and one config
+      # rather than `cargo-audit` here and `cargo-deny` there disagreeing
+      # about what counts. Only the advisories check runs.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+          # No --locked: this workflow pins nothing on purpose, and an
+          # advisory against a version the lockfile has already moved past is
+          # not worth waking anybody for.
+          arguments: --all-features
