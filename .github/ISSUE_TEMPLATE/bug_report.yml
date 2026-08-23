@@ -1,0 +1,96 @@
+name: Something is wrong
+description: A fault, a crash, or something not behaving the way it reads
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time. The four fields below are what almost
+        every report turns out to need, and having them up front usually saves
+        a round trip.
+
+        **Not a security problem, please** - those go through
+        [private reporting](https://github.com/scottarius/TinePlayer/security/advisories/new)
+        instead, so they are not public before there is a fix.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: |
+        I pressed play on a film with two soundtracks and only the first
+        output made any sound. I expected both.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: TinePlayer version
+      description: From Settings, then About. A build from source ends in `-dev`.
+      placeholder: "1.5.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux - Debian or Ubuntu
+        - Linux - Raspberry Pi OS
+        - Linux - something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      description: >
+        This decides which GStreamer is underneath. The Windows and macOS
+        packages carry their own; the `.deb` uses whatever your distribution
+        ships, so the same package sits on a different GStreamer on Debian
+        than on Ubuntu.
+      options:
+        - The installer or package from the releases page
+        - The portable ZIP (Windows)
+        - Built from source
+        - A package from somewhere else
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: The log
+      description: >
+        Where to find it, and what is in it, is in
+        [Send the log](https://github.com/scottarius/TinePlayer/blob/main/docs/troubleshooting.md#send-the-log).
+        Its first lines carry the versions of GStreamer and GTK, which is most
+        of what is otherwise guesswork.
+
+        Access tokens are stripped before anything is written, but file paths
+        and server addresses are not - so have a read before you paste it.
+        Attach the file, or paste the part around the problem.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Anything about your setup that might matter
+      description: >
+        Two output devices and which ones, a gamepad, a screen reader, Kodi or
+        Jellyfin launching it, a television rather than a monitor, a portable
+        copy on a stick. Anything that is not the ordinary case.
+      placeholder: |
+        Raspberry Pi 5 wired to a TV, sound to HDMI and a Bluetooth headset,
+        launched by Kodi.
+    validations:
+      required: false
