@@ -31,7 +31,7 @@ mod kodi_setup;
 mod label;
 mod languages;
 mod lockup;
-mod log;
+mod logging;
 mod matroska;
 mod media_keys;
 mod metadata;
@@ -308,7 +308,7 @@ fn silence_upstream_unref_spam() {
             if message.contains("g_object_unref") && message.contains("assertion") {
                 return;
             }
-            crate::log!(
+            log::error!(
                 "{}-{}: {message}",
                 domain.unwrap_or("GLib"),
                 match level {
@@ -777,7 +777,7 @@ fn main() -> std::process::ExitCode {
     // Before anything has something to say, and before any thread exists to
     // say it from. `attach_parent_console` comes first only so that the
     // standard-error half of this reaches the terminal that started us.
-    log::start();
+    logging::start();
     // Before any window is made, which is when the identity is stamped on.
     name_this_process();
     // Before anything reads the environment, and before GStreamer starts.
@@ -800,6 +800,9 @@ fn main() -> std::process::ExitCode {
     // or shipped with the GStreamer Windows installer), so it has to be
     // registered explicitly - GStreamer's normal plugin scan won't find it.
     gstgtk4::plugin_register_static().expect("Failed to register gtk4paintablesink");
+
+    // Now that both will answer. See `log::environment`.
+    logging::environment();
 
     let source = args.file.as_deref().map(source::Source::parse);
 
@@ -895,8 +898,23 @@ fn main() -> std::process::ExitCode {
     // fix it out of reach.
     let (mut config, config_problem) = Config::load();
     if let Some(problem) = config_problem.as_deref() {
-        crate::log!("{problem}");
+        log::error!("{problem}");
     }
+    // The two settings the whole application is about, and the first thing to
+    // check when somebody says one output is silent: an unset secondary sink
+    // is not a fault but it is the answer, and the name being set to a device
+    // this machine no longer has looks identical from the sofa.
+    // Quoted when there is a name, bare when there is not, so a device
+    // genuinely called "unset" cannot be confused for the absence of one.
+    let sink = |name: &Option<String>| match name {
+        Some(name) => format!("{name:?}"),
+        None => "unset".to_string(),
+    };
+    log::info!(
+        "Outputs configured: primary {}, secondary {}",
+        sink(&config.primary_sink),
+        sink(&config.secondary_sink),
+    );
 
     // Before any label exists, which is the only ordering that matters: every
     // string in the interface is looked up as its widget is built, and a
@@ -925,7 +943,7 @@ fn main() -> std::process::ExitCode {
     {
         config.primary_sink = Some(device);
         if let Err(e) = config.save() {
-            crate::log!("Could not save the default audio output: {e}");
+            log::error!("Could not save the default audio output: {e}");
         }
     }
 

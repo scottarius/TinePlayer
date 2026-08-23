@@ -1394,7 +1394,7 @@ impl App {
         };
         if let Some(url) = url {
             gtk::gio::AppInfo::launch_default_for_uri(&url, None::<&gtk::gio::AppLaunchContext>)
-                .unwrap_or_else(|e| crate::log!("Could not open {url}: {e}"));
+                .unwrap_or_else(|e| log::error!("Could not open {url}: {e}"));
         }
     }
 

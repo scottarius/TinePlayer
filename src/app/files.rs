@@ -106,7 +106,7 @@ impl App {
         match crate::probe::probe_media(source) {
             Ok(media) => self.apply_media(source, media),
             Err(e) => {
-                crate::log!("Couldn't read {}: {e}", source.uri());
+                log::error!("Couldn't read {}: {e}", source.uri());
                 self.forget_file();
                 Err(e)
             }
@@ -161,7 +161,7 @@ impl App {
         {
             let ours = media.duration_ns / 1_000_000_000;
             if ours.abs_diff(runtime) > 5 {
-                crate::log!(
+                log::error!(
                     "Kodi reports a {runtime}s item but this source is {ours}s;                      ignoring what it said and keeping local positions."
                 );
                 *self.kodi_item.borrow_mut() = None;
@@ -239,6 +239,10 @@ impl App {
         // which is not this one until the end of this function.
         let saved = crate::config::load_resume(&self.storage_key_for(source))
             .and_then(|resume| resume.tracks);
+        // Which of the two answered, for the log below. "It keeps forgetting
+        // my tracks" and "it keeps choosing the wrong one" are different
+        // faults with the same symptom, and this is what tells them apart.
+        let remembered = saved.is_some();
         // What the preferences choose, split into the two cells an output
         // reads it from: an entry may now be a file beside the video as well
         // as a track inside it. `at` is the positional fallback where the
@@ -341,6 +345,44 @@ impl App {
         *self.subtitle.borrow_mut() =
             subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
         *self.subtitle_options.borrow_mut() = options;
+
+        // What was opened and what was decided about it, which between them
+        // answer most of what a report needs to say. The source goes through
+        // `log!`, so a library stream arrives here with its token already off.
+        //
+        // `remembered` is the important half: a choice restored from
+        // `positions.json` and a choice worked out from the language
+        // preferences look identical on screen and mean completely different
+        // things when somebody says the wrong track was picked.
+        let name_of = |index: Option<u32>| match index {
+            Some(index) => tracks
+                .iter()
+                .find(|track| track.index == index)
+                .map(|track| format!("{index} ({})", track.language))
+                .unwrap_or_else(|| format!("{index}")),
+            None => "none".to_string(),
+        };
+        log::info!(
+            "Opened {} - {:.0}s, {} audio track(s), {} subtitle(s)",
+            source.uri(),
+            duration_ns as f64 / 1e9,
+            tracks.len(),
+            self.subtitle_options.borrow().len(),
+        );
+        log::info!(
+            "Chose from {}: primary {}, secondary {}, subtitle {}",
+            match remembered {
+                true => "saved choices",
+                false => "language preferences",
+            },
+            name_of(*self.primary_track.borrow()),
+            name_of(*self.secondary_track.borrow()),
+            match self.subtitle.borrow().as_ref() {
+                Some(choice) => format!("{choice:?}"),
+                None => "none".to_string(),
+            },
+        );
+
         *self.tracks.borrow_mut() = tracks;
         // Separate soundtracks beside the video, found by the same convention
         // and the same code as the subtitle files above. Only for a local

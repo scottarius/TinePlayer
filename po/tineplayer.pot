@@ -201,41 +201,41 @@ msgstr ""
 msgid "Open System Browser"
 msgstr ""
 
-#: src/app/choosers.rs:102 src/app/choosers.rs:656 src/app/choosers.rs:663
+#: src/app/choosers.rs:100
+msgid "Searching for outputs..."
+msgstr ""
+
+#: src/app/choosers.rs:110 src/app/choosers.rs:664 src/app/choosers.rs:671
 #: src/app/outputs.rs:22
 msgctxt "subtitle track"
 msgid "None"
 msgstr ""
 
-#: src/app/choosers.rs:120 src/app/choosers.rs:182 src/app/media_page.rs:750
+#: src/app/choosers.rs:128 src/app/choosers.rs:190 src/app/media_page.rs:750
 #: src/app/media_page.rs:754
 msgid "Browse..."
 msgstr ""
 
-#: src/app/choosers.rs:125 src/app/outputs.rs:21 src/app/tracks.rs:98
+#: src/app/choosers.rs:133 src/app/outputs.rs:21 src/app/tracks.rs:98
 msgctxt "audio track"
 msgid "None"
 msgstr ""
 
-#: src/app/choosers.rs:158 src/controls.rs:2018
+#: src/app/choosers.rs:166 src/controls.rs:2018
 msgid "AUDIO FILES"
 msgstr ""
 
-#: src/app/choosers.rs:204 src/app/settings.rs:73
+#: src/app/choosers.rs:212 src/app/settings.rs:73
 msgid "First track"
 msgstr ""
 
-#: src/app/choosers.rs:206 src/app/settings.rs:74
+#: src/app/choosers.rs:214 src/app/settings.rs:74
 msgid "Second track"
 msgstr ""
 
-#: src/app/choosers.rs:72 src/app/menu.rs:172 src/app/settings.rs:68
+#: src/app/choosers.rs:80 src/app/menu.rs:172 src/app/settings.rs:68
 msgctxt "audio output device"
 msgid "None"
-msgstr ""
-
-#: src/app/choosers.rs:92
-msgid "Searching for outputs..."
 msgstr ""
 
 #: src/app/files.rs:16
@@ -262,7 +262,7 @@ msgstr ""
 msgid "Video files"
 msgstr ""
 
-#: src/app/files.rs:406
+#: src/app/files.rs:448
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -270,7 +270,7 @@ msgid ""
 "{reason}"
 msgstr ""
 
-#: src/app/files.rs:416
+#: src/app/files.rs:458
 msgid ""
 "\n"
 "\n"

@@ -84,7 +84,7 @@ impl Sounds {
                 _watch: Some(watch),
             },
             Err(e) => {
-                crate::log!("Navigation sounds unavailable: {e}");
+                log::error!("Navigation sounds unavailable: {e}");
                 Self {
                     pipeline: None,
                     _watch: None,
@@ -145,7 +145,7 @@ impl Sounds {
                         }
                     }
                     MessageView::Error(err) => {
-                        crate::log!("Click sound error: {}", err.error());
+                        log::error!("Click sound error: {}", err.error());
                     }
                     _ => {}
                 }

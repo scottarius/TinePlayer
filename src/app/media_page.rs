@@ -67,7 +67,7 @@ impl App {
         config.window_width = Some(width);
         config.window_height = Some(height);
         if let Err(e) = config.save() {
-            crate::log!("Could not save the window size: {e}");
+            log::error!("Could not save the window size: {e}");
         }
     }
 
@@ -1098,7 +1098,7 @@ impl App {
                     // appear looks like one that was never found - and the two
                     // want completely different things done about them.
                     Err(e) => {
-                        crate::log!("Couldn't decode artwork: {e}");
+                        log::error!("Couldn't decode artwork: {e}");
                         None
                     }
                 }

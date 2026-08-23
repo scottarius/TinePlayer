@@ -265,3 +265,15 @@ would rather not share.
 
 Nothing is sent anywhere. The file is written locally and stays there until
 you attach it to something.
+
+### More detail, when it is asked for
+
+Each line is stamped with the time and labelled `[info]` or `[error]`. Lines
+naming another component - `gilrs`, `rustls`, `tungstenite` - come from the
+libraries TinePlayer is built on; unlabelled ones are TinePlayer itself.
+
+If a report needs more than the default, run TinePlayer with
+`TINEPLAYER_LOG=debug` set and reproduce the problem. That turns on the
+network and gamepad detail, which is off normally because it is long and most
+of it is routine. `TINEPLAYER_TRACE_AUDIO=1` does the same for the audio
+routing.

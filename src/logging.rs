@@ -1,15 +1,25 @@
 //! Where a diagnostic goes so that somebody other than a developer can find
 //! it.
 //!
-//! Every `log!` in this application writes twice: to standard error, which is
-//! what a developer running from a shell has always read, and to a file in the
-//! user's data directory, which is what everybody else can be asked for. The
-//! second half is the reason this module exists. A Windows GUI build only
-//! attaches to a console when it was started from one, a macOS `.app` has no
-//! terminal behind it at all, and a Linux desktop entry sends the output to a
-//! journal nobody reads - so before this, the eighty-odd diagnostics in this
-//! source reached exactly one person, on one machine, and every report from
-//! anyone else was "it froze" with nothing to attach.
+//! Every `log::info!` and `log::error!` writes twice: to standard error,
+//! which is what a developer running from a shell has always read, and to a
+//! file in the user's data directory, which is what everybody else can be
+//! asked for. The second half is the reason this module exists. A Windows GUI
+//! build only attaches to a console when it was started from one, a macOS
+//! `.app` has no terminal behind it at all, and a Linux desktop entry sends
+//! the output to a journal nobody reads - so before this, the eighty-odd
+//! diagnostics in this source reached exactly one person, on one machine, and
+//! every report from anyone else was "it froze" with nothing to attach.
+//!
+//! **The `log` facade rather than macros of our own, and that is not
+//! bookkeeping.** `gilrs`, `rustls` and `tungstenite` all write through it
+//! already. With no backend installed those calls compile to nothing at
+//! runtime, so every word any of them has ever said has gone nowhere -
+//! including a TLS handshake failing, which is the one thing that would
+//! explain a Jellyfin connection refusing to come up. Installing [`Logger`]
+//! behind the facade is what turns that back on, and it costs no crate that
+//! was not already being compiled. Their lines are labelled with which crate
+//! said them; ours are not, so an unlabelled line is always TinePlayer's.
 //!
 //! **The token is why this is a boundary and not a tee.** A Jellyfin stream
 //! URI carries `?api_key=` and that is a bearer credential: anything holding
@@ -105,13 +115,128 @@ pub fn start() {
     });
     let _ = FILE.set(Mutex::new(Sink { file, written: 0 }));
 
-    write(&format!(
-        "TinePlayer {} on {} starting",
+    // The facade, so that this is the one place anything writes a diagnostic -
+    // ours and our dependencies' alike. See the module comment.
+    log::set_logger(&SINK).ok();
+    log::set_max_level(level());
+
+    // The date is here rather than on every line: one file is one run, so
+    // repeating it eighty times would be noise. The lines carry the time.
+    let today = glib::DateTime::now_local()
+        .and_then(|now| now.format("%Y-%m-%d"))
+        .map(|text| text.to_string())
+        .unwrap_or_else(|_| "unknown date".to_string());
+    log::info!(
+        "TinePlayer {} starting on {} {}, {today}",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
-    ));
+        std::env::consts::ARCH,
+    );
 
     take_panics();
+}
+
+/// How much to keep, from `TINEPLAYER_LOG`.
+///
+/// `info` by default, which is this application's own account of itself plus
+/// anything a dependency thinks is worth a warning. Above that the volume
+/// stops being useful in a report: `rustls` at `debug` describes every
+/// handshake, and a log nobody can read is the same as no log.
+///
+/// `TINEPLAYER_LOG=debug` raises it, which is what to ask for when a report
+/// needs the TLS or gamepad detail - the same shape as `TINEPLAYER_TRACE_AUDIO`
+/// for the routing, and off for the same reason.
+fn level() -> log::LevelFilter {
+    match std::env::var("TINEPLAYER_LOG").as_deref() {
+        Ok("trace") => log::LevelFilter::Trace,
+        Ok("debug") => log::LevelFilter::Debug,
+        Ok("warn") => log::LevelFilter::Warn,
+        Ok("error") => log::LevelFilter::Error,
+        Ok("off") => log::LevelFilter::Off,
+        _ => log::LevelFilter::Info,
+    }
+}
+
+/// The backend behind the facade.
+///
+/// Ours rather than one of the ready-made ones, for three reasons that all
+/// come back to this not being an ordinary application log. The redaction
+/// below has to happen in the write path and no backend does it. Rotating per
+/// *run* and keeping three is not what any of them offer - they rotate by size
+/// or by day, neither of which lines up with "the launch where it went wrong".
+/// And every dependency in this project is justified by the paragraph above
+/// it; a crate earning its place by doing something already written and tested
+/// in eighty lines would not survive that.
+struct Logger;
+static SINK: Logger = Logger;
+
+impl log::Log for Logger {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        // The facade has already applied `set_max_level`, which is the only
+        // filter there is.
+        true
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        // `%H:%M:%S` and the milliseconds appended by hand. GLib's formatter
+        // has no `%.3f` - it answers with an error rather than ignoring it,
+        // which is a blank timestamp on every line and exactly the kind of
+        // thing that is only visible by reading the file afterwards.
+        let at = glib::DateTime::now_local()
+            .and_then(|now| {
+                let millis = now.microsecond() / 1000;
+                now.format("%H:%M:%S")
+                    .map(|text| format!("{text}.{millis:03}"))
+            })
+            .unwrap_or_else(|_| "--:--:--.---".to_string());
+
+        // A dependency's messages are labelled with which one, because
+        // "rustls" against a failed connection is most of the diagnosis. Our
+        // own are not: every unlabelled line is TinePlayer's.
+        let target = record.target();
+        let from = match target.starts_with(env!("CARGO_CRATE_NAME")) {
+            true => String::new(),
+            false => format!("{} ", target.split("::").next().unwrap_or(target)),
+        };
+
+        write(&format!(
+            "{at} [{}] {from}{}",
+            match record.level() {
+                log::Level::Error => "error",
+                log::Level::Warn => "warn",
+                log::Level::Info => "info",
+                log::Level::Debug => "debug",
+                log::Level::Trace => "trace",
+            },
+            record.args()
+        ));
+    }
+
+    fn flush(&self) {}
+}
+
+/// What this copy is running against, once there is something to ask.
+///
+/// Separate from [`start`] because GStreamer has to be initialised before it
+/// will say what version it is, and that happens well after the first line is
+/// written - deliberately, since a failure during initialisation is exactly
+/// the kind that has to be logged before it happens.
+///
+/// This is most of what a report needs and none of it can be guessed from the
+/// outside. "Which GStreamer" in particular decides which plugins exist, and
+/// almost every question about a file that will not play is really a question
+/// about that.
+pub fn environment() {
+    log::info!("{}", gstreamer::version_string());
+    log::info!(
+        "GTK {}.{}.{}",
+        gtk::major_version(),
+        gtk::minor_version(),
+        gtk::micro_version()
+    );
+    if let Some(dir) = crate::config::log_dir() {
+        log::info!("Data folder {}", dir.display());
+    }
 }
 
 /// Sends a panic to the log as well as to standard error.
@@ -138,7 +263,7 @@ fn take_panics() {
 /// One diagnostic, to standard error and to the file.
 ///
 /// Behind `log!`, which is what to call.
-pub fn write(line: &str) {
+fn write(line: &str) {
     let line = redact(line);
     eprintln!("{line}");
     to_file(&line);
@@ -244,27 +369,6 @@ fn redact(line: &str) -> String {
     }
     out.push_str(rest);
     out
-}
-
-/// Writes a diagnostic to standard error and to this run's log file.
-///
-/// Takes the same arguments as `eprintln!` and replaces it everywhere a
-/// message is meant for a person reading a report later - which is every
-/// diagnostic in this application. `println!` is left alone: that is the
-/// output of `--list-devices` and its neighbours, which is an answer to a
-/// question rather than a report of something going wrong, and belongs on
-/// standard output where it can be piped.
-///
-/// **Called as `crate::log!` rather than imported, which `tr!` is not.** A
-/// `#[macro_export]` puts the name at the crate root, where this one would
-/// collide with the module of the same name: `use crate::log;` is ambiguous
-/// between the two, and renaming either to avoid it would be worse than
-/// spelling out four extra characters at each call site.
-#[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => {
-        $crate::log::write(&::std::format!($($arg)*))
-    };
 }
 
 #[cfg(test)]

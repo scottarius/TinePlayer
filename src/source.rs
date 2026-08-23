@@ -55,7 +55,7 @@ impl Source {
                     // backslashes and a missing slash in a string GStreamer
                     // reads as a host name. Said out loud rather than left to
                     // surface as an unexplained "could not open".
-                    crate::log!("Could not form a URI for {}: {e}", path.display());
+                    log::error!("Could not form a URI for {}: {e}", path.display());
                     format!("file://{}", path.display())
                 }),
             Self::Remote(uri) => uri.clone(),

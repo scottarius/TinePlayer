@@ -270,7 +270,7 @@ impl App {
                     Ok(Err(crate::jellyfin::Error::Unauthorized)) => app.jellyfin_signed_out(),
                     // A server that is off or asleep, which is ordinary and
                     // not a reason to throw the pairing away.
-                    Ok(Err(e)) => crate::log!("Jellyfin would not take our capabilities: {e}"),
+                    Ok(Err(e)) => log::error!("Jellyfin would not take our capabilities: {e}"),
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
                         return glib::ControlFlow::Continue;
                     }
@@ -499,7 +499,7 @@ impl App {
                     app.open_jellyfin(item);
                 }
                 Err(crate::jellyfin::Error::Unauthorized) => app.jellyfin_signed_out(),
-                Err(e) => crate::log!("Jellyfin would not describe that video: {e}"),
+                Err(e) => log::error!("Jellyfin would not describe that video: {e}"),
             }
             glib::ControlFlow::Break
         });
@@ -536,7 +536,7 @@ impl App {
         match self.apply_media(&source, media) {
             Ok(()) => self.show_menu(),
             Err(e) => {
-                crate::log!("Couldn't open {}: {e}", source.uri());
+                log::error!("Couldn't open {}: {e}", source.uri());
                 self.show_source_error(&source, &e, false);
             }
         }
@@ -562,11 +562,11 @@ impl App {
         if let Some(mut pairing) = crate::jellyfin::load() {
             pairing.sign_out();
             if let Err(e) = crate::jellyfin::save(&pairing) {
-                crate::log!("Couldn't forget the Jellyfin token: {e}");
+                log::error!("Couldn't forget the Jellyfin token: {e}");
             }
             *self.jellyfin_pairing.borrow_mut() = Some(pairing);
         }
-        crate::log!("Jellyfin no longer accepts this connection. Connect to it again to cast.");
+        log::error!("Jellyfin no longer accepts this connection. Connect to it again to cast.");
         // Redrawn only where it is being looked at. A pairing can be revoked
         // at any moment, and rebuilding a screen under somebody who is part
         // way through choosing a soundtrack would be a worse interruption than
@@ -631,7 +631,7 @@ impl App {
                 JellyfinMoment::Stopped => client.stopped(&id, &play_session, position),
             };
             if let Err(e) = result {
-                crate::log!("Jellyfin would not take the position: {e}");
+                log::error!("Jellyfin would not take the position: {e}");
             }
         });
     }
