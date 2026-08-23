@@ -302,18 +302,30 @@ impl App {
         if let Some(preset) = preset.as_ref()
             && app.file.borrow().is_some()
         {
-            let resolve = |spec: &str| -> Option<u32> {
-                match crate::probe::resolve_audio(spec, &app.tracks.borrow()) {
-                    Ok(choice) => choice,
-                    // Reported rather than obeyed silently, the same way a
-                    // subtitle that cannot be resolved is: playing the
-                    // wrong track is not what was asked for either.
-                    Err(e) => {
-                        eprintln!("{e}");
-                        None
+            // Resolves a spec and puts the answer where that output reads it:
+            // a track index, or a path for a soundtrack beside the video.
+            // Both, because one number can now mean either - the chooser lists
+            // them as one run and so does `--list-tracks`.
+            let apply =
+                |spec: &str, track: &RefCell<Option<u32>>, file: &RefCell<Option<Source>>| {
+                    match crate::probe::resolve_audio(
+                        spec,
+                        &app.tracks.borrow(),
+                        &app.audio_files.borrow(),
+                    ) {
+                        Ok(crate::probe::AudioChoice::Silent) => *track.borrow_mut() = None,
+                        Ok(crate::probe::AudioChoice::Track(index)) => {
+                            *track.borrow_mut() = Some(index)
+                        }
+                        Ok(crate::probe::AudioChoice::File(path)) => {
+                            *file.borrow_mut() = Some(Source::File(path))
+                        }
+                        // Reported rather than obeyed silently, the same way a
+                        // subtitle that cannot be resolved is: playing the
+                        // wrong track is not what was asked for either.
+                        Err(e) => eprintln!("{e}"),
                     }
-                }
-            };
+                };
             // A spec naming a file that exists is an audio file to play on
             // that output, rather than anything to look for inside the video.
             // Checked before the track specs because none of them can be a
@@ -326,13 +338,13 @@ impl App {
             if let Some(spec) = preset.primary.as_deref() {
                 match as_file(spec) {
                     Some(file) => *app.primary_file.borrow_mut() = Some(file),
-                    None => *app.primary_track.borrow_mut() = resolve(spec),
+                    None => apply(spec, &app.primary_track, &app.primary_file),
                 }
             }
             if let Some(spec) = preset.secondary.as_deref() {
                 match as_file(spec) {
                     Some(file) => *app.secondary_file.borrow_mut() = Some(file),
-                    None => *app.secondary_track.borrow_mut() = resolve(spec),
+                    None => apply(spec, &app.secondary_track, &app.secondary_file),
                 }
             }
 

@@ -98,7 +98,7 @@ pub fn is_audio_description(title: &str) -> bool {
 /// Accepts the same kinds of thing `--subtitle` does, so neither argument
 /// needs its own vocabulary:
 ///
-/// - `3` - the third entry `--list-tracks` prints
+/// - `3` - the third entry `--list-tracks` prints, inside the file or beside it
 /// - `en` - the first track in that language
 /// - `ad` - the first described track
 /// - `en:ad` - the first described track in that language
@@ -106,10 +106,24 @@ pub fn is_audio_description(title: &str) -> bool {
 ///
 /// A plain language code will not select a described track, matching what the
 /// preference does: description is only ever chosen by asking for it.
-pub fn resolve_audio(spec: &str, tracks: &[AudioTrack]) -> Result<Option<u32>, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioChoice {
+    /// No audio on this output.
+    Silent,
+    /// A track inside the video, by the stream index the pipeline wants.
+    Track(u32),
+    /// A separate soundtrack sitting beside the video.
+    File(std::path::PathBuf),
+}
+
+pub fn resolve_audio(
+    spec: &str,
+    tracks: &[AudioTrack],
+    files: &[crate::beside::AudioFile],
+) -> Result<AudioChoice, String> {
     let spec = spec.trim();
     if spec.eq_ignore_ascii_case("none") {
-        return Ok(None);
+        return Ok(AudioChoice::Silent);
     }
 
     if let Ok(number) = spec.parse::<usize>() {
@@ -119,17 +133,28 @@ pub fn resolve_audio(spec: &str, tracks: &[AudioTrack]) -> Result<Option<u32>, S
         // in a release build, where it wraps and finds no track, and a panic
         // in a debug one.
         if number == 0 {
-            return Ok(None);
+            return Ok(AudioChoice::Silent);
         }
-        return tracks
-            .get(number - 1)
-            .map(|track| Some(track.index))
-            .ok_or_else(|| {
-                format!(
-                    "There is no audio track {number}. The file has {}.",
-                    tracks.len()
-                )
-            });
+        // The tracks inside the video first, then the soundtracks beside it -
+        // one list, numbered straight through, which is the order the chooser
+        // shows and the order `--list-tracks` prints. Subtitles have worked
+        // this way all along; audio listed only what was inside the file, so a
+        // soundtrack the menu offered had no number to ask for it by.
+        if let Some(track) = tracks.get(number - 1) {
+            return Ok(AudioChoice::Track(track.index));
+        }
+        if let Some(file) = files.get(number - 1 - tracks.len()) {
+            return Ok(AudioChoice::File(file.path.clone()));
+        }
+        let total = tracks.len() + files.len();
+        return Err(match files.len() {
+            0 => format!("There is no audio track {number}. The file has {total}."),
+            _ => format!(
+                "There is no audio {number}. There are {} in the file and {} beside it.",
+                tracks.len(),
+                files.len()
+            ),
+        });
     }
 
     let (code, described) = match spec.split_once(':') {
@@ -151,17 +176,23 @@ pub fn resolve_audio(spec: &str, tracks: &[AudioTrack]) -> Result<Option<u32>, S
         .iter()
         .find(|track| track.is_described() == described && matching(track));
 
-    found.map(|track| Some(track.index)).ok_or_else(|| {
-        let what = if described {
-            "described audio track"
-        } else {
-            "audio track"
-        };
-        match code {
-            Some(code) => format!("No {what} in {code}."),
-            None => format!("No {what} in this file."),
-        }
-    })
+    // Language and `ad` search the tracks inside the file only. A soundtrack
+    // beside the video carries no language of its own - only whatever the
+    // convention left in its file name - so matching one on a code would be
+    // guessing at what a tag means, and getting it wrong silently.
+    found
+        .map(|track| AudioChoice::Track(track.index))
+        .ok_or_else(|| {
+            let what = if described {
+                "described audio track"
+            } else {
+                "audio track"
+            };
+            match code {
+                Some(code) => format!("No {what} in {code}."),
+                None => format!("No {what} in this file."),
+            }
+        })
 }
 
 /// A subtitle stream carried inside the file.
@@ -688,6 +719,7 @@ mod audio_description_tests {
 
 #[cfg(test)]
 mod resolve_audio_tests {
+    use super::AudioChoice::{File, Silent, Track};
     use super::*;
 
     fn tracks() -> Vec<AudioTrack> {
@@ -714,10 +746,10 @@ mod resolve_audio_tests {
     #[test]
     fn takes_a_number_none_or_a_language() {
         let tracks = tracks();
-        assert_eq!(resolve_audio("2", &tracks), Ok(Some(1)));
-        assert_eq!(resolve_audio("0", &tracks), Ok(None));
-        assert_eq!(resolve_audio("none", &tracks), Ok(None));
-        assert_eq!(resolve_audio("de", &tracks), Ok(Some(1)));
+        assert_eq!(resolve_audio("2", &tracks, &[]), Ok(Track(1)));
+        assert_eq!(resolve_audio("0", &tracks, &[]), Ok(Silent));
+        assert_eq!(resolve_audio("none", &tracks, &[]), Ok(Silent));
+        assert_eq!(resolve_audio("de", &tracks, &[]), Ok(Track(1)));
     }
 
     /// Any spelling of zero, and any surrounding space, means the same thing.
@@ -726,7 +758,11 @@ mod resolve_audio_tests {
     fn every_spelling_of_zero_means_none() {
         let tracks = tracks();
         for spec in ["0", "00", "000", " 0 ", "none", "NONE", "None"] {
-            assert_eq!(resolve_audio(spec, &tracks), Ok(None), "for {spec:?}");
+            assert_eq!(
+                resolve_audio(spec, &tracks, &[]),
+                Ok(Silent),
+                "for {spec:?}"
+            );
         }
     }
 
@@ -734,24 +770,72 @@ mod resolve_audio_tests {
     fn a_language_alone_never_picks_a_described_track() {
         // German track 4 is described and track 2 is not, so the plain code
         // has to reach past the described one.
-        assert_eq!(resolve_audio("de", &tracks()), Ok(Some(1)));
+        assert_eq!(resolve_audio("de", &tracks(), &[]), Ok(Track(1)));
     }
 
     #[test]
     fn ad_picks_description() {
         let tracks = tracks();
-        assert_eq!(resolve_audio("ad", &tracks), Ok(Some(2)));
-        assert_eq!(resolve_audio("de:ad", &tracks), Ok(Some(3)));
-        assert_eq!(resolve_audio("en:ad", &tracks), Ok(Some(2)));
+        assert_eq!(resolve_audio("ad", &tracks, &[]), Ok(Track(2)));
+        assert_eq!(resolve_audio("de:ad", &tracks, &[]), Ok(Track(3)));
+        assert_eq!(resolve_audio("en:ad", &tracks, &[]), Ok(Track(2)));
+    }
+
+    fn beside() -> Vec<crate::beside::AudioFile> {
+        ["Commentary", "Descriptive"]
+            .into_iter()
+            .map(|name| crate::beside::AudioFile {
+                path: std::path::PathBuf::from(format!("D:/films/film.{name}.mka")),
+                tag: Some(name.to_string()),
+                name: format!("film.{name}.mka"),
+            })
+            .collect()
+    }
+
+    /// The numbers run straight through the file's own tracks and on into the
+    /// soundtracks beside it, which is the order the chooser shows and the
+    /// order `--list-tracks` prints. Four tracks here, so the files are 5 and
+    /// 6.
+    #[test]
+    fn a_number_past_the_last_track_reaches_a_file_beside_the_video() {
+        let files = beside();
+        assert_eq!(
+            resolve_audio("5", &tracks(), &files),
+            Ok(File("D:/films/film.Commentary.mka".into()))
+        );
+        assert_eq!(
+            resolve_audio("6", &tracks(), &files),
+            Ok(File("D:/films/film.Descriptive.mka".into()))
+        );
+        // The last track inside the file is still the last track inside it.
+        assert_eq!(resolve_audio("4", &tracks(), &files), Ok(Track(3)));
+    }
+
+    /// Past the end of both lists, and the message says so - naming the two
+    /// counts separately, since "the file has 4" would be a confusing thing to
+    /// read while the menu is offering 6.
+    #[test]
+    fn a_number_past_both_lists_says_what_there_is() {
+        let message = resolve_audio("9", &tracks(), &beside()).unwrap_err();
+        assert!(message.contains('4'), "{message}");
+        assert!(message.contains('2'), "{message}");
+    }
+
+    /// A language code searches the tracks inside the file and stops there: a
+    /// soundtrack beside the video has only whatever its name happens to say.
+    #[test]
+    fn a_language_never_reaches_a_file_beside_the_video() {
+        assert_eq!(resolve_audio("de", &tracks(), &beside()), Ok(Track(1)));
+        assert!(resolve_audio("fr", &tracks(), &beside()).is_err());
     }
 
     #[test]
     fn reports_what_it_could_not_find() {
         let tracks = tracks();
-        assert!(resolve_audio("9", &tracks).is_err());
-        assert!(resolve_audio("fr", &tracks).is_err());
-        assert!(resolve_audio("fr:ad", &tracks).is_err());
-        assert!(resolve_audio("en:sdh", &tracks).is_err());
+        assert!(resolve_audio("9", &tracks, &[]).is_err());
+        assert!(resolve_audio("fr", &tracks, &[]).is_err());
+        assert!(resolve_audio("fr:ad", &tracks, &[]).is_err());
+        assert!(resolve_audio("en:sdh", &tracks, &[]).is_err());
     }
 }
 

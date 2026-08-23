@@ -76,13 +76,17 @@ struct Args {
     /// The video to play: a path, or a URL such as http:// or smb://
     file: Option<String>,
 
-    /// Audio for the primary output: a track number, a language code, `ad`
-    /// for described audio, or `en:ad` for both. 0 for no audio there
+    /// Audio for the primary output: a number from `--list-tracks`, which
+    /// covers the soundtracks beside the video as well as the tracks in it, a
+    /// language code, `ad` for described audio, or `en:ad` for both. A path to
+    /// an audio file works too. 0 for no audio there
     #[arg(long, value_name = "T")]
     primary: Option<String>,
 
-    /// Audio for the secondary output: a track number, a language code, `ad`
-    /// for described audio, or `en:ad` for both. 0 for no audio there
+    /// Audio for the secondary output: a number from `--list-tracks`, which
+    /// covers the soundtracks beside the video as well as the tracks in it, a
+    /// language code, `ad` for described audio, or `en:ad` for both. A path to
+    /// an audio file works too. 0 for no audio there
     #[arg(long, value_name = "T")]
     secondary: Option<String>,
 
@@ -379,12 +383,17 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     // and reaching a server would mean pairing before answering it.
     let subtitles = subtitles::options(source.local(), &media.subtitles, &[]);
 
+    // And the soundtracks beside it, on the same terms: the chooser offers
+    // these alongside the tracks inside the file, so the numbers here have to
+    // cover both or the menu is offering something the command line cannot ask
+    // for. That was the state of it until now - subtitle files were listed and
+    // numbered, audio files were not.
+    let audio_files = source.local().map(beside::audio).unwrap_or_default();
+
     // Indices right-aligned to the widest of them, so a file with ten or more
     // tracks keeps its numbers in a column instead of stepping sideways. Both
     // lists share one width, so the two blocks line up with each other too.
-    let width = media
-        .audio
-        .len()
+    let width = (media.audio.len() + audio_files.len())
         .max(subtitles.len())
         .to_string()
         .chars()
@@ -393,7 +402,7 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
     // See list_devices for why this starts with a blank line.
     println!();
     println!();
-    println!("Audio tracks ({}):", media.audio.len());
+    println!("Audio tracks ({}):", media.audio.len() + audio_files.len());
     println!();
     println!("  {:>width$}  None", 0);
     // The same rows the choosers show - see `crate::label` - but keeping the
@@ -411,6 +420,15 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
             &format!("Track {}", position + 1),
         );
         println!("  {:>width$}  {name}", position + 1);
+    }
+    // Numbered straight on from the tracks inside the file, which is how the
+    // chooser lists them and so what `--primary` and `--secondary` take.
+    for (position, file) in audio_files.iter().enumerate() {
+        println!(
+            "  {:>width$}  {}",
+            media.audio.len() + position + 1,
+            file.label()
+        );
     }
 
     println!();
