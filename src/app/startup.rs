@@ -32,7 +32,7 @@ impl App {
             && scale != 1.0
             && let Some(monitor) = monitor.as_ref()
         {
-            eprintln!(
+            crate::log!(
                 "Interface scaled {scale}x for a {}px-tall display. \
                  Set ui_scale in the config file to override.",
                 monitor.geometry().height()
@@ -325,7 +325,7 @@ impl App {
                         // Reported rather than obeyed silently, the same way a
                         // subtitle that cannot be resolved is: playing the
                         // wrong track is not what was asked for either.
-                        Err(e) => eprintln!("{e}"),
+                        Err(e) => crate::log!("{e}"),
                     }
                 };
             // A spec naming a file that exists is an audio file to play on
@@ -377,7 +377,7 @@ impl App {
                     // Reported rather than obeyed silently: playing with
                     // the wrong subtitles, or none, is not what was asked
                     // for either way.
-                    Err(e) => eprintln!("{e}"),
+                    Err(e) => crate::log!("{e}"),
                 }
             }
             // An audio file named on the command line arrives after the media

@@ -348,7 +348,7 @@ impl App {
             match result.and_then(|media| app.apply_media(&source, media)) {
                 Ok(()) => app.show_menu(),
                 Err(e) => {
-                    eprintln!("Couldn't read {}: {e}", source.uri());
+                    crate::log!("Couldn't read {}: {e}", source.uri());
                     app.forget_file();
                     app.show_source_error(&source, &e, false);
                 }

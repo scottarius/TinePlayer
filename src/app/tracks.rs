@@ -29,7 +29,7 @@ impl App {
             return;
         };
         if let Err(reason) = playback.cycle_audio(role) {
-            eprintln!("Cannot step the {role} audio: {reason}");
+            crate::log!("Cannot step the {role} audio: {reason}");
         }
         self.wake_controls();
     }
@@ -191,7 +191,7 @@ impl App {
             return;
         };
         if let Err(reason) = playback.set_audio(role, wanted) {
-            eprintln!("Cannot change the {role} soundtrack: {reason}");
+            crate::log!("Cannot change the {role} soundtrack: {reason}");
         }
         // After the switch, not before: what the sink should be held back by
         // depends on what it is now playing, and only the routing knows that.
@@ -299,12 +299,12 @@ impl App {
             // Nothing is recorded either, so the mark stays on whatever is
             // still playing - which is what says the choice did not take.
             Err(e) => {
-                eprintln!("{e}");
+                crate::log!("{e}");
                 return;
             }
         };
         if let Err(e) = playback.set_subtitle(located.as_ref()) {
-            eprintln!("{e}");
+            crate::log!("{e}");
             return;
         }
 

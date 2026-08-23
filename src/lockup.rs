@@ -101,7 +101,7 @@ impl Lockup {
             }
             // Said out loud: a logo that silently fails to appear looks like a
             // screen that has not finished drawing.
-            Err(e) => eprintln!("Could not load the application logo: {e}"),
+            Err(e) => crate::log!("Could not load the application logo: {e}"),
         }
         lockup.set_size_request(
             width.round().max(1.0) as i32,

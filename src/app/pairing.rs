@@ -508,7 +508,7 @@ impl App {
                     // asked from: a panel arriving over a film minutes later
                     // would be a worse fault than the one it reports.
                     Ok(Err(e)) => {
-                        eprintln!("Jellyfin was not told about the disconnection: {e}");
+                        crate::log!("Jellyfin was not told about the disconnection: {e}");
                         if app.showing_jellyfin_pane() {
                             app.jellyfin_notice(
                                 &tr!("Disconnected Here Only"),
@@ -536,7 +536,7 @@ impl App {
         // everybody's phone.
         *self.jellyfin_session.borrow_mut() = None;
         if let Err(e) = crate::jellyfin::remove() {
-            eprintln!("Couldn't remove the Jellyfin pairing: {e}");
+            crate::log!("Couldn't remove the Jellyfin pairing: {e}");
         }
         *self.jellyfin_pairing.borrow_mut() = None;
         self.return_to_jellyfin_settings();
@@ -631,7 +631,7 @@ impl App {
             &tr!("Clear"),
             move || {
                 if let Err(e) = crate::config::clear_all_resume() {
-                    eprintln!("{e}");
+                    crate::log!("{e}");
                 }
                 // The loaded file keeps its choices for this session; only
                 // what was written down is gone.

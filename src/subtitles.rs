@@ -257,7 +257,7 @@ fn external(video: &Path) -> Vec<Subtitle> {
     // not a film folder with extras in it, it is something else that a
     // subtitle chooser should not try to be a file browser for.
     if loose.len() > MAX_LOOSE {
-        eprintln!(
+        crate::log!(
             "{} unnamed subtitle files beside the video; offering the first {} by name",
             loose.len(),
             MAX_LOOSE

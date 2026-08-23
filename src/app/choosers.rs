@@ -703,7 +703,7 @@ impl App {
                     }
                     config.capture_display_session();
                     if let Err(e) = config.save() {
-                        eprintln!("Failed to save config: {e}");
+                        crate::log!("Failed to save config: {e}");
                     }
                 }
 

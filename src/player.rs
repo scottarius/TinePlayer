@@ -301,7 +301,7 @@ impl Playback {
                         on_ended(Ended::Finished);
                     }
                     MessageView::Error(err) => {
-                        eprintln!("Error: {} ({:?})", err.error(), err.debug());
+                        crate::log!("Error: {} ({:?})", err.error(), err.debug());
                         on_ended(Ended::Failed);
                     }
                     // Posted when a flushing seek has finished settling.
@@ -350,7 +350,7 @@ impl Playback {
                             .collect();
                     }
                     MessageView::Warning(warn) => {
-                        eprintln!(
+                        crate::log!(
                             "Warning [{}]: {} ({:?})",
                             msg.src().map(|s| s.name().to_string()).unwrap_or_default(),
                             warn.error(),
@@ -701,7 +701,7 @@ impl Playback {
             let taken = source.send_event(seek);
             crate::pipeline::trace(format_args!("seek: {name} to {target} -> taken={taken}"));
             if !taken {
-                eprintln!("Failed to seek the external audio source {name}");
+                crate::log!("Failed to seek the external audio source {name}");
             }
         }
     }
@@ -729,7 +729,7 @@ impl Playback {
             gst::ClockTime::NONE,
         );
         if !source.send_event(seek) {
-            eprintln!("Failed to seek the subtitle source");
+            crate::log!("Failed to seek the subtitle source");
         }
     }
 
@@ -794,7 +794,7 @@ impl Playback {
         match result {
             Ok(()) => self.seeking.set(true),
             Err(e) => {
-                eprintln!("Seek failed: {e}");
+                crate::log!("Seek failed: {e}");
                 self.seek_target.set(None);
             }
         }

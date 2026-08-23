@@ -106,7 +106,7 @@ impl App {
         match crate::probe::probe_media(source) {
             Ok(media) => self.apply_media(source, media),
             Err(e) => {
-                eprintln!("Couldn't read {}: {e}", source.uri());
+                crate::log!("Couldn't read {}: {e}", source.uri());
                 self.forget_file();
                 Err(e)
             }
@@ -161,7 +161,7 @@ impl App {
         {
             let ours = media.duration_ns / 1_000_000_000;
             if ours.abs_diff(runtime) > 5 {
-                eprintln!(
+                crate::log!(
                     "Kodi reports a {runtime}s item but this source is {ours}s;                      ignoring what it said and keeping local positions."
                 );
                 *self.kodi_item.borrow_mut() = None;

@@ -93,12 +93,12 @@ pub fn discover(wait: std::time::Duration) -> Vec<Found> {
     let socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
         Ok(socket) => socket,
         Err(e) => {
-            eprintln!("Couldn't open a socket to look for Jellyfin servers: {e}");
+            crate::log!("Couldn't open a socket to look for Jellyfin servers: {e}");
             return Vec::new();
         }
     };
     if let Err(e) = socket.set_broadcast(true) {
-        eprintln!("Couldn't broadcast to look for Jellyfin servers: {e}");
+        crate::log!("Couldn't broadcast to look for Jellyfin servers: {e}");
         return Vec::new();
     }
     // Short, so the loop below notices the deadline rather than sitting in a
@@ -140,7 +140,7 @@ fn broadcast_addresses() -> Vec<std::net::Ipv4Addr> {
     let interfaces = match if_addrs::get_if_addrs() {
         Ok(interfaces) => interfaces,
         Err(e) => {
-            eprintln!("Couldn't list this machine's networks: {e}");
+            crate::log!("Couldn't list this machine's networks: {e}");
             return addresses;
         }
     };
@@ -327,7 +327,7 @@ pub fn load() -> Option<Pairing> {
     match serde_json::from_str(&text) {
         Ok(pairing) => Some(pairing),
         Err(e) => {
-            eprintln!("Ignoring an unreadable Jellyfin pairing: {e}");
+            crate::log!("Ignoring an unreadable Jellyfin pairing: {e}");
             None
         }
     }
@@ -1512,7 +1512,7 @@ pub fn connect(pairing: &Pairing, handler: impl Fn(Command) + 'static) -> Option
                         return;
                     }
                     Err(Error::Failed(why)) => {
-                        eprintln!("Jellyfin connection lost: {why}");
+                        crate::log!("Jellyfin connection lost: {why}");
                     }
                     Ok(()) => {}
                 }

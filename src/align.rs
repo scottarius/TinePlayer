@@ -99,7 +99,7 @@ pub fn decode_window(
                 return;
             };
             if let Err(e) = pad.link(&target) {
-                eprintln!("Failed to open {} for analysis: {e}", pad.name());
+                crate::log!("Failed to open {} for analysis: {e}", pad.name());
             }
         });
     }
@@ -120,7 +120,7 @@ pub fn decode_window(
                 return;
             }
             if let Err(e) = pad.link(&target) {
-                eprintln!("Failed to read a stream for analysis: {e}");
+                crate::log!("Failed to read a stream for analysis: {e}");
             }
         });
     }

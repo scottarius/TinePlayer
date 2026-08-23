@@ -22,7 +22,7 @@ pub(super) fn install_styles() -> gtk::CssProvider {
     // styling decision. Saying so on stderr costs nothing and turns "the dot
     // is missing" into a sentence naming the line.
     provider.connect_parsing_error(|_, section, error| {
-        eprintln!("Stylesheet rejected at {}: {error}", section.to_str());
+        crate::log!("Stylesheet rejected at {}: {error}", section.to_str());
     });
 
     if let Some(display) = gdk::Display::default() {

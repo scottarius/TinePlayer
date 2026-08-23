@@ -227,7 +227,7 @@ impl App {
         let located = match self.locate_subtitle(&path, subtitle.as_ref()) {
             Ok(located) => located,
             Err(e) => {
-                eprintln!("{e}");
+                crate::log!("{e}");
                 None
             }
         };
