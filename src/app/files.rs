@@ -408,6 +408,57 @@ impl App {
             chosen_subtitle,
         );
 
+        // **Why nothing was chosen, when something might have been.** A
+        // subtitle preference that finds no match is silent by design - there
+        // is nothing to show and nothing went wrong - which makes it the one
+        // outcome a report cannot explain. Asked for on 2026-08-24 after a
+        // film with three tracks titled "Forced" selected none of them, and
+        // the log said only `subtitle  none`.
+        //
+        // Printed only in that case, and only when the file had subtitles to
+        // offer: what was being looked for, and what was on the list with the
+        // two facts the search actually uses - whether it reads as forced, and
+        // the label the language is matched against.
+        if self.subtitle.borrow().is_none() {
+            // The language actually going to an output, which is what the
+            // preference matches against rather than the setting.
+            let heard = |index: Option<u32>| {
+                index.and_then(|index| {
+                    tracks
+                        .iter()
+                        .find(|track| track.index == index)
+                        .map(|track| track.language.clone())
+                })
+            };
+            let options = self.subtitle_options.borrow();
+            if !options.is_empty() {
+                let rows: String = options
+                    .iter()
+                    .map(|option| {
+                        format!(
+                            "
+    {} forced={}  {}",
+                            match option.is_forced() {
+                                true => "*",
+                                false => " ",
+                            },
+                            option.is_forced(),
+                            option.label(),
+                        )
+                    })
+                    .collect();
+                log::info!(
+                    "No subtitle matched. Looking for {:?} against primary {:?},                      secondary {:?}. Offered:{}",
+                    subtitle_language
+                        .as_deref()
+                        .unwrap_or(crate::subtitles::DEFAULT_MODE),
+                    heard(*self.primary_track.borrow()),
+                    heard(*self.secondary_track.borrow()),
+                    rows,
+                );
+            }
+        }
+
         *self.tracks.borrow_mut() = tracks;
         // Separate soundtracks beside the video, found by the same convention
         // and the same code as the subtitle files above. Only for a local
