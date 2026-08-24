@@ -132,20 +132,34 @@ secondary_offset_ms: 0
 primary_offset_on: false
 secondary_offset_on: false
 
-# How a subtitle is chosen for a video you have not picked one for. Either one
-# of the automatic modes, or a language code to always prefer that language:
+# Which subtitles to choose for a video you have not picked one for.
 #
-#   none              nothing
-#   primary_forced    forced subtitles, preferring the primary output's language
-#   primary           full subtitles in the primary output's language
-#   secondary_forced  forced subtitles, preferring the secondary output's language
-#   secondary         full subtitles in the secondary output's language
+#   none          nothing
+#   forced_only   forced subtitles, and nothing else if there are none
+#   forced        forced if there are any, else full, else SDH
+#   full          full if there are any, else SDH, else forced
+#   sdh           SDH if there are any, else full, else forced
 #
-# The forced modes fall back to the other output's language; the full modes
-# do not.
+# "Only" means only: a full track would show the dialogue somebody chose not to
+# have on screen, so it is not offered instead. Use `forced` where missing the
+# foreign lines entirely would be worse.
 #
-# Defaults to primary_forced. A choice made for a video always wins over this.
-subtitle_language: primary_forced
+# Defaults to forced_only. A choice made for a video always wins over this.
+subtitle_kind: forced_only
+
+# Whose language to choose them in. Either one of the outputs, or a language
+# code to always prefer that language:
+#
+#   first_only    the first output's language, and no other
+#   second_only   the second output's language, and no other
+#   first         the first output's language, then the second
+#   second        the second output's language, then the first
+#
+# The language followed is the one actually playing on that output. Everything
+# acceptable is tried in the first language before the second is considered.
+#
+# Defaults to first.
+subtitle_language: first
 
 
 # --- Subtitles --------------------------------------------------------------

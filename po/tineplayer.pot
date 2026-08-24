@@ -34,48 +34,48 @@ msgstr ""
 msgid "Play Video Immediately"
 msgstr ""
 
-#: src/app.rs:665 src/shortcuts.rs:104
+#: src/app.rs:668 src/shortcuts.rs:104
 msgid "General"
 msgstr ""
 
-#: src/app.rs:666
+#: src/app.rs:669
 msgid "Outputs"
 msgstr ""
 
-#: src/app.rs:667
+#: src/app.rs:670
 msgctxt "settings category"
 msgid "Subtitles"
 msgstr ""
 
-#: src/app.rs:671
+#: src/app.rs:674
 msgid "About"
 msgstr ""
 
-#: src/app.rs:694
+#: src/app.rs:697
 msgid "INTERFACE"
 msgstr ""
 
-#: src/app.rs:698
+#: src/app.rs:701
 msgid "LIBRARY"
 msgstr ""
 
-#: src/app.rs:703
+#: src/app.rs:706
 msgid "RESUMING"
 msgstr ""
 
-#: src/app.rs:713
+#: src/app.rs:716
 msgid "UPDATES"
 msgstr ""
 
-#: src/app.rs:739
+#: src/app.rs:743
 msgid "KODI"
 msgstr ""
 
-#: src/app.rs:759
+#: src/app.rs:763
 msgid "OTHER"
 msgstr ""
 
-#: src/app.rs:770 src/app.rs:773
+#: src/app.rs:774 src/app.rs:777
 msgid "JELLYFIN"
 msgstr ""
 
@@ -92,7 +92,7 @@ msgstr ""
 msgid "your user data folder"
 msgstr ""
 
-#: src/app/about.rs:184 src/app/settings.rs:47
+#: src/app/about.rs:184 src/app/settings.rs:48
 msgid "Third-Party Notices"
 msgstr ""
 
@@ -205,7 +205,7 @@ msgstr ""
 msgid "Searching for outputs..."
 msgstr ""
 
-#: src/app/choosers.rs:110 src/app/choosers.rs:664 src/app/choosers.rs:671
+#: src/app/choosers.rs:110 src/app/choosers.rs:684 src/app/choosers.rs:691
 #: src/app/outputs.rs:22
 msgctxt "subtitle track"
 msgid "None"
@@ -225,15 +225,15 @@ msgstr ""
 msgid "AUDIO FILES"
 msgstr ""
 
-#: src/app/choosers.rs:212 src/app/settings.rs:73
+#: src/app/choosers.rs:212 src/app/settings.rs:74
 msgid "First track"
 msgstr ""
 
-#: src/app/choosers.rs:214 src/app/settings.rs:74
+#: src/app/choosers.rs:214 src/app/settings.rs:75
 msgid "Second track"
 msgstr ""
 
-#: src/app/choosers.rs:80 src/app/menu.rs:172 src/app/settings.rs:68
+#: src/app/choosers.rs:80 src/app/menu.rs:172 src/app/settings.rs:69
 msgctxt "audio output device"
 msgid "None"
 msgstr ""
@@ -266,7 +266,7 @@ msgstr ""
 msgid "All files"
 msgstr ""
 
-#: src/app/files.rs:524
+#: src/app/files.rs:528
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -274,7 +274,7 @@ msgid ""
 "{reason}"
 msgstr ""
 
-#: src/app/files.rs:534
+#: src/app/files.rs:538
 msgid ""
 "\n"
 "\n"
@@ -355,7 +355,7 @@ msgid "Toggle fullscreen"
 msgstr ""
 
 #: src/app/media_page.rs:1024 src/app/media_page.rs:1025
-#: src/app/settings.rs:458
+#: src/app/settings.rs:471
 msgid "Settings"
 msgstr ""
 
@@ -405,7 +405,7 @@ msgid "Enter URL"
 msgstr ""
 
 #: src/app/media_page.rs:785 src/app/media_page.rs:790 src/app/pairing.rs:75
-#: src/app/settings.rs:40
+#: src/app/settings.rs:41
 msgid "Connect to Jellyfin"
 msgstr ""
 
@@ -421,7 +421,7 @@ msgstr ""
 msgid "Close the player"
 msgstr ""
 
-#: src/app/menu.rs:139 src/app.rs:717
+#: src/app/menu.rs:139 src/app.rs:720
 msgid "FIRST OUTPUT"
 msgstr ""
 
@@ -429,7 +429,7 @@ msgstr ""
 msgid "Output Device"
 msgstr ""
 
-#: src/app/menu.rs:145 src/app/settings.rs:67
+#: src/app/menu.rs:145 src/app/settings.rs:68
 msgctxt "audio output device"
 msgid "Not set"
 msgstr ""
@@ -438,7 +438,7 @@ msgstr ""
 msgid "Audio Track"
 msgstr ""
 
-#: src/app/menu.rs:166 src/app.rs:722
+#: src/app/menu.rs:166 src/app.rs:725
 msgid "SECOND OUTPUT"
 msgstr ""
 
@@ -582,7 +582,7 @@ msgstr ""
 msgid "Interface Size"
 msgstr ""
 
-#: src/app/settings.rs:112
+#: src/app/settings.rs:116
 msgid "Not supported"
 msgstr ""
 
@@ -590,7 +590,7 @@ msgstr ""
 msgid "Interface Language"
 msgstr ""
 
-#: src/app/settings.rs:125
+#: src/app/settings.rs:129
 msgid "Action needed"
 msgstr ""
 
@@ -598,15 +598,15 @@ msgstr ""
 msgid "Navigation Sounds"
 msgstr ""
 
-#: src/app/settings.rs:1325
+#: src/app/settings.rs:1338
 msgid "Current Version: v{version}"
 msgstr ""
 
-#: src/app/settings.rs:1341
+#: src/app/settings.rs:1354
 msgid "Update available: v{version}"
 msgstr ""
 
-#: src/app/settings.rs:1346
+#: src/app/settings.rs:1359
 msgid "Up to date"
 msgstr ""
 
@@ -626,44 +626,40 @@ msgstr ""
 msgid "Remember Where You Left Off"
 msgstr ""
 
-#: src/app/settings.rs:173
+#: src/app/settings.rs:177
 msgid "Find and read metadata beside video files like .nfo and images often provided by media libraries."
-msgstr ""
-
-#: src/app/settings.rs:178
-msgid "If backdrop artwork is found, display it behind the video details."
 msgstr ""
 
 #: src/app/settings.rs:18
 msgid "Resume Threshold"
 msgstr ""
 
-#: src/app/settings.rs:181
+#: src/app/settings.rs:182
+msgid "If backdrop artwork is found, display it behind the video details."
+msgstr ""
+
+#: src/app/settings.rs:185
 msgid "Save watch progress and track choices for every video."
 msgstr ""
 
-#: src/app/settings.rs:184
+#: src/app/settings.rs:188
 msgid "How much of a video should be viewed before offering the choice to resume a previously watched video."
-msgstr ""
-
-#: src/app/settings.rs:189
-msgid "How much of a video should be viewed to consider it as watched."
 msgstr ""
 
 #: src/app/settings.rs:19
 msgid "Watched Threshold"
 msgstr ""
 
-#: src/app/settings.rs:191
+#: src/app/settings.rs:193
+msgid "How much of a video should be viewed to consider it as watched."
+msgstr ""
+
+#: src/app/settings.rs:195
 msgid "Attempt to auto-select a language track for the output."
 msgstr ""
 
-#: src/app/settings.rs:193
+#: src/app/settings.rs:197
 msgid "Attempt to auto-select an Audio Description track for the output."
-msgstr ""
-
-#: src/app/settings.rs:196
-msgid "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
 msgstr ""
 
 #: src/app/settings.rs:20
@@ -671,23 +667,31 @@ msgid "Check for updates"
 msgstr ""
 
 #: src/app/settings.rs:200
-msgid "Attempt to auto-select subtitles when available."
-msgstr ""
-
-#: src/app/settings.rs:202
-msgid "Delete saved watch progress and track choices."
+msgid "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
 msgstr ""
 
 #: src/app/settings.rs:205
-msgid "This Kodi installation is sandboxed and needs permission to start TinePlayer."
+msgid "Subtitle auto-select choice when available. Preferred choices will fall back to any other available type."
 msgstr ""
 
-#: src/app/settings.rs:211
-msgid "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
+#: src/app/settings.rs:210
+msgid "Language choice when auto-selecting, or match the audio track's language on an output."
+msgstr ""
+
+#: src/app/settings.rs:215
+msgid "Delete saved watch progress and track choices."
+msgstr ""
+
+#: src/app/settings.rs:218
+msgid "This Kodi installation is sandboxed and needs permission to start TinePlayer."
 msgstr ""
 
 #: src/app/settings.rs:22
 msgid "Clear Saved Video Data"
+msgstr ""
+
+#: src/app/settings.rs:224
+msgid "For a Kodi installation in a non-standard location, such as a portable install. Its user data folder is the one holding guisettings.xml, not the folder Kodi itself is installed in."
 msgstr ""
 
 #. "Quick Connect" is Jellyfin's own name for this feature. Use whatever
@@ -695,16 +699,16 @@ msgstr ""
 #. translating it afresh - this text sends somebody to find it in their own
 #. Jellyfin app, and a different wording sends them looking for something
 #. that is not there.
-#: src/app/settings.rs:225
+#: src/app/settings.rs:238
 msgid "Find and connect to a Jellyfin server using Quick Connect."
-msgstr ""
-
-#: src/app/settings.rs:228
-msgid "Removes the access token stored on this machine and signs this device out of the server."
 msgstr ""
 
 #: src/app/settings.rs:24
 msgid "Preferred Language"
+msgstr ""
+
+#: src/app/settings.rs:241
+msgid "Removes the access token stored on this machine and signs this device out of the server."
 msgstr ""
 
 #: src/app/settings.rs:25
@@ -720,62 +724,66 @@ msgid "Audio Sync"
 msgstr ""
 
 #: src/app/settings.rs:28
-msgid "Subtitle Preference"
+msgid "Subtitle Type"
 msgstr ""
 
 #: src/app/settings.rs:29
-msgid "Subtitle Size"
+msgid "Subtitle Language"
 msgstr ""
 
 #: src/app/settings.rs:30
-msgid "Subtitle Font"
+msgid "Subtitle Size"
 msgstr ""
 
 #: src/app/settings.rs:31
-msgid "Configure As"
+msgid "Subtitle Font"
 msgstr ""
 
 #: src/app/settings.rs:32
-msgid "When Kodi Opens TinePlayer"
+msgid "Configure As"
 msgstr ""
 
 #: src/app/settings.rs:33
-msgid "Sandbox Permission"
+msgid "When Kodi Opens TinePlayer"
 msgstr ""
 
 #: src/app/settings.rs:34
+msgid "Sandbox Permission"
+msgstr ""
+
+#: src/app/settings.rs:35
 msgid "No Kodi installations were found on this system"
 msgstr ""
 
-#: src/app/settings.rs:367
+#: src/app/settings.rs:380
 msgid "Connected to {server} as {who}."
 msgstr ""
 
-#: src/app/settings.rs:373
+#: src/app/settings.rs:386
 msgid "Connected to {server}."
 msgstr ""
 
-#: src/app/settings.rs:379
+#: src/app/settings.rs:392
 msgid "Connect a Jellyfin server to cast videos to TinePlayer from the Jellyfin app in a browser, phone, or tablet."
 msgstr ""
 
-#: src/app/settings.rs:383
+#: src/app/settings.rs:396
 msgid "{connected} Videos can be cast to TinePlayer from a Jellyfin app in a browser, phone, or tablet."
 msgstr ""
 
-#: src/app/settings.rs:39
+#: src/app/settings.rs:40
 msgid "Add User Data Folder"
 msgstr ""
 
-#: src/app/settings.rs:409
+#: src/app/settings.rs:422
 msgid "This installation's playercorefactory.xml will be modified. Restart Kodi for changes to take effect."
 msgstr ""
 
-#: src/app/settings.rs:44
+#: src/app/settings.rs:45
 msgid "Disconnect from {server}"
 msgstr ""
 
-#: src/app/settings.rs:45
+#: src/app/settings.rs:46
 msgid "Disconnect"
 msgstr ""
 
@@ -811,7 +819,7 @@ msgstr ""
 msgid "Nothing here"
 msgstr ""
 
-#: src/config.rs:490
+#: src/config.rs:544
 msgid ""
 "Couldn't read your settings from {path}.\n"
 "\n"
@@ -820,14 +828,14 @@ msgid ""
 "TinePlayer has started with default settings."
 msgstr ""
 
-#: src/config.rs:497
+#: src/config.rs:551
 msgid ""
 "\n"
 "\n"
 "The file has been kept as {path}."
 msgstr ""
 
-#: src/config.rs:503
+#: src/config.rs:557
 msgid ""
 "\n"
 "\n"
@@ -943,22 +951,22 @@ msgstr ""
 msgid "Remove configuration"
 msgstr ""
 
-#: src/label.rs:65
+#: src/label.rs:100
+msgid "Commentary"
+msgstr ""
+
+#: src/label.rs:97
 msgid "Audio Description"
 msgstr ""
 
-#: src/label.rs:66
+#: src/label.rs:98
 msgctxt "subtitle type"
 msgid "SDH"
 msgstr ""
 
-#: src/label.rs:67
+#: src/label.rs:99
 msgctxt "subtitle type"
 msgid "Forced"
-msgstr ""
-
-#: src/label.rs:68
-msgid "Commentary"
 msgstr ""
 
 #: src/metadata.rs:116
@@ -1199,27 +1207,43 @@ msgstr ""
 msgid "Back, or close menus/controls"
 msgstr ""
 
-#: src/subtitles.rs:1136
+#: src/subtitles.rs:1231
 msgid "Subtitle {number}"
 msgstr ""
 
-#: src/subtitles.rs:341
+#: src/subtitles.rs:366
 msgctxt "subtitle preference"
 msgid "None"
 msgstr ""
 
-#: src/subtitles.rs:342
-msgid "Forced (Prefer First Output Language)"
+#: src/subtitles.rs:370
+msgid "Forced Only"
 msgstr ""
 
-#: src/subtitles.rs:343
-msgid "Forced (Prefer Second Output Language)"
+#: src/subtitles.rs:371
+msgid "Prefer Forced"
 msgstr ""
 
-#: src/subtitles.rs:344
-msgid "First Output Language"
+#: src/subtitles.rs:372
+msgid "Prefer Full"
 msgstr ""
 
-#: src/subtitles.rs:345
-msgid "Second Output Language"
+#: src/subtitles.rs:373
+msgid "Prefer SDH"
+msgstr ""
+
+#: src/subtitles.rs:381
+msgid "First Output Only"
+msgstr ""
+
+#: src/subtitles.rs:382
+msgid "Second Output Only"
+msgstr ""
+
+#: src/subtitles.rs:383
+msgid "Prefer First Output"
+msgstr ""
+
+#: src/subtitles.rs:384
+msgid "Prefer Second Output"
 msgstr ""

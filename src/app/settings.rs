@@ -203,12 +203,12 @@ impl App {
             }
             Item::SubtitlePreference => {
                 tr!(
-                    "Subtitle auto-select choice when available. Preferred choice will fallback to any other."
+                    "Subtitle auto-select choice when available. Preferred choices will fall back to any other available type."
                 )
             }
             Item::SubtitleLanguagePreference => {
                 tr!(
-                    "Language choice when auto-selecting, output matches the selected audio track's language."
+                    "Language choice when auto-selecting, or match the audio track's language on an output."
                 )
             }
             Item::ClearData => {

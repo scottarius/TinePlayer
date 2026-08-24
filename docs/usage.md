@@ -302,7 +302,8 @@ options.
 
 | Given                              | Means                                                                                            |
 |------------------------------------|--------------------------------------------------------------------------------------------------|
-| `primary_forced`, `primary`, `secondary_forced`, `secondary` | the same as the [Subtitle Preference](configuration.md#choosing-subtitles-automatically) setting |
+| `forced_only`, `forced`, `full`, `sdh` | the same as the [Subtitle Type](configuration.md#subtitle_kind---which-type) setting, with the language left at its own setting's default |
+| `first_only`, `second_only`, `first`, `second` | the same as the [Subtitle Language](configuration.md#subtitle_language---whose-language) setting, with the type left at its default |
 | `3`                                | the third entry `--list-tracks` prints                                                           |
 | `Film (2019).ru.hi.srt`            | that file, beside the video                                                                      |
 | `en.hi`                            | the entry with that label                                                                        |

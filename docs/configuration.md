@@ -27,7 +27,8 @@ It lives in the per-user config directory:
 | Primary Language Preference                              | `primary_language`   | Unset       | Preferred primary [language code](#languages) <br/>If unset defaults to the first track                                                        |
 | [Secondary Audio Device](#output-devices)                | `secondary_sink`     | Unset       | Second output device name <br/>`null` to play through primary only                                                                             |
 | Secondary Language Preference                            | `secondary_language` | Unset       | Preferred secondary [language code](#languages) <br/>If unset defaults to the second track                                                     |
-| [Subtitle Preference](#choosing-subtitles-automatically) | `subtitle_language`  | `primary_forced` | How a subtitle is chosen automatically: `none`, `primary_forced`, `primary`, `secondary_forced`, `secondary`, or a [language code](#languages) |
+| [Subtitle Type](#subtitle_kind---which-type) | `subtitle_kind` | `forced_only` | Which subtitles to choose automatically: `none`, `forced_only`, `forced`, `full`, `sdh` |
+| [Subtitle Language](#subtitle_language---whose-language) | `subtitle_language` | `first` | Whose language to choose them in: `first_only`, `second_only`, `first`, `second`, or a [language code](#languages) |
 | Subtitle Size                                            | `subtitle_size`      | `12`        | Point size against the video's resolution, not the screen's, from `8` to `24`                                                                  |
 | [Subtitle Font](#subtitle-fonts)                         | `subtitle_font`      | `Sans Bold` | Font Family and style name                                                                                                                     |
 | Remember Where You Left Off                              | `remember_positions` | `true`      | Whether positions and track choices are written to `positions.json` at all <br/>Off keeps what is already saved and stops adding to it |
@@ -163,19 +164,47 @@ already have, and how to title the track so it is picked up, see
 
 ## Choosing Subtitles Automatically
 
-`subtitle_language` decides what to show for a video you have not yet picked
-subtitles for yourself. A choice you make for a video is remembered and always
-wins. For choosing subtitles while watching, and which files are offered
-alongside the embedded tracks, see [Subtitles](usage.md#subtitles).
+Two settings decide what to show for a video you have not yet picked subtitles
+for yourself: **which type**, and **whose language**. A choice you make for a
+video is remembered and always wins. For choosing subtitles while watching, and
+which files are offered alongside the embedded tracks, see
+[Subtitles](usage.md#subtitles).
 
-| Value                       | Chooses                                                         |
-|-----------------------------|-----------------------------------------------------------------|
-| `none`                      | Nothing                                                         |
-| `primary_forced`            | Forced only, preferring the primary output's language (default) |
-| `primary`                   | Full subtitles in the primary output's language                 |
-| `secondary_forced`          | Forced only, preferring the secondary output's language         |
-| `secondary`                 | Full subtitles in the secondary output's language               |
-| [language code](#languages) | Full subtitles in a specific language                          |
+### `subtitle_kind` - which type
+
+| Value         | Chooses                                                    |
+|---------------|------------------------------------------------------------|
+| `none`        | Nothing                                                    |
+| `forced_only` | Forced subtitles, and nothing else if there are none (default) |
+| `forced`      | Forced if there are any, otherwise full, otherwise SDH     |
+| `full`        | Full if there are any, otherwise SDH, otherwise forced     |
+| `sdh`         | SDH if there are any, otherwise full, otherwise forced     |
+
+**"Only" means only.** Forced subtitles carry the signs and the lines spoken in
+another language, so they suit somebody who follows the dialogue and wants no
+more than that - and for them a full track would be worse than nothing. But a
+film with foreign speech and no forced track leaves that person with nothing at
+all, which is what `forced` is for.
+
+The order each one falls back in is not arbitrary. Forced carries signs, full
+adds the dialogue, SDH adds the sound - so after the type you asked for, the
+next one tried is always the one that changes least about what appears on
+screen. Commentary tracks are never chosen automatically; pick one from the
+subtitle menu while watching.
+
+### `subtitle_language` - whose language
+
+| Value                       | Chooses                                          |
+|-----------------------------|--------------------------------------------------|
+| `first_only`                | The first output's language, and no other        |
+| `second_only`               | The second output's language, and no other       |
+| `first`                     | The first output's language, then the second (default) |
+| `second`                    | The second output's language, then the first     |
+| [language code](#languages) | One particular language                          |
+
+Everything acceptable is tried in the first language before the second is
+considered at all, because a subtitle in a language you cannot read is no use
+whichever type it is.
 
 The language followed is the one actually playing on that output, not the
 Primary or Secondary Language Preference, so it stays right even when a
