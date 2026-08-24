@@ -935,7 +935,7 @@ msgstr "Заглушить все выходы"
 msgid "Volume, all outputs"
 msgstr "Громкость, все выходы"
 
-#: src/i18n.rs:740
+#: src/i18n.rs:754
 msgid "Use the system language"
 msgstr "Использовать язык системы"
 

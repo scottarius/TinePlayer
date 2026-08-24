@@ -894,7 +894,7 @@ msgstr ""
 msgid "Volume, all outputs"
 msgstr ""
 
-#: src/i18n.rs:740
+#: src/i18n.rs:754
 msgid "Use the system language"
 msgstr ""
 
