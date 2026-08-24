@@ -978,8 +978,38 @@ pub struct TrackChoice {
     pub secondary: Option<u32>,
     /// Independent of the audio pair: subtitles may be a third language
     /// again, or the same as one of them.
-    #[serde(default)]
+    /// **Written only when somebody picked it from a dropdown.** An automatic
+    /// choice belongs to the session and never reaches this file: the
+    /// preference is written in terms of what the outputs are playing, so it
+    /// answers afresh each time a video is opened, and a copy on disk could
+    /// only ever be a stale version of that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<crate::subtitles::SubtitleChoice>,
+    /// Whether a subtitle was picked by hand, which is the only reason this
+    /// file has anything to say about one.
+    ///
+    /// Carried separately because **"off" is a choice too**: somebody who
+    /// turns subtitles off from the dropdown has said something, and their
+    /// `None` has to be told apart from the `None` of a preference that
+    /// matched nothing. Both leave [`Self::subtitle`] absent; only the first
+    /// sets this.
+    ///
+    /// **The difference is what stops "nothing" becoming permanent.** A video
+    /// whose preference found no match is played with no subtitle, and that
+    /// was written here as though it had been chosen - so the preference never
+    /// ran for that video again, and turning on a second output in the
+    /// language it would have matched changed nothing. Reported 2026-08-24.
+    ///
+    /// Only a hand-picked choice is authoritative on reload. An automatic one
+    /// is worked out afresh, which is the whole point of a preference: it is
+    /// written in terms of what the outputs are playing, and that can change
+    /// between one viewing and the next.
+    ///
+    /// Absent in every entry written before this existed, which `default`
+    /// reads as `false` - so an old saved "none" stops being sticky rather
+    /// than staying so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subtitle_by_hand: bool,
     /// A separate audio file chosen for an output, which stands in place of
     /// any track inside the video.
     ///
@@ -1152,22 +1182,49 @@ pub fn save_alignment(key: &str, audio: &Path, millis: Option<f64>) {
     });
 }
 
+impl TrackChoice {
+    /// What is worth writing down, which is not quite what is playing.
+    ///
+    /// The one place the "only a hand-picked subtitle is stored" rule lives,
+    /// so that no caller can write around it and a test can exercise the real
+    /// thing rather than a copy of the reasoning.
+    pub fn to_store(
+        primary: Option<u32>,
+        secondary: Option<u32>,
+        subtitle: Option<crate::subtitles::SubtitleChoice>,
+        subtitle_by_hand: bool,
+        primary_file: Option<std::path::PathBuf>,
+        secondary_file: Option<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            primary,
+            secondary,
+            subtitle: subtitle.filter(|_| subtitle_by_hand),
+            subtitle_by_hand,
+            primary_file,
+            secondary_file,
+        }
+    }
+}
+
 pub fn save_tracks(
     key: &str,
     primary: Option<u32>,
     secondary: Option<u32>,
     subtitle: Option<crate::subtitles::SubtitleChoice>,
+    subtitle_by_hand: bool,
     primary_file: Option<std::path::PathBuf>,
     secondary_file: Option<std::path::PathBuf>,
 ) {
     update(key, |entry| {
-        entry.tracks = Some(TrackChoice {
+        entry.tracks = Some(TrackChoice::to_store(
             primary,
             secondary,
             subtitle,
+            subtitle_by_hand,
             primary_file,
             secondary_file,
-        });
+        ));
     });
 }
 
@@ -1440,5 +1497,50 @@ mod migration_tests {
         config.migrate_subtitles();
         assert_eq!(config.subtitle_kind.as_deref(), Some("sdh"));
         assert_eq!(config.subtitle_language.as_deref(), Some("primary_forced"));
+    }
+}
+
+#[cfg(test)]
+mod subtitle_stickiness {
+    use super::TrackChoice;
+    use crate::subtitles::SubtitleChoice;
+
+    fn choice(subtitle: Option<SubtitleChoice>, by_hand: bool) -> String {
+        let stored = TrackChoice::to_store(Some(0), Some(1), subtitle, by_hand, None, None);
+        serde_json::to_string(&stored).unwrap()
+    }
+
+    /// The rule: an automatic choice never reaches the file, whether it found
+    /// something or not.
+    #[test]
+    fn an_automatic_choice_is_never_written() {
+        for found in [None, Some(SubtitleChoice::Embedded(4))] {
+            let text = choice(found, false);
+            assert!(!text.contains("subtitle"), "{text}");
+        }
+    }
+
+    /// And one somebody picked is, including the deliberate "off" - which is
+    /// why the flag exists rather than the absence of a subtitle standing for
+    /// it.
+    #[test]
+    fn a_hand_picked_choice_is_written_including_off() {
+        let on = choice(Some(SubtitleChoice::Embedded(4)), true);
+        assert!(on.contains(r#""subtitle":{"Embedded":4}"#), "{on}");
+        assert!(on.contains(r#""subtitle_by_hand":true"#), "{on}");
+
+        let off = choice(None, true);
+        assert!(!off.contains(r#""subtitle":"#), "{off}");
+        assert!(off.contains(r#""subtitle_by_hand":true"#), "{off}");
+    }
+
+    /// An entry written before the flag existed reads as "not by hand", so a
+    /// subtitle the preference once failed to find stops being remembered as a
+    /// decision.
+    #[test]
+    fn an_old_entry_is_not_treated_as_hand_picked() {
+        let old: TrackChoice =
+            serde_json::from_str(r#"{"primary":0,"secondary":1,"subtitle":null}"#).unwrap();
+        assert!(!old.subtitle_by_hand);
     }
 }

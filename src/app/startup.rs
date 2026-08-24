@@ -353,20 +353,27 @@ impl App {
             // Only touched when asked for, so a video's remembered
             // subtitle survives being launched with audio flags alone.
             if let Some(spec) = preset.subtitle.as_deref() {
-                // The languages actually going to the outputs, so a mode
-                // like "primary_forced" means the same on the command line
-                // as it does in the settings.
-                let language_of = |index: Option<u32>| {
-                    index.and_then(|index| {
-                        app.tracks
-                            .borrow()
-                            .iter()
-                            .find(|track| track.index == index)
-                            .map(|track| track.language.clone())
-                    })
+                // The languages actually going to the outputs, so a setting
+                // named on the command line means the same as it does in the
+                // settings - including when `--primary` named a file beside
+                // the video, which the flags above allow and which has no
+                // index to be found by. See `audio::language_on`.
+                let offered = {
+                    let source = app.file.borrow().clone();
+                    crate::audio::options(
+                        source.as_ref().and_then(Source::local),
+                        &app.tracks.borrow(),
+                    )
                 };
-                let primary = language_of(*app.primary_track.borrow());
-                let secondary = language_of(*app.secondary_track.borrow());
+                let language_of = |track: &RefCell<Option<u32>>, file: &RefCell<Option<Source>>| {
+                    let path = file
+                        .borrow()
+                        .as_ref()
+                        .and_then(|file| file.local().map(std::path::Path::to_path_buf));
+                    crate::audio::language_on(&offered, *track.borrow(), path.as_deref())
+                };
+                let primary = language_of(&app.primary_track, &app.primary_file);
+                let secondary = language_of(&app.secondary_track, &app.secondary_file);
                 match crate::subtitles::resolve(
                     spec,
                     &app.subtitle_options.borrow(),

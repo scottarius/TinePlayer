@@ -34,72 +34,72 @@ msgstr ""
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "X-Generator: Poedit 3.9\n"
 
-#: src/app.rs:114
+#: src/app.rs:104
 msgctxt "audio or subtitle languages"
 msgid "None"
 msgstr "Нет"
 
-#: src/app.rs:128
+#: src/app.rs:118
 msgid "+{n} more"
 msgid_plural "+{n} more"
 msgstr[0] "+ ещё {n}"
 msgstr[1] "+ ещё {n}"
 msgstr[2] "+ ещё {n}"
 
-#: src/app.rs:155
+#: src/app.rs:145
 msgid "Show Track Selection Menu"
 msgstr "Показывать меню выбора дорожек"
 
-#: src/app.rs:156
+#: src/app.rs:146
 msgid "Play Video Immediately"
 msgstr "Сразу воспроизводить видео"
 
-#: src/app.rs:668 src/shortcuts.rs:104
+#: src/app.rs:658 src/shortcuts.rs:104
 msgid "General"
 msgstr "Общие"
 
-#: src/app.rs:669
+#: src/app.rs:659
 msgid "Outputs"
 msgstr "Выходы"
 
-#: src/app.rs:670
+#: src/app.rs:660
 msgctxt "settings category"
 msgid "Subtitles"
 msgstr "Субтитры"
 
-#: src/app.rs:674
+#: src/app.rs:664
 msgid "About"
 msgstr "О программе"
 
-#: src/app.rs:697
+#: src/app.rs:687
 msgid "INTERFACE"
 msgstr "ИНТЕРФЕЙС"
 
-#: src/app.rs:701
+#: src/app.rs:691
 msgid "LIBRARY"
 msgstr "МЕДИАТЕКА"
 
-#: src/app.rs:706
+#: src/app.rs:696
 msgid "RESUMING"
 msgstr ""
 
-#: src/app.rs:716
+#: src/app.rs:706
 msgid "UPDATES"
 msgstr "ОБНОВЛЕНИЯ"
 
-#: src/app.rs:743
+#: src/app.rs:733
 msgid "KODI"
 msgstr "KODI"
 
-#: src/app.rs:763
+#: src/app.rs:753
 msgid "OTHER"
 msgstr "ПРОЧЕЕ"
 
-#: src/app.rs:774 src/app.rs:777
+#: src/app.rs:764 src/app.rs:767
 msgid "JELLYFIN"
 msgstr "JELLYFIN"
 
-#: src/app.rs:89
+#: src/app.rs:79
 msgctxt "a track's language"
 msgid "Unknown"
 msgstr "Неизвестно"
@@ -116,8 +116,8 @@ msgstr ""
 msgid "Third-Party Notices"
 msgstr "Сторонние компоненты"
 
-#: src/app/about.rs:233 src/app/keys.rs:71 src/app/playback.rs:647
-#: src/app/playback.rs:708
+#: src/app/about.rs:233 src/app/keys.rs:71 src/app/playback.rs:648
+#: src/app/playback.rs:709
 msgid "Close"
 msgstr "Закрыть"
 
@@ -157,7 +157,7 @@ msgstr "Сведения о программе"
 #: src/app/browsing.rs:168 src/app/browsing.rs:309 src/app/browsing.rs:656
 #: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:824
 #: src/app/pairing.rs:123 src/app/pairing.rs:320 src/app/pairing.rs:613
-#: src/app/pairing.rs:701 src/app/playback.rs:645
+#: src/app/pairing.rs:701 src/app/playback.rs:646
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -225,7 +225,7 @@ msgstr "Открыть системный диалог"
 msgid "Searching for outputs..."
 msgstr "Поиск устройств вывода..."
 
-#: src/app/choosers.rs:110 src/app/choosers.rs:684 src/app/choosers.rs:691
+#: src/app/choosers.rs:110 src/app/choosers.rs:685 src/app/choosers.rs:692
 #: src/app/outputs.rs:22
 msgctxt "subtitle track"
 msgid "None"
@@ -286,7 +286,7 @@ msgstr "Видеофайлы"
 msgid "All files"
 msgstr "Все файлы"
 
-#: src/app/files.rs:528
+#: src/app/files.rs:568
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -298,7 +298,7 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app/files.rs:538
+#: src/app/files.rs:578
 msgid ""
 "\n"
 "\n"
@@ -448,7 +448,7 @@ msgstr "Подключено к Jellyfin"
 msgid "Close the player"
 msgstr "Закрыть проигрыватель"
 
-#: src/app/menu.rs:139 src/app.rs:720
+#: src/app/menu.rs:139 src/app.rs:710
 msgid "FIRST OUTPUT"
 msgstr "ПЕРВЫЙ ВЫХОД"
 
@@ -465,7 +465,7 @@ msgstr "Не задано"
 msgid "Audio Track"
 msgstr "Звуковая дорожка"
 
-#: src/app/menu.rs:166 src/app.rs:725
+#: src/app/menu.rs:166 src/app.rs:715
 msgid "SECOND OUTPUT"
 msgstr "ВТОРОЙ ВЫХОД"
 
@@ -586,7 +586,7 @@ msgstr "Очистить"
 msgid "Looking for a server on this network..."
 msgstr "Поиск сервера в этой сети..."
 
-#: src/app/playback.rs:610
+#: src/app/playback.rs:611
 msgid ""
 "Couldn't play that file.\n"
 "\n"
@@ -596,15 +596,15 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app/playback.rs:637
+#: src/app/playback.rs:638
 msgid "Close the Player?"
 msgstr "Закрыть проигрыватель?"
 
-#: src/app/playback.rs:686
+#: src/app/playback.rs:687
 msgid "Something went wrong"
 msgstr "Что-то пошло не так"
 
-#: src/app/playback.rs:708 src/app/widgets.rs:675 src/controls.rs:990
+#: src/app/playback.rs:709 src/app/widgets.rs:675 src/controls.rs:990
 msgid "Back"
 msgstr "Назад"
 
@@ -1288,9 +1288,3 @@ msgstr ""
 #: src/subtitles.rs:384
 msgid "Prefer Second Output"
 msgstr ""
-
-#~ msgid "Language choice when auto-selecting, output matches the selected audio track's language."
-#~ msgstr ""
-
-#~ msgid "Subtitle auto-select choice when available. Preferred choice will fallback to any other."
-#~ msgstr ""

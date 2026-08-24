@@ -86,6 +86,37 @@ impl Audio {
     }
 }
 
+/// The language an output is playing, whichever kind of thing it is playing.
+///
+/// **One answer, because this question has been got wrong three times.** What
+/// an output plays is either a track inside the video or a file beside it, and
+/// the two are described in different places - so code that asked `tracks`
+/// alone reported no language at all for an output playing a file, and the
+/// subtitle preference then had nothing to match on that side. Asked over
+/// `offered`, which already holds both, there is no second place to forget.
+///
+/// The file wins where there is one: it displaces the track underneath it, and
+/// that track is still remembered so that clearing the file falls back to it.
+/// A file's language is the tag its name carries - the `fr` of `Film.fr.m4a` -
+/// which is the only thing such a file says about itself.
+///
+/// `None` where the output is silent, where the file was named after nothing,
+/// or where the track states no language. All three mean the same to a caller:
+/// there is no language here to match against.
+pub fn language_on(offered: &[Audio], track: Option<u32>, file: Option<&Path>) -> Option<String> {
+    if let Some(path) = file {
+        return offered.iter().find_map(|entry| match entry {
+            Audio::File(found) if found.path == path => found.tag.clone(),
+            _ => None,
+        });
+    }
+    let index = track?;
+    offered.iter().find_map(|entry| match entry {
+        Audio::Track(found) if found.index == index => Some(found.language.clone()),
+        _ => None,
+    })
+}
+
 /// Everything an output could be put onto, in the order every list shows it:
 /// the tracks inside the video, then the soundtracks beside it.
 ///
@@ -387,5 +418,83 @@ mod tests {
         assert!(resolve("9", &o).is_err());
         assert!(resolve("ja", &o).is_err());
         assert!(resolve("en:hi", &o).is_err());
+    }
+}
+
+#[cfg(test)]
+mod language_on_tests {
+    use super::*;
+
+    fn offered() -> Vec<Audio> {
+        vec![
+            Audio::Track(AudioTrack {
+                index: 0,
+                codec: "E-AC-3".to_string(),
+                channels: 6,
+                language: "eng".to_string(),
+                title: String::new(),
+                described: None,
+                commentary: None,
+            }),
+            Audio::Track(AudioTrack {
+                index: 3,
+                codec: "AC-3".to_string(),
+                channels: 6,
+                language: "ru".to_string(),
+                title: String::new(),
+                described: None,
+                commentary: None,
+            }),
+            Audio::File(AudioFile {
+                path: PathBuf::from("D:/films/Film.fr.m4a"),
+                tag: Some("fr".to_string()),
+                name: "Film.fr.m4a".to_string(),
+            }),
+            Audio::File(AudioFile {
+                path: PathBuf::from("D:/films/Film.m4a"),
+                tag: Some(String::new()),
+                name: "Film.m4a".to_string(),
+            }),
+        ]
+    }
+
+    #[test]
+    fn a_track_states_its_own_language() {
+        let o = offered();
+        assert_eq!(language_on(&o, Some(0), None).as_deref(), Some("eng"));
+        assert_eq!(language_on(&o, Some(3), None).as_deref(), Some("ru"));
+    }
+
+    /// **The case this exists for.** A soundtrack beside the video is not in
+    /// the track list and has no index, and asking only there reported no
+    /// language for that output at all.
+    #[test]
+    fn a_file_beside_the_video_states_its_tag() {
+        let o = offered();
+        let path = std::path::Path::new("D:/films/Film.fr.m4a");
+        assert_eq!(language_on(&o, None, Some(path)).as_deref(), Some("fr"));
+    }
+
+    /// And it wins over the track it displaced, which is still remembered so
+    /// that clearing the file falls back to it.
+    #[test]
+    fn the_file_wins_over_the_track_underneath_it() {
+        let o = offered();
+        let path = std::path::Path::new("D:/films/Film.fr.m4a");
+        assert_eq!(language_on(&o, Some(0), Some(path)).as_deref(), Some("fr"));
+    }
+
+    /// A silent output, a file named after nothing, an index no longer in the
+    /// video, a file no longer offered: all the same answer, because all of
+    /// them mean there is no language here to match against.
+    #[test]
+    fn nothing_to_say_reads_as_nothing() {
+        let o = offered();
+        assert_eq!(language_on(&o, None, None), None);
+        assert_eq!(language_on(&o, Some(99), None), None);
+        let unnamed = std::path::Path::new("D:/films/Film.m4a");
+        assert_eq!(language_on(&o, None, Some(unnamed)).as_deref(), Some(""));
+        let gone = std::path::Path::new("D:/films/Gone.m4a");
+        assert_eq!(language_on(&o, None, Some(gone)), None);
     }
 }

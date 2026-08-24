@@ -196,9 +196,11 @@ impl App {
         // After the switch, not before: what the sink should be held back by
         // depends on what it is now playing, and only the routing knows that.
         self.push_offset(&playback, role);
-        // Same reason, and the subtitle preference is written in terms of what
-        // the outputs are playing - so it is asked again now that has moved.
-        self.follow_audio_with_subtitle(which);
+        // **The subtitle is deliberately left alone.** This is the strip, so
+        // a film is running - and taking the subtitle away from somebody
+        // mid-scene because they moved an output to another language is a
+        // worse surprise than leaving it where they can see it. The preference
+        // is re-asked on the media page instead, before anything is playing.
         if let Some(controls) = self.controls.borrow().clone() {
             self.push_audio_entries(&playback, &controls);
         }
@@ -246,7 +248,7 @@ impl App {
     /// remembered as well as applied, the same as choosing one from the media
     /// page: it is the same decision, made later.
     pub(super) fn choose_subtitle(self: &Rc<Self>, entry: usize) {
-        self.apply_subtitle(entry, Chose::ByHand);
+        self.apply_subtitle(entry);
     }
 
     /// The same, plus who asked for it.
@@ -256,7 +258,12 @@ impl App {
     /// has not, and must not overrule a person - so the two go through one
     /// path and differ only in what they leave behind. See
     /// [`Self::follow_audio_with_subtitle`].
-    fn apply_subtitle(self: &Rc<Self>, entry: usize, how: Chose) {
+    /// Applying one is always somebody's own doing now: the preference never
+    /// reaches here, because it only answers on the media page where there is
+    /// no chain to rebuild. This used to take a `Chose` saying which, and the
+    /// automatic half of that enum stopped being constructed when changing an
+    /// output during playback stopped moving the subtitle.
+    fn apply_subtitle(self: &Rc<Self>, entry: usize) {
         let playback = self.playback.borrow().clone();
         let file = self.file.borrow().clone();
         let (Some(playback), Some(file)) = (playback, file) else {
@@ -314,9 +321,7 @@ impl App {
         self.subtitles_hidden.set(entry == 0);
         // Only a person settles the question. Left false by the automatic
         // follow, so a later soundtrack change is still free to move it.
-        if how == Chose::ByHand {
-            self.subtitle_by_hand.set(true);
-        }
+        self.subtitle_by_hand.set(true);
         self.remember_tracks();
         self.push_subtitle_state();
         self.wake_controls();
@@ -342,8 +347,18 @@ impl App {
     ///   output matters. The forced modes prefer one output but will take the
     ///   other, so for those either output can change the answer - which is
     ///   why the test is on the mode rather than on the role alone.
-    fn follow_audio_with_subtitle(self: &Rc<Self>, changed: Role) {
+    pub(super) fn follow_audio_with_subtitle(self: &Rc<Self>, changed: Role) {
+        // A subtitle somebody picked is theirs, and an output moving is not a
+        // reason to take it away from them.
         if self.subtitle_by_hand.get() {
+            return;
+        }
+        // **Before playback only.** Changing an output while a film is running
+        // leaves the subtitle where it is: it is on screen, being read, and
+        // swapping it mid-scene is a worse surprise than a subtitle that no
+        // longer matches the soundtrack. On the media page nothing is on
+        // screen yet, so the preference is free to answer again.
+        if self.playback.borrow().is_some() {
             return;
         }
         let (kind, place) = {
@@ -366,17 +381,26 @@ impl App {
             return;
         }
 
-        let language_of = |index: Option<u32>| {
-            index.and_then(|index| {
-                self.tracks
-                    .borrow()
-                    .iter()
-                    .find(|track| track.index == index)
-                    .map(|track| track.language.clone())
-            })
+        // What each output is actually playing, over the one list that holds
+        // both the tracks inside the video and the soundtracks beside it - see
+        // `audio::language_on`.
+        let offered = {
+            let source = self.file.borrow().clone();
+            crate::audio::options(
+                source.as_ref().and_then(Source::local),
+                &self.tracks.borrow(),
+            )
         };
-        let primary = language_of(*self.primary_track.borrow());
-        let secondary = language_of(*self.secondary_track.borrow());
+        let language_of = |role: Role| {
+            let file = self
+                .file_for(role)
+                .borrow()
+                .as_ref()
+                .and_then(|file| file.local().map(std::path::Path::to_path_buf));
+            crate::audio::language_on(&offered, *self.track_for(role).borrow(), file.as_deref())
+        };
+        let primary = language_of(Role::Primary);
+        let secondary = language_of(Role::Secondary);
 
         let wanted = crate::subtitles::automatic(
             &prefer,
@@ -407,7 +431,20 @@ impl App {
                 }
             }
         };
-        self.apply_subtitle(entry, Chose::Automatically);
+        // Recorded rather than applied: there is no pipeline yet, and
+        // `apply_subtitle` exists to rebuild a chain that is already running.
+        // Playback starts from this.
+        log::info!(
+            "The {} soundtrack changed, so the subtitle preference chose {}",
+            changed.key(),
+            match &wanted {
+                Some(choice) => format!("{choice:?}"),
+                None => "nothing".to_string(),
+            }
+        );
+        *self.subtitle.borrow_mut() = wanted;
+        self.subtitles_hidden.set(entry == 0);
+        self.remember_tracks();
     }
 
     /// Starts a hold on the left face button. Nothing happens yet: what the

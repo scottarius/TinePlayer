@@ -661,6 +661,7 @@ impl App {
             *self.primary_track.borrow(),
             *self.secondary_track.borrow(),
             self.subtitle.borrow().clone(),
+            self.subtitle_by_hand.get(),
             self.saved_path(Role::Primary),
             self.saved_path(Role::Secondary),
         );
@@ -874,11 +875,18 @@ impl App {
                 let tracks = self.tracks.borrow();
                 let picked = choice.and_then(|index| tracks.get(index)).map(|t| t.index);
                 drop(tracks);
+                log::info!("Chose soundtrack {picked:?} for the {} output", role.key());
                 *self.track_for(role).borrow_mut() = picked;
                 // Choosing anything inside the video, including None, is
                 // choosing not to use a separate file on that output.
                 *self.file_for(role).borrow_mut() = None;
                 self.remember_tracks();
+                // The subtitle preference is written in terms of what the
+                // outputs are playing, so it is asked again now that has
+                // moved. The playback strip has always done this; this list
+                // did not, which is why changing an output here left the
+                // subtitle on whatever the file opened with.
+                self.follow_audio_with_subtitle(role);
                 // The pairing is gone, so the alignment measured for it has to
                 // go with it. A baseline left behind is applied to a track
                 // inside the video, which shares the video's timeline and needs

@@ -46,16 +46,6 @@ mod widgets;
 use style::{install_styles, style_css};
 pub(crate) use widgets::*;
 
-/// Who asked for a subtitle, which decides whether anything may overrule it
-/// later. See [`App::follow_audio_with_subtitle`].
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Chose {
-    /// A person picked it, from the chooser or the media page.
-    ByHand,
-    /// The preference worked it out, and may work it out again.
-    Automatically,
-}
-
 /// Marks the overlay a modal is stacked in, so that opening one over another
 /// can tell it apart from a page that happens to be built out of an overlay
 /// too - which the media page is.
