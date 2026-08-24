@@ -173,10 +173,35 @@ expanded="$cache/gstreamer-$gst_version"
 mkdir -p "$cache"
 if [[ ! -f "$pkg" ]]; then
     echo "Fetching GStreamer $gst_version for macOS (LGPL FFmpeg)..."
-    curl -fL --progress-bar -o "$pkg"         "https://gstreamer.freedesktop.org/data/pkg/osx/$gst_version/gstreamer-1.0-$gst_version-universal.pkg" ||
+    # **Every flag here was paid for.** A release rehearsal on 2026-08-24 died
+    # at 1.4% with `curl: (92) HTTP/2 stream 1 was not closed cleanly:
+    # PROTOCOL_ERROR`, on a plain `curl -fL`, and took the whole macOS package
+    # with it. This is a large file from a server outside anybody's control, so
+    # the transfer failing is an ordinary event rather than an exceptional one
+    # and the script has to treat it that way.
+    #
+    #   --http1.1        the error above is an HTTP/2 one, and nothing here
+    #                    needs HTTP/2; asking for 1.1 removes that whole class
+    #   --retry ...      including --retry-all-errors, because a curl-level
+    #                    failure like 92 is not an HTTP status and is not
+    #                    retried without it
+    #   -C -             resumes rather than starting the download again, which
+    #                    on a file this size is the difference between a retry
+    #                    and another five minutes
+    #   --connect-timeout  fails fast when the host is simply not answering,
+    #                    instead of hanging the job the way winget does on
+    #                    Windows
+    curl -fL --http1.1 \
+        --retry 5 --retry-all-errors --retry-delay 5 \
+        --connect-timeout 30 -C - \
+        --progress-bar -o "$pkg" \
+        "https://gstreamer.freedesktop.org/data/pkg/osx/$gst_version/gstreamer-1.0-$gst_version-universal.pkg" ||
         {
             echo "Could not fetch GStreamer $gst_version. Without it there is no" >&2
             echo "LGPL FFmpeg, and AC-3 and DTS will not play." >&2
+            # A partial file would otherwise be found by the `-f` test above on
+            # the next run and expanded as though it were whole.
+            rm -f "$pkg"
             exit 1
         }
 fi

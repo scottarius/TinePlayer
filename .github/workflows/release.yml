@@ -48,6 +48,28 @@ jobs:
           rustup toolchain install $env:RUST_VERSION --profile minimal
           rustup default $env:RUST_VERSION
 
+      # **The cache ci.yml has and this workflow did not.** winget pulls an
+      # 840 MB installer from gstreamer.freedesktop.org, outside GitHub's
+      # network and outside its cache, and it has no download timeout - so a
+      # slow afternoon at that end is indistinguishable from a hang, and the
+      # job sits there until the ceiling kills it. That was written up in
+      # ci.yml on 2026-08-23 and fixed there; the release workflow, which is
+      # the run you can least afford to have hang, kept downloading it fresh
+      # every time. Noticed on 2026-08-24 when a rehearsal stalled here.
+      #
+      # Restored before the install below, which then finds GStreamer already
+      # in place and skips it: `Resolve-GstRoot` looks for `gtk4.pc` under this
+      # path and needs no registry entry, so a directory the cache put back is
+      # indistinguishable from one the installer wrote.
+      #
+      # Keyed on the pinned version alone, with no `restore-keys`: a cache from
+      # another version is not a partial answer, it is the wrong GStreamer, and
+      # the build would go on to link against it.
+      - uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\Programs\gstreamer
+          key: windows-gstreamer-${{ env.GSTREAMER_VERSION }}
+
       - name: Install dependencies
         shell: pwsh
         run: .\setup-windows.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
@@ -239,6 +261,33 @@ jobs:
       # are empty and harmless until the secrets exist.
       #
       # The three GTK variables are what point the build at the AccessKit GTK
+      # Which GStreamer the packaging will fetch, so the cache below can be
+      # keyed on it. Read from Homebrew rather than from GSTREAMER_VERSION
+      # above, because `contents.sh` asks Homebrew too and a key that named a
+      # different version would restore the wrong package or none.
+      - name: Which GStreamer to match
+        id: gst
+        run: |
+          version="$(brew list --versions gstreamer | awk '{print $2}')"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "Homebrew has GStreamer $version"
+
+      # **The download that failed the rehearsal on 2026-08-24.**
+      # `packaging/macos/contents.sh` fetches GStreamer's own macOS package for
+      # its LGPL FFmpeg, and keeps it under `target/packaging-cache` so a
+      # second run on a developer's machine costs nothing. On a runner that
+      # directory starts empty every time, so the release job downloaded it
+      # fresh on every run - from a host outside GitHub's network, with no
+      # retry - and one HTTP/2 error took the whole macOS package with it.
+      #
+      # Only that subdirectory, not `target`: the build artifacts beside it are
+      # rebuilt every run and are most of the size.
+      - name: Cache the GStreamer package
+        uses: actions/cache@v4
+        with:
+          path: target/packaging-cache
+          key: gst-pkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.gst.outputs.version }}
+
       # rather than Homebrew's. All three are needed: PKG_CONFIG_PATH decides
       # which headers are compiled against, RUSTFLAGS decides which library is
       # actually linked - they can disagree, and when they do the build
