@@ -548,6 +548,25 @@ impl App {
     /// A panel stating something the Jellyfin pane has to say, with the one
     /// way on from it.
     fn jellyfin_notice(self: &Rc<Self>, title: &str, lines: &[&str]) {
+        // Every failure the pairing wizard puts on screen comes through here,
+        // so one line covers all of them - and a *failure to reach a server*
+        // is close to the likeliest thing anyone will ever report.
+        //
+        // It was missing. Found on 2026-08-24 by pointing TinePlayer at
+        // `https://` on a Jellyfin that serves only plain HTTP: the wizard
+        // said so, correctly, and the log recorded six seconds of silence
+        // between "starting Quick Connect" and the next unrelated line. A
+        // report of that would have arrived with nothing in it, which is the
+        // one outcome the log exists to prevent.
+        //
+        // What the viewer was shown, rather than the underlying error alone:
+        // it is what they will describe, and the detail lines carry the error
+        // anyway. Translated, so a log from a Russian interface reads in
+        // Russian here - the alternative is a second untranslated copy of
+        // every message, which is worse than a reader occasionally pasting a
+        // line into a translator.
+        log::error!("Jellyfin wizard: {title} - {}", lines.join(" "));
+
         let page = wizard_page(title);
         for line in lines {
             page.append(&wizard_text(line, false));
