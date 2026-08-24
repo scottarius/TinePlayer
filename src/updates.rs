@@ -19,6 +19,25 @@ use serde::{Deserialize, Serialize};
 /// never be offered to anybody.
 const LATEST: &str = "https://api.github.com/repos/scottarius/TinePlayer/releases/latest";
 
+/// Where a release is read about, with the tag appended.
+///
+/// **A literal, so that nothing on disk decides where a browser is sent.**
+/// This used to be stored: the check wrote GitHub's `html_url` into
+/// `updates.json` and the settings row opened whatever it found there. The
+/// value arrived over TLS, but it was then cached in a plain file and read
+/// back on later runs without a second look, which made a file anybody's
+/// account can edit into the address of a page TinePlayer opens for them.
+///
+/// It was also redundant. A release page is `<this>/<tag>`, the tag is already
+/// stored because the version comparison needs it, and the repository is a
+/// constant that appeared in this file twice already. Deriving costs nothing
+/// and leaves nothing to validate - the host cannot be anything but this.
+const RELEASE_PAGE: &str = "https://github.com/scottarius/TinePlayer/releases/tag/";
+
+/// Where to send somebody when the tag is not one that can go in a path. See
+/// [`page_for`].
+const RELEASES: &str = "https://github.com/scottarius/TinePlayer/releases";
+
 /// GitHub answers 403 to a request without one.
 const AGENT: &str = concat!(
     "TinePlayer/",
@@ -50,9 +69,6 @@ pub struct State {
     /// than this build.
     #[serde(default)]
     pub latest: Option<String>,
-    /// Where to send somebody who wants it.
-    #[serde(default)]
-    pub url: Option<String>,
     /// The version whose badge has been seen. Kept so that the mark on the
     /// settings button appears once per release rather than every launch.
     #[serde(default)]
@@ -86,13 +102,13 @@ pub fn due(state: &State) -> bool {
 
 /// Asks GitHub what the newest release is. Blocking, so it belongs on a
 /// thread of its own.
-pub fn look() -> Option<(String, String)> {
+pub fn look() -> Option<String> {
     look_at(LATEST)
 }
 
 /// The part that talks, with the address given rather than assumed, so a test
 /// can point it at a repository whose releases do not depend on ours.
-fn look_at(url: &str) -> Option<(String, String)> {
+fn look_at(url: &str) -> Option<String> {
     let response = minreq::get(url)
         .with_header("User-Agent", AGENT)
         .with_header("Accept", "application/vnd.github+json")
@@ -105,27 +121,23 @@ fn look_at(url: &str) -> Option<(String, String)> {
         return None;
     }
     let body: serde_json::Value = response.json().ok()?;
-    let tag = body.get("tag_name")?.as_str()?.to_string();
-    let url = body
-        .get("html_url")
-        .and_then(|url| url.as_str())
-        .unwrap_or("https://github.com/scottarius/TinePlayer/releases")
-        .to_string();
-    Some((tag, url))
+    // The tag alone. `html_url` is in the same reply and is not read: the page
+    // it names is `RELEASE_PAGE` plus this, and deriving it means nothing that
+    // arrives over the network or off the disk can name a different one.
+    Some(body.get("tag_name")?.as_str()?.to_string())
 }
 
 /// A check, start to finish, for a thread to run. Returns the state to save.
 pub fn check(previous: &State) -> State {
     let mut state = previous.clone();
     state.checked = now();
-    if let Some((tag, url)) = look() {
+    if let Some(tag) = look() {
         // A version that is no longer the newest clears an acknowledgement
         // made against it, so the next release is announced again.
         if state.latest.as_deref() != Some(tag.as_str()) {
             state.acknowledged = None;
         }
         state.latest = Some(tag);
-        state.url = Some(url);
     }
     state
 }
@@ -149,23 +161,35 @@ fn parts(version: &str) -> (u32, u32, u32) {
 }
 
 /// The newer version, if the one found is ahead of the one running.
-pub fn newer(state: &State) -> Option<(&str, &str)> {
+pub fn newer(state: &State) -> Option<&str> {
     let latest = state.latest.as_deref()?;
-    if parts(latest) <= parts(env!("CARGO_PKG_VERSION")) {
-        return None;
+    (parts(latest) > parts(env!("CARGO_PKG_VERSION"))).then_some(latest)
+}
+
+/// Where to read about a release, from its tag.
+///
+/// **The tag is the only part that comes from outside, and it goes in a path
+/// segment**, so a tag that is not one is not put there. GitHub tags are
+/// `[A-Za-z0-9._-]`; anything else - a slash, a query, a space - would compose
+/// some other page on the same host, which is harmless but is not what this
+/// says it does. Those fall back to the releases index, which is always right
+/// if less specific.
+pub fn page_for(tag: &str) -> String {
+    let usable = !tag.is_empty()
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    match usable {
+        true => format!("{RELEASE_PAGE}{tag}"),
+        false => RELEASES.to_string(),
     }
-    let url = state
-        .url
-        .as_deref()
-        .unwrap_or("https://github.com/scottarius/TinePlayer/releases");
-    Some((latest, url))
 }
 
 /// Whether the settings button should carry a mark: a newer version exists
 /// and nobody has looked at it yet.
 pub fn unseen(state: &State) -> bool {
     match newer(state) {
-        Some((latest, _)) => state.acknowledged.as_deref() != Some(latest),
+        Some(latest) => state.acknowledged.as_deref() != Some(latest),
         None => false,
     }
 }
@@ -174,7 +198,7 @@ pub fn unseen(state: &State) -> bool {
 /// what takes the mark off the settings button. The mark stays on the row
 /// itself, because the version is still there to be had.
 pub fn acknowledge(state: &mut State) {
-    if let Some((latest, _)) = newer(state) {
+    if let Some(latest) = newer(state) {
         let latest = latest.to_string();
         if state.acknowledged.as_deref() != Some(latest.as_str()) {
             state.acknowledged = Some(latest);
@@ -249,13 +273,31 @@ mod tests {
     #[test]
     #[ignore = "reaches the network"]
     fn a_real_release_can_be_read() {
-        let found = look_at("https://api.github.com/repos/cli/cli/releases/latest");
-        let Some((tag, url)) = found else {
+        let Some(tag) = look_at("https://api.github.com/repos/cli/cli/releases/latest") else {
             panic!("no answer from the GitHub API - offline, or the shape changed");
         };
+        let url = page_for(&tag);
         println!("tag = {tag}\nurl = {url}");
         assert!(parts(&tag) > (0, 0, 0), "tag {tag:?} parsed as nothing");
-        assert!(url.starts_with("https://github.com/"), "url was {url:?}");
+        // Against this project's own constant, not `cli/cli`: the page is
+        // derived here rather than read from the reply, so a real tag proves
+        // the shape and the host is ours by construction.
+        assert!(url.starts_with(RELEASE_PAGE), "url was {url:?}");
+    }
+
+    /// A tag is the only part of the address that comes from outside.
+    #[test]
+    fn an_ordinary_tag_becomes_its_release_page() {
+        assert_eq!(page_for("v1.5.0"), format!("{RELEASE_PAGE}v1.5.0"));
+        assert_eq!(page_for("1.5.0-rc.1"), format!("{RELEASE_PAGE}1.5.0-rc.1"));
+    }
+
+    /// Anything that would compose a different page falls back to the index.
+    #[test]
+    fn a_tag_that_is_not_one_falls_back() {
+        for bad in ["../../evil", "v1.0 x", "a/b", "v1?x=1", "v1#f", ""] {
+            assert_eq!(page_for(bad), RELEASES, "tag {bad:?} was not refused");
+        }
     }
 
     /// A first run has never checked, so it checks.
