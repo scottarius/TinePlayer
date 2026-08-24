@@ -898,7 +898,7 @@ msgstr ""
 msgid "Use the system language"
 msgstr ""
 
-#: src/jellyfin.rs:1191
+#: src/jellyfin.rs:1197
 msgctxt "subtitle track"
 msgid "Subtitles"
 msgstr ""

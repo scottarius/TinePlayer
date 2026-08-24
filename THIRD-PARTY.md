@@ -73,7 +73,8 @@ crate is offered under either license, at your choice.
 | async-channel | 2.5.0 | Apache-2.0 OR MIT |
 | atomic_refcell | 0.1.14 | Apache-2.0 OR MIT |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
-| base64 | 0.21.7 | MIT OR Apache-2.0 |
+| aws-lc-rs | 1.18.0 | ISC AND (Apache-2.0 OR ISC) |
+| aws-lc-sys | 0.44.0 | ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0) |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 |
 | block2 | 0.6.2 | MIT |
@@ -82,6 +83,7 @@ crate is offered under either license, at your choice.
 | cairo-rs | 0.20.12 | MIT |
 | cairo-sys-rs | 0.20.10 | MIT |
 | cc | 1.4.0 | MIT OR Apache-2.0 |
+| cesu8 | 1.1.0 | Apache-2.0/MIT |
 | cfg-expr | 0.20.8 | MIT OR Apache-2.0 |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
 | cfg_aliases | 0.2.2 | MIT |
@@ -91,11 +93,12 @@ crate is offered under either license, at your choice.
 | clap_builder | 4.6.2 | MIT OR Apache-2.0 |
 | clap_derive | 4.6.4 | MIT OR Apache-2.0 |
 | clap_lex | 1.1.0 | MIT OR Apache-2.0 |
+| cmake | 0.1.58 | MIT OR Apache-2.0 |
 | colorchoice | 1.0.5 | MIT OR Apache-2.0 |
+| combine | 4.6.7 | MIT |
 | concat-string | 1.0.1 | Apache-2.0 OR MIT |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
 | const-oid | 0.10.2 | Apache-2.0 OR MIT |
-| core-foundation | 0.9.4 | MIT OR Apache-2.0 |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
 | cpufeatures | 0.3.0 | MIT OR Apache-2.0 |
@@ -104,6 +107,7 @@ crate is offered under either license, at your choice.
 | data-encoding | 2.11.1 | MIT |
 | digest | 0.11.3 | MIT OR Apache-2.0 |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT |
+| dunce | 1.0.5 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | either | 1.17.0 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
@@ -112,6 +116,7 @@ crate is offered under either license, at your choice.
 | field-offset | 0.3.6 | MIT OR Apache-2.0 |
 | find-msvc-tools | 0.1.9 | MIT OR Apache-2.0 |
 | fnv | 1.0.7 | Apache-2.0 / MIT |
+| fs_extra | 1.3.0 | MIT |
 | futures-channel | 0.3.33 | MIT OR Apache-2.0 |
 | futures-core | 0.3.33 | MIT OR Apache-2.0 |
 | futures-executor | 0.3.33 | MIT OR Apache-2.0 |
@@ -183,6 +188,11 @@ crate is offered under either license, at your choice.
 | is_terminal_polyfill | 1.70.2 | MIT OR Apache-2.0 |
 | itertools | 0.14.0 | MIT OR Apache-2.0 |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
+| jni | 0.21.1 | MIT/Apache-2.0 |
+| jni-sys | 0.3.1 | MIT OR Apache-2.0 |
+| jni-sys | 0.4.1 | MIT OR Apache-2.0 |
+| jni-sys-macros | 0.4.1 | MIT OR Apache-2.0 |
+| jobserver | 0.1.35 | MIT OR Apache-2.0 |
 | js-sys | 0.3.103 | MIT OR Apache-2.0 |
 | libc | 0.2.189 | MIT OR Apache-2.0 |
 | libudev-sys | 0.1.4 | MIT |
@@ -191,7 +201,7 @@ crate is offered under either license, at your choice.
 | log | 0.4.33 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | memoffset | 0.9.1 | MIT |
-| minreq | 2.14.1 | ISC |
+| minreq | 3.0.0 | ISC |
 | muldiv | 1.0.1 | MIT |
 | nix | 0.31.3 | MIT |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 |
@@ -216,7 +226,6 @@ crate is offered under either license, at your choice.
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | once_cell_polyfill | 1.70.2 | MIT OR Apache-2.0 |
-| openssl-probe | 0.1.6 | MIT/Apache-2.0 |
 | openssl-probe | 0.2.1 | MIT OR Apache-2.0 |
 | option-operations | 0.5.0 | MIT/Apache-2.0 |
 | pango | 0.20.12 | MIT |
@@ -237,19 +246,16 @@ crate is offered under either license, at your choice.
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustfft | 6.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
-| rustls | 0.21.12 | Apache-2.0 OR ISC OR MIT |
 | rustls | 0.23.43 | Apache-2.0 OR ISC OR MIT |
-| rustls-native-certs | 0.6.3 | Apache-2.0 OR ISC OR MIT |
 | rustls-native-certs | 0.8.4 | Apache-2.0 OR ISC OR MIT |
-| rustls-pemfile | 1.0.4 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
-| rustls-webpki | 0.101.7 | ISC |
+| rustls-platform-verifier | 0.6.2 | MIT OR Apache-2.0 |
+| rustls-platform-verifier-android | 0.1.1 | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.14 | ISC |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 |
+| same-file | 1.0.6 | Unlicense/MIT |
 | schannel | 0.1.29 | MIT |
-| sct | 0.7.1 | Apache-2.0 OR ISC OR MIT |
-| security-framework | 2.11.1 | MIT OR Apache-2.0 |
 | security-framework | 3.7.0 | MIT OR Apache-2.0 |
 | security-framework-sys | 2.17.0 | MIT OR Apache-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 |
@@ -272,7 +278,9 @@ crate is offered under either license, at your choice.
 | system-deps | 7.0.8 | MIT OR Apache-2.0 |
 | target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception |
 | terminal_size | 0.4.4 | MIT OR Apache-2.0 |
+| thiserror | 1.0.69 | MIT OR Apache-2.0 |
 | thiserror | 2.0.19 | MIT OR Apache-2.0 |
+| thiserror-impl | 1.0.69 | MIT OR Apache-2.0 |
 | thiserror-impl | 2.0.19 | MIT OR Apache-2.0 |
 | toml | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -290,12 +298,15 @@ crate is offered under either license, at your choice.
 | vec_map | 0.8.2 | MIT/Apache-2.0 |
 | version-compare | 0.2.1 | MIT |
 | version_check | 0.9.5 | MIT/Apache-2.0 |
+| walkdir | 2.5.0 | Unlicense/MIT |
 | wasi | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | wasm-bindgen | 0.2.126 | MIT OR Apache-2.0 |
 | wasm-bindgen-macro | 0.2.126 | MIT OR Apache-2.0 |
 | wasm-bindgen-macro-support | 0.2.126 | MIT OR Apache-2.0 |
 | wasm-bindgen-shared | 0.2.126 | MIT OR Apache-2.0 |
 | web-sys | 0.3.103 | MIT OR Apache-2.0 |
+| webpki-root-certs | 1.0.9 | CDLA-Permissive-2.0 |
+| winapi-util | 0.1.11 | Unlicense OR MIT |
 | windows | 0.62.2 | MIT OR Apache-2.0 |
 | windows-collections | 0.3.2 | MIT OR Apache-2.0 |
 | windows-core | 0.62.2 | MIT OR Apache-2.0 |
@@ -306,27 +317,36 @@ crate is offered under either license, at your choice.
 | windows-numerics | 0.3.1 | MIT OR Apache-2.0 |
 | windows-result | 0.4.1 | MIT OR Apache-2.0 |
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 |
+| windows-sys | 0.45.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.52.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.59.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.60.2 | MIT OR Apache-2.0 |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 |
+| windows-targets | 0.42.2 | MIT OR Apache-2.0 |
 | windows-targets | 0.52.6 | MIT OR Apache-2.0 |
 | windows-targets | 0.53.5 | MIT OR Apache-2.0 |
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 |
+| windows_aarch64_gnullvm | 0.42.2 | MIT OR Apache-2.0 |
 | windows_aarch64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
 | windows_aarch64_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
+| windows_aarch64_msvc | 0.42.2 | MIT OR Apache-2.0 |
 | windows_aarch64_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | windows_aarch64_msvc | 0.53.1 | MIT OR Apache-2.0 |
+| windows_i686_gnu | 0.42.2 | MIT OR Apache-2.0 |
 | windows_i686_gnu | 0.52.6 | MIT OR Apache-2.0 |
 | windows_i686_gnu | 0.53.1 | MIT OR Apache-2.0 |
 | windows_i686_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
 | windows_i686_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
+| windows_i686_msvc | 0.42.2 | MIT OR Apache-2.0 |
 | windows_i686_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | windows_i686_msvc | 0.53.1 | MIT OR Apache-2.0 |
+| windows_x86_64_gnu | 0.42.2 | MIT OR Apache-2.0 |
 | windows_x86_64_gnu | 0.52.6 | MIT OR Apache-2.0 |
 | windows_x86_64_gnu | 0.53.1 | MIT OR Apache-2.0 |
+| windows_x86_64_gnullvm | 0.42.2 | MIT OR Apache-2.0 |
 | windows_x86_64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
 | windows_x86_64_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
+| windows_x86_64_msvc | 0.42.2 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 |
 | winnow | 1.0.4 | MIT |

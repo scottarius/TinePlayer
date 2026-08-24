@@ -96,20 +96,19 @@ ignore = false
 multiple-versions = "warn"
 wildcards = "deny"
 
-skip = [
-    # **Two TLS stacks, knowingly.** `minreq` pulls rustls 0.21 and
-    # `tungstenite` pulls rustls 0.23, so `rustls`, `rustls-webpki`,
-    # `rustls-native-certs`, `security-framework` and `openssl-probe` are each
-    # in the tree twice. Found in the audit on 2026-08-23 and not yet fixed:
-    # the answer is to move the HTTP side off `minreq`, which is its own piece
-    # of work. Skipped rather than left as noise so that a *new* duplicate is
-    # visible against a quiet baseline.
-    { crate = "rustls" },
-    { crate = "rustls-webpki" },
-    { crate = "rustls-native-certs" },
-    { crate = "security-framework" },
-    { crate = "openssl-probe" },
-]
+# Empty, and it was not when this file was written a day ago.
+#
+# It held five entries - `rustls`, `rustls-webpki`, `rustls-native-certs`,
+# `security-framework` and `openssl-probe` - because minreq 2 pulled rustls
+# 0.21 while tungstenite pulled 0.23, so each was in the tree twice and the
+# note said the answer was to move the HTTP side off minreq. That happened:
+# minreq 3 is on rustls 0.23 and every one of the five collapsed to a single
+# version. cargo-deny said so itself, with `unnecessary-skip` warnings against
+# entries that no longer had anything behind them.
+#
+# Left empty rather than deleted, so the next duplicate has an obvious place
+# to be argued about rather than being waved through.
+skip = []
 
 [sources]
 # Everything comes from crates.io. A git dependency is not forbidden on
