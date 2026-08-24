@@ -14,9 +14,9 @@ Useful to include, roughly in order:
   a file
 - The platform and the TinePlayer version, from **Settings → About**
 - The log, if it is relevant: see
-  [Send the log](docs/troubleshooting.md#send-the-log). **Read it before
-  attaching it** - access tokens are stripped, but file paths and server
-  addresses are not
+  [Send the log](docs/troubleshooting.md#send-the-log). Tokens, your account
+  name, the folders videos sit in and any server address outside your own
+  network are removed before it is written; file names are kept
 
 I am one person and this is not my full-time work, so I will not promise a
 response time. I will confirm I have read it, say whether I think it is a real
@@ -55,10 +55,12 @@ people could not connect at all. Anybody who types `https://` gets it, and the
 WebSocket follows the scheme rather than quietly downgrading. On a network
 where you do not trust the other devices, use HTTPS.
 
-**The log file contains file paths, server addresses and item names.** Access
-tokens are stripped before anything is written, and that is enforced at the
-write path rather than at each call site. Everything else is kept, because it
-is what makes a report readable. Nothing is sent anywhere.
+**The log file contains file names and item names.** What is removed - the
+token, the home directory and so the account name, the folder a video sits in,
+and any server address outside the machine's own network - is enforced at the
+write path rather than at each call site, so a line added later cannot forget.
+File names are kept on purpose: they are often what a fault turns on. Nothing
+is sent anywhere.
 
 ## What is out of scope
 

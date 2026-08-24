@@ -257,11 +257,29 @@ so copy the file somewhere before experimenting further.
 Only what TinePlayer itself reports: which file it opened, which audio devices
 it found, what GStreamer complained about, and a full account of any crash.
 
-Access tokens are removed before anything is written, so a log from a machine
-paired with a Jellyfin server does not carry the credential for it. Server
-addresses, file paths and item names are kept, because they are what make the
-report readable - worth knowing if the names of your files are something you
-would rather not share.
+Four things are removed before anything is written, because the log is meant
+to be attachable to a public issue:
+
+* **Access tokens.** A log from a machine paired with a Jellyfin server does
+  not carry the credential for it.
+* **Your home directory**, and so your account name. Paths appear as
+  `~/Videos/...` rather than naming you.
+* **The folder a video is in.** A line reads
+  `Opened "Film (2019).mkv" (local path, 58 characters)` - the name, whether
+  it was on a local disk or a network share, and how long the whole path was,
+  which is what actually diagnoses things. Where it lives is nobody's business.
+* **Server addresses that are not on your own network.** A LAN address like
+  `192.168.3.2:8096` is kept, because it says nothing a reader could not guess
+  and it answers real questions. A domain or a public address becomes
+  `<server>`, keeping the scheme and port, so that pasting a log does not
+  advertise a server to whoever reads it later.
+
+**File names are kept**, deliberately. "It will not play *this* file" is a
+large share of what a media player is asked, and the name is often the answer:
+subtitles beside a video are matched by name, and characters in a name have
+caused real faults. If the names of your files are something you would rather
+not share, edit them out before attaching - the rest of the line still says
+what was wrong.
 
 Nothing is sent anywhere. The file is written locally and stays there until
 you attach it to something.

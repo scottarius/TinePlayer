@@ -156,8 +156,8 @@ msgstr "Сведения о программе"
 #: src/app/alignment.rs:102 src/app/alignment.rs:188 src/app/alignment.rs:329
 #: src/app/browsing.rs:168 src/app/browsing.rs:309 src/app/browsing.rs:656
 #: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:824
-#: src/app/pairing.rs:123 src/app/pairing.rs:320 src/app/pairing.rs:594
-#: src/app/pairing.rs:682 src/app/playback.rs:645
+#: src/app/pairing.rs:123 src/app/pairing.rs:320 src/app/pairing.rs:613
+#: src/app/pairing.rs:701 src/app/playback.rs:645
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -356,7 +356,7 @@ msgstr "TinePlayer будет удалён из {label} как внешний п
 msgid "Configuration Error"
 msgstr "Ошибка настройки"
 
-#: src/app/kodi_screens.rs:689 src/app/pairing.rs:556
+#: src/app/kodi_screens.rs:689 src/app/pairing.rs:575
 msgid "OK"
 msgstr "OK"
 
@@ -574,11 +574,11 @@ msgstr "Токен доступа, хранившийся на этом комп
 msgid "The server could not be reached. Remove TinePlayer under Devices in the Jellyfin dashboard to revoke access."
 msgstr "Сервер недоступен. Удалите TinePlayer в разделе «Устройства» панели управления Jellyfin, чтобы отозвать доступ."
 
-#: src/app/pairing.rs:633
+#: src/app/pairing.rs:652
 msgid "Clear all saved playback data?"
 msgstr "Удалить все сохранённые данные воспроизведения?"
 
-#: src/app/pairing.rs:634
+#: src/app/pairing.rs:653
 msgid "Clear"
 msgstr "Очистить"
 

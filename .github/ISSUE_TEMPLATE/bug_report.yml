@@ -74,9 +74,10 @@ body:
         Its first lines carry the versions of GStreamer and GTK, which is most
         of what is otherwise guesswork.
 
-        Access tokens are stripped before anything is written, but file paths
-        and server addresses are not - so have a read before you paste it.
-        Attach the file, or paste the part around the problem.
+        Tokens, your account name, the folders your videos are in and any
+        server address outside your own network are all removed before
+        anything is written. File names are kept, because they are often the
+        answer. Attach the file, or paste the part around the problem.
       render: text
     validations:
       required: false
