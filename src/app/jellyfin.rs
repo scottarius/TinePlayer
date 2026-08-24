@@ -536,7 +536,7 @@ impl App {
         match self.apply_media(&source, media) {
             Ok(()) => self.show_menu(),
             Err(e) => {
-                log::error!("Couldn't open {}: {e}", source.uri());
+                log::error!("Couldn't open {}: {e}", source.for_log());
                 self.show_source_error(&source, &e, false);
             }
         }

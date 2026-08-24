@@ -264,9 +264,148 @@ fn take_panics() {
 ///
 /// Behind `log!`, which is what to call.
 fn write(line: &str) {
-    let line = redact(line);
+    let line = hide_public_hosts(&anonymize(&redact(line)));
     eprintln!("{line}");
     to_file(&line);
+}
+
+/// Replaces the host of any address that is not on a private network.
+///
+/// **A LAN address gives nothing away and answers real questions.**
+/// `http://192.168.3.2:8096` says the scheme, the port and that the server is
+/// on the same network - which is most of diagnosing a connection - while
+/// telling a reader nothing they could not guess, since every home network
+/// uses the same handful of ranges.
+///
+/// A public one is different in kind. Somebody running Jellyfin on a domain or
+/// a routable address, pasted into a public issue that is indexed for ever,
+/// has advertised a server and named it. That is worth more to whoever finds
+/// it than it is to whoever is reading the report.
+///
+/// So the split is by reachability rather than by caution applied evenly. The
+/// scheme and port survive either way, because "it was https on 8920" is the
+/// part that matters and the host is the part that does not.
+///
+/// A bare name - `hoth`, `jellyfin.local` - is replaced too. It cannot be
+/// resolved from outside and is therefore not an invitation, but it is chosen
+/// by a person and often after themselves, and knowing it was a name rather
+/// than an address is all the diagnosis needs.
+fn hide_public_hosts(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+
+    while let Some(at) = rest.find("://") {
+        let scheme_len = rest[..at]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .count();
+        let start = at - scheme_len;
+        let after = at + 3;
+
+        // The authority runs to the next `/`, or to whatever ends the address.
+        let end = rest[after..]
+            .find(|c: char| c == '/' || c.is_whitespace())
+            .map(|offset| after + offset)
+            .unwrap_or(rest.len());
+        let authority = &rest[after..end];
+        let (host, port) = match authority.rsplit_once(':') {
+            // Only a port if it is one - an IPv6 literal is full of colons.
+            Some((host, tail)) if tail.chars().all(|c| c.is_ascii_digit()) => (host, Some(tail)),
+            _ => (authority, None),
+        };
+
+        out.push_str(&rest[..start]);
+        out.push_str(&rest[start..after]);
+        match is_private(host) {
+            true => out.push_str(authority),
+            false => {
+                out.push_str("<server>");
+                if let Some(port) = port {
+                    out.push(':');
+                    out.push_str(port);
+                }
+            }
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether an address is one that cannot be reached from outside the network
+/// it is on. Anything that is not plainly one of those is treated as public,
+/// which is the safe direction to be wrong in.
+fn is_private(host: &str) -> bool {
+    // An empty authority is `file:///path`, which names no host at all - and
+    // local files are most of what this ever prints, so getting this wrong
+    // rewrote every one of them to `file://<server>/path`. Caught by the test
+    // below rather than by reading, which is the whole reason it is there.
+    if host.is_empty() {
+        return true;
+    }
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        // No stable `is_unique_local` on the version this builds against, so
+        // the prefixes are read directly: `fc00::/7` and `fe80::/10`.
+        Ok(std::net::IpAddr::V6(v6)) => {
+            let first = v6.segments()[0];
+            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+        // A name, not an address. `localhost` is the one that is certainly
+        // this machine; everything else is replaced - see the note above.
+        Err(_) => host.eq_ignore_ascii_case("localhost"),
+    }
+}
+
+/// The home directory, in both spellings a path can reach the log in.
+///
+/// Worked out once: it cannot change while the process runs, and this is
+/// consulted on every line.
+fn home_forms() -> &'static [String] {
+    static FORMS: OnceLock<Vec<String>> = OnceLock::new();
+    FORMS.get_or_init(|| {
+        let native = glib::home_dir().to_string_lossy().to_string();
+        if native.is_empty() {
+            return Vec::new();
+        }
+        // A URI spells it with forward slashes - `file:///C:/Users/Ada/...` -
+        // and `Path::display` with the platform's own. Both reach here.
+        let slashed = native.replace('\\', "/");
+        match slashed == native {
+            true => vec![native],
+            false => vec![native, slashed],
+        }
+    })
+}
+
+/// Replaces the home directory with `~` wherever it appears.
+///
+/// **The account name is in it, and it is usually a real one.** Nearly every
+/// path this logs sits underneath it - the data folder, a video, a subtitle
+/// beside it, Kodi's userdata - so without this a log pasted into a public
+/// issue says who wrote it, repeatedly, in a tracker that is indexed for ever.
+///
+/// Here rather than at each call site, for the reason `redact` is: a site
+/// added later cannot forget a rule it never has to know about. It is also the
+/// only place that catches a path arriving inside somebody else's message,
+/// which is where most of them come from - a `std::io::Error` names the file
+/// it failed on, and nothing in this crate formats that.
+///
+/// Case-sensitively, even on Windows where paths are not. Matching loosely
+/// would mean lowercasing the line to compare and then rebuilding it, and the
+/// forms that occur are built from `glib::home_dir` and from URIs made out of
+/// it, which agree. A path somebody typed in another case keeps its directory,
+/// which is a miss rather than a leak of anything else on the line.
+fn anonymize(line: &str) -> String {
+    let mut out = line.to_string();
+    for form in home_forms() {
+        if out.contains(form.as_str()) {
+            out = out.replace(form.as_str(), "~");
+        }
+    }
+    out
 }
 
 /// The file half, which the panic hook uses directly: its own line has already
@@ -447,6 +586,94 @@ mod tests {
     fn a_question_mark_in_a_local_path_is_kept() {
         let line = "Couldn't read file:///home/scott/WhatIsIt?.mkv: no such file";
         assert_eq!(redact(line), line);
+    }
+
+    /// The account name is in the home directory, and the home directory is
+    /// in nearly every path this logs.
+    #[test]
+    fn the_home_directory_becomes_a_tilde() {
+        let home = glib::home_dir().to_string_lossy().to_string();
+        assert!(!home.is_empty(), "the test needs a home directory to hide");
+
+        let line = anonymize(&format!("Couldn't read {home}/Films/Film.mkv: no"));
+        assert!(!line.contains(&home), "{line}");
+        assert!(line.contains("~/Films/Film.mkv"), "{line}");
+    }
+
+    /// A URI spells the same directory with forward slashes, and that form
+    /// has to be caught too or every `file://` line keeps the account name.
+    #[test]
+    fn the_uri_spelling_of_home_is_caught_too() {
+        let home = glib::home_dir().to_string_lossy().to_string();
+        let slashed = home.replace('\\', "/");
+        let line = anonymize(&format!("Opened file:///{slashed}/Films/Film.mkv"));
+        assert!(!line.contains(&slashed), "{line}");
+    }
+
+    /// A LAN address stays: it answers real questions and gives nothing away.
+    #[test]
+    fn a_private_address_is_kept_whole() {
+        let line = "Jellyfin: connecting to ws://192.168.3.2:8096/socket";
+        assert_eq!(hide_public_hosts(line), line);
+        assert_eq!(
+            hide_public_hosts("http://10.0.0.5:8096"),
+            "http://10.0.0.5:8096"
+        );
+        assert_eq!(
+            hide_public_hosts("http://172.16.4.1:8096"),
+            "http://172.16.4.1:8096"
+        );
+        assert_eq!(
+            hide_public_hosts("http://localhost:8096"),
+            "http://localhost:8096"
+        );
+    }
+
+    /// A server on a domain, pasted into a public issue, is an advertisement.
+    /// The scheme and port are what the diagnosis needed anyway.
+    #[test]
+    fn a_public_host_is_replaced_but_the_port_survives() {
+        assert_eq!(
+            hide_public_hosts("Jellyfin: connecting to wss://jellyfin.example.com:8920/socket"),
+            "Jellyfin: connecting to wss://<server>:8920/socket"
+        );
+        assert_eq!(
+            hide_public_hosts("http://203.0.113.7:8096"),
+            "http://<server>:8096"
+        );
+    }
+
+    /// 172.32 is outside the private range, and looks enough like 172.16 that
+    /// getting it wrong would be easy and invisible.
+    #[test]
+    fn an_address_just_outside_the_private_range_is_public() {
+        assert_eq!(
+            hide_public_hosts("http://172.32.0.1:8096"),
+            "http://<server>:8096"
+        );
+    }
+
+    /// A name cannot be resolved from outside, but it is chosen by a person
+    /// and often after one.
+    #[test]
+    fn a_bare_name_is_replaced() {
+        assert_eq!(
+            hide_public_hosts("http://hoth:8096"),
+            "http://<server>:8096"
+        );
+    }
+
+    /// The local files this mostly prints have no host to judge.
+    #[test]
+    fn a_file_uri_is_left_alone() {
+        let line = "Couldn't read file:///srv/media/Film.mkv: no such file";
+        assert_eq!(hide_public_hosts(line), line);
+    }
+
+    #[test]
+    fn a_line_with_no_home_in_it_is_untouched() {
+        let line = "Missing GStreamer element \"tee\". Check the install.";
+        assert_eq!(anonymize(line), line);
     }
 
     #[test]

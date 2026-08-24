@@ -119,6 +119,51 @@ impl Source {
         }
     }
 
+    /// How this reads in the log: the name, and what was diagnostic about
+    /// where it lived rather than where it lived.
+    ///
+    /// **The name is kept and the directory is not**, which is a deliberate
+    /// split rather than caution applied evenly. A file name is load-bearing
+    /// for a whole class of fault: the `&` in a path that broke Kodi's player
+    /// file was a character bug, subtitles beside a video are matched by name
+    /// convention, and "it will not play *this* file" is a large share of what
+    /// a media player is ever asked. Strip names and the log still answers
+    /// "it crashed" while losing "it does not work with this".
+    ///
+    /// The directory answers none of that and gives away a great deal - the
+    /// account name, how somebody organises their library, what else is on the
+    /// disk. What it *did* answer is kept in another form: whether the file is
+    /// on a network share, which is a real source of trouble, and how long the
+    /// whole path is, because Windows still has a limit and a path near it
+    /// fails in ways that look like nothing else.
+    ///
+    /// A remote source keeps its address minus the query string, which is
+    /// where a token would be - see `crate::logging`. There is no directory to
+    /// drop: the path is the server's, not the viewer's.
+    pub fn for_log(&self) -> String {
+        match self {
+            Self::File(path) => {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "(unnamed)".to_string());
+                let whole = path.to_string_lossy();
+                // Both spellings: Windows writes a UNC path `\\host\share`,
+                // and a URI or a shell-typed one arrives with forward slashes.
+                let network = whole.starts_with(r"\\") || whole.starts_with("//");
+                format!(
+                    "{name:?} ({} path, {} characters)",
+                    match network {
+                        true => "network",
+                        false => "local",
+                    },
+                    whole.chars().count()
+                )
+            }
+            Self::Remote(uri) => uri.split('?').next().unwrap_or(uri).to_string(),
+        }
+    }
+
     /// How saved positions and track choices are filed when nothing steadier
     /// is available.
     ///

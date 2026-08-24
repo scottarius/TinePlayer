@@ -106,7 +106,7 @@ impl App {
         match crate::probe::probe_media(source) {
             Ok(media) => self.apply_media(source, media),
             Err(e) => {
-                log::error!("Couldn't read {}: {e}", source.uri());
+                log::error!("Couldn't read {}: {e}", source.for_log());
                 self.forget_file();
                 Err(e)
             }
@@ -392,7 +392,7 @@ impl App {
         };
         log::info!(
             "Opened {}\n  {}, {}, {}",
-            source.uri(),
+            source.for_log(),
             crate::controls::format_time(gstreamer::ClockTime::from_nseconds(duration_ns)),
             count(offered.len(), "soundtrack"),
             count(self.subtitle_options.borrow().len(), "subtitle"),
