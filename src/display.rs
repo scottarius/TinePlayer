@@ -16,6 +16,8 @@ use crate::config::Config;
 pub fn detect_display_env() -> HashMap<String, String> {
     let mut result = HashMap::new();
 
+    // SAFETY: a system call taking nothing and returning an integer. It
+    // cannot fail and touches no memory of ours.
     let uid = unsafe { libc::getuid() };
     let xdg_runtime_dir = format!("/run/user/{uid}");
 
@@ -36,10 +38,29 @@ pub fn detect_display_env() -> HashMap<String, String> {
         return result;
     }
 
+    // **Only sockets this account owns.** `/tmp/.X11-unix` is shared and
+    // world-writable with the sticky bit, so on a machine with more than one
+    // user another of them can create a socket there. The first name in sort
+    // order wins below, so `X0` planted by somebody else is picked ahead of
+    // the real `X1` - and what is on the other end of it then receives every
+    // key pressed in this window.
+    //
+    // Comparing the owner is the whole check: the sticky bit stops anyone
+    // removing or renaming the real one, so a genuine display's socket is
+    // always ours and an impostor's never is. The Wayland branch above needs
+    // nothing equivalent - `/run/user/$uid` is this account's own directory.
+    //
+    // `uid` is the one read at the top of this function.
     let mut x11_sockets: Vec<String> = std::fs::read_dir("/tmp/.X11-unix")
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
+                .filter(|e| {
+                    use std::os::unix::fs::MetadataExt;
+                    // Unreadable metadata means no answer, and no answer is
+                    // not "ours".
+                    e.metadata().map(|meta| meta.uid() == uid).unwrap_or(false)
+                })
                 .filter_map(|e| e.file_name().into_string().ok())
                 .filter(|name| name.starts_with('X'))
                 .collect()
@@ -105,21 +126,28 @@ pub fn apply_display_env(display: &HashMap<String, String>) {
     // load-bearing, and reversing it would break screen reader support
     // silently.
     if std::env::var("GTK_A11Y").is_err() {
+        // SAFETY: this whole function runs before GTK starts and before any
+        // thread exists - see the note above about the ordering against
+        // `enable_accessibility`, which is what makes that true. Setting an
+        // environment variable is only unsound alongside a concurrent read.
         unsafe { std::env::set_var("GTK_A11Y", "none") };
     }
 
     if let Some(v) = display.get("xdg_runtime_dir")
         && std::env::var("XDG_RUNTIME_DIR").is_err()
     {
+        // SAFETY: as above - before GTK, before any thread.
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", v) };
     }
     if let Some(v) = display.get("wayland_display") {
         if std::env::var("WAYLAND_DISPLAY").is_err() {
+            // SAFETY: as above - before GTK, before any thread.
             unsafe { std::env::set_var("WAYLAND_DISPLAY", v) };
         }
     } else if let Some(v) = display.get("display")
         && std::env::var("DISPLAY").is_err()
     {
+        // SAFETY: as above - before GTK, before any thread.
         unsafe { std::env::set_var("DISPLAY", v) };
     }
 }
