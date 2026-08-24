@@ -60,12 +60,6 @@ impl App {
         self.publish_now_playing();
     }
 
-    /// Where playback should pick up, and the title to show for the file.
-    ///
-    /// Under Kodi its library is the authority, so playback starts from the
-    /// position Kodi's own interface was just showing and the two never
-    /// visibly disagree. Its answer stands even when it holds no resume point:
-    /// a film Kodi considers unwatched starts at the beginning rather than
     /// Works out where a chosen subtitle actually comes from.
     ///
     /// The three kinds resolve against three different things - the video's
@@ -119,11 +113,14 @@ impl App {
         }
     }
 
+    /// Where playback should pick up.
+    ///
+    /// Under Kodi its library is the authority, so playback starts from the
+    /// position Kodi's own interface was just showing and the two never
+    /// visibly disagree. Its answer stands even when it holds no resume point:
+    /// a film Kodi considers unwatched starts at the beginning rather than
     /// wherever our own file happens to remember. Only a Kodi that does not
     /// answer at all falls back to `positions.json`.
-    ///
-    /// The title comes from the same call, so it is refreshed here rather
-    /// than costing a second round trip.
     pub(super) fn resume_position(&self) -> Option<u64> {
         let key = self.storage_key()?;
         // Ahead of everything, including Kodi's library: this is where the
