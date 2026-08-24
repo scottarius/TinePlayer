@@ -291,7 +291,17 @@ pub struct Config {
     pub primary_audio_description: bool,
     #[serde(default)]
     pub secondary_audio_description: bool,
-    /// Unset means no subtitles unless chosen for the file.
+    /// Which kind of subtitle to prefer, and what is acceptable instead: one
+    /// of [`crate::subtitles::KINDS`]. Unset means the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_kind: Option<String>,
+    /// Which language, and whether the other output's will do: one of
+    /// [`crate::subtitles::PLACES`], or a language code.
+    ///
+    /// **This field used to hold both halves at once** - `primary_forced` and
+    /// its four siblings crossed the kind with the output. Splitting them on
+    /// 2026-08-24 is what made SDH expressible; `migrate_subtitles` below
+    /// turns an old value into the pair it always meant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_language: Option<String>,
     /// How far in before stopping counts as a place to resume from, as a
@@ -406,6 +416,7 @@ impl Default for Config {
             secondary_offset_on: None,
             primary_audio_description: false,
             secondary_audio_description: false,
+            subtitle_kind: None,
             subtitle_language: None,
             resume_min_percent: None,
             watched_percent: None,
@@ -434,8 +445,51 @@ impl Config {
     /// The returned message is for telling the user, and is `None` both when
     /// the file loaded and when there was no file at all - a first run is not
     /// a problem to report.
+    /// Turns an old combined subtitle setting into the two it always meant.
+    ///
+    /// Until 2026-08-24 `subtitle_language` held one of five values crossing
+    /// the kind with which output to follow - `primary_forced` and siblings -
+    /// which is why SDH could not be asked for at all. The mapping is exact,
+    /// so nobody's setting changes meaning:
+    ///
+    /// | was | kind | language |
+    /// |---|---|---|
+    /// | `none` | `none` | left alone |
+    /// | `primary_forced` | `forced_only` | `first` |
+    /// | `secondary_forced` | `forced_only` | `second` |
+    /// | `primary` | `full` | `first_only` |
+    /// | `secondary` | `full` | `second_only` |
+    /// | a language code | `full` | unchanged |
+    ///
+    /// One thing does change, benignly: the old full modes could not fall back
+    /// to another kind, and `full` now means "prefer full", so a file with only
+    /// an SDH track in that language will offer it rather than nothing.
+    ///
+    /// Only when `subtitle_kind` is absent, so this runs once and a hand-edited
+    /// pair is never overwritten.
+    fn migrate_subtitles(&mut self) {
+        if self.subtitle_kind.is_some() {
+            return;
+        }
+        let (kind, place) = match self.subtitle_language.as_deref() {
+            None => return,
+            Some("none") => ("none", None),
+            Some("primary_forced") => ("forced_only", Some("first")),
+            Some("secondary_forced") => ("forced_only", Some("second")),
+            Some("primary") => ("full", Some("first_only")),
+            Some("secondary") => ("full", Some("second_only")),
+            // A language code, which the language half still holds.
+            Some(_) => ("full", None),
+        };
+        self.subtitle_kind = Some(kind.to_string());
+        if let Some(place) = place {
+            self.subtitle_language = Some(place.to_string());
+        }
+    }
+
     pub fn load() -> (Config, Option<String>) {
-        let (config, problem) = Self::read();
+        let (mut config, problem) = Self::read();
+        config.migrate_subtitles();
         set_remember_positions(config.remember_positions);
         // A copy that could not use its portable folder looks, from the
         // inside, exactly like one whose settings went missing. Said first
@@ -1325,5 +1379,66 @@ mod atomic_tests {
         write_atomically(&path, "token", true).expect("it writes");
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "mode was {:o}", mode & 0o777);
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::Config;
+
+    fn from(old: Option<&str>) -> Config {
+        let mut config = Config::default();
+        config.subtitle_language = old.map(str::to_string);
+        config.migrate_subtitles();
+        config
+    }
+
+    /// Every value the old combined setting could hold, and the pair it meant.
+    /// Exact by design: nobody's preference should change meaning under them.
+    #[test]
+    fn each_old_value_becomes_the_pair_it_meant() {
+        for (old, kind, place) in [
+            ("none", "none", "none"),
+            ("primary_forced", "forced_only", "first"),
+            ("secondary_forced", "forced_only", "second"),
+            ("primary", "full", "first_only"),
+            ("secondary", "full", "second_only"),
+        ] {
+            let config = from(Some(old));
+            assert_eq!(config.subtitle_kind.as_deref(), Some(kind), "{old}");
+            if place != "none" {
+                assert_eq!(config.subtitle_language.as_deref(), Some(place), "{old}");
+            }
+        }
+    }
+
+    /// A language code was always only the language half, so it stays put and
+    /// gains the kind it always implied.
+    #[test]
+    fn a_language_code_keeps_its_place() {
+        let config = from(Some("ru"));
+        assert_eq!(config.subtitle_kind.as_deref(), Some("full"));
+        assert_eq!(config.subtitle_language.as_deref(), Some("ru"));
+    }
+
+    /// A config that never set one is left alone, so the defaults apply rather
+    /// than a migration inventing a setting nobody chose.
+    #[test]
+    fn an_unset_preference_stays_unset() {
+        let config = from(None);
+        assert_eq!(config.subtitle_kind, None);
+        assert_eq!(config.subtitle_language, None);
+    }
+
+    /// Once migrated it never runs again, so a hand-edited pair is not
+    /// overwritten by the old value still sitting in the file.
+    #[test]
+    fn a_pair_already_set_is_left_alone() {
+        let mut config = Config::default();
+        config.subtitle_kind = Some("sdh".to_string());
+        config.subtitle_language = Some("primary_forced".to_string());
+        config.migrate_subtitles();
+        assert_eq!(config.subtitle_kind.as_deref(), Some("sdh"));
+        assert_eq!(config.subtitle_language.as_deref(), Some("primary_forced"));
     }
 }

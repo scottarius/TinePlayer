@@ -181,6 +181,7 @@ enum Setting {
     Subtitles,
     PrimaryLanguage,
     SecondaryLanguage,
+    SubtitleKind,
     SubtitleLanguage,
     SubtitleFont,
     /// What language the interface itself is in, which is a different question
@@ -513,6 +514,7 @@ enum Item {
     Volume(Role),
     Sync(Role),
     SubtitlePreference,
+    SubtitleLanguagePreference,
     SubtitleSize,
     SubtitleFont,
     /// The rows one Kodi installation has, by its place in the list the pane
@@ -560,7 +562,8 @@ impl Item {
             Item::Device(Role::Secondary) => Setting::SecondaryDevice,
             Item::Language(Role::Primary) => Setting::PrimaryLanguage,
             Item::Language(Role::Secondary) => Setting::SecondaryLanguage,
-            Item::SubtitlePreference => Setting::SubtitleLanguage,
+            Item::SubtitlePreference => Setting::SubtitleKind,
+            Item::SubtitleLanguagePreference => Setting::SubtitleLanguage,
             Item::SubtitleFont => Setting::SubtitleFont,
             Item::InterfaceLanguage => Setting::InterfaceLanguage,
             Item::KodiType(index) => Setting::KodiType(index),
@@ -727,6 +730,7 @@ impl Category {
             ],
             Category::Subtitles => vec![
                 (None, Item::SubtitlePreference),
+                (None, Item::SubtitleLanguagePreference),
                 (None, Item::SubtitleSize),
                 (None, Item::SubtitleFont),
             ],
@@ -1404,7 +1408,9 @@ mod settings_rows {
             // placed once for each output, and the Kodi category holds a group
             // of rows per Kodi found, plus the one row that belongs to no
             // installation and names another by hand.
-            let elsewhere = 26;
+            // 27 since 2026-08-24: the subtitle preference became two rows,
+            // one for the kind and one for the language.
+            let elsewhere = 27;
             let kodi = ROWS_PER_KODI * kodis().len() + 1;
             // One row either way: the way in, or the way out.
             let paired = 1;

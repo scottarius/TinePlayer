@@ -723,20 +723,14 @@ impl SubtitleTrack {
     /// foreign lines, SDH carries everything including the sound.
     pub fn kind(&self) -> Option<crate::label::Kind> {
         let title = self.title.to_lowercase();
-        if self.forced.unwrap_or(false) || title.contains("forced") {
+        if self.forced.unwrap_or(false) || crate::label::says_forced(&title) {
             return Some(crate::label::Kind::Forced);
         }
-        let sdh = self.hearing_impaired.unwrap_or(false)
-            || title.contains("sdh")
-            || title.contains("hearing impaired")
-            || title.contains("hard of hearing")
-            || title
-                .split(|c: char| !c.is_ascii_alphanumeric())
-                .any(|word| word == "hi" || word == "cc");
+        let sdh = self.hearing_impaired.unwrap_or(false) || crate::label::says_sdh(&title);
         if sdh {
             return Some(crate::label::Kind::Sdh);
         }
-        let commentary = self.commentary.unwrap_or(false) || title.contains("commentary");
+        let commentary = self.commentary.unwrap_or(false) || crate::label::says_commentary(&title);
         commentary.then_some(crate::label::Kind::Commentary)
     }
 }

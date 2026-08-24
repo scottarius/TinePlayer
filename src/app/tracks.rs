@@ -346,14 +346,23 @@ impl App {
         if self.subtitle_by_hand.get() {
             return;
         }
-        let spec = self
-            .config
-            .borrow()
-            .subtitle_language
-            .clone()
-            .unwrap_or_else(|| crate::subtitles::DEFAULT_MODE.to_string());
-        let mode = crate::subtitles::Auto::parse(&spec);
-        if !crate::subtitles::follows_output(&mode, matches!(changed, Role::Secondary)) {
+        let (kind, place) = {
+            let config = self.config.borrow();
+            (
+                config
+                    .subtitle_kind
+                    .clone()
+                    .unwrap_or_else(|| crate::subtitles::DEFAULT_KIND.to_string()),
+                config
+                    .subtitle_language
+                    .clone()
+                    .unwrap_or_else(|| crate::subtitles::DEFAULT_PLACE.to_string()),
+            )
+        };
+        let prefer = crate::subtitles::Wanted::parse(&kind);
+        if prefer == crate::subtitles::Wanted::None
+            || !crate::subtitles::follows_output(&place, matches!(changed, Role::Secondary))
+        {
             return;
         }
 
@@ -370,7 +379,8 @@ impl App {
         let secondary = language_of(*self.secondary_track.borrow());
 
         let wanted = crate::subtitles::automatic(
-            &mode,
+            &prefer,
+            &place,
             &self.subtitle_options.borrow(),
             primary.as_deref(),
             secondary.as_deref(),

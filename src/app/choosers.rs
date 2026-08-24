@@ -220,43 +220,63 @@ impl App {
                     entries.push((crate::languages::display_name(code), Some(position)));
                 }
             }
+            Setting::SubtitleKind => {
+                // Five entries, no languages: this half asks what to show and
+                // the row below asks whose language to show it in.
+                let setting = self
+                    .config
+                    .borrow()
+                    .subtitle_kind
+                    .clone()
+                    .unwrap_or_else(|| crate::subtitles::DEFAULT_KIND.to_string());
+                current = crate::subtitles::KINDS
+                    .iter()
+                    .position(|value| *value == setting);
+                // Under "None", which is the one entry that turns the whole
+                // thing off rather than choosing among kinds.
+                dividers.push((1, None));
+                for (position, value) in crate::subtitles::KINDS.iter().enumerate() {
+                    let label = crate::subtitles::kind_label(value)
+                        .map(std::borrow::Cow::into_owned)
+                        .unwrap_or_else(|| (*value).to_string());
+                    entries.push((label, Some(position)));
+                }
+            }
             Setting::SubtitleLanguage => {
-                // The automatic choices first, then the languages, in one
-                // list: they answer the same question, and following an
-                // output is the answer most people want.
-                let modes = crate::subtitles::MODES.len();
+                // Following an output first, then the languages, in one list:
+                // they answer the same question, and following an output is
+                // the answer most people want - it tracks whatever is actually
+                // being heard, file by file, where naming a language is a
+                // guess that holds until it does not.
+                let places = crate::subtitles::PLACES.len();
                 let setting = self
                     .config
                     .borrow()
                     .subtitle_language
                     .clone()
-                    .unwrap_or_else(|| crate::subtitles::DEFAULT_MODE.to_string());
-                current = crate::subtitles::MODES
+                    .unwrap_or_else(|| crate::subtitles::DEFAULT_PLACE.to_string());
+                current = crate::subtitles::PLACES
                     .iter()
                     .position(|value| *value == setting)
                     .or_else(|| {
                         crate::languages::LANGUAGES
                             .iter()
                             .position(|(code, _, _, _)| *code == setting)
-                            .map(|position| modes + position)
+                            .map(|position| places + position)
                     });
-                // Below "None", and again above the languages. What sits
-                // between is the part worth choosing: following an output
-                // tracks whatever is actually being heard, file by file, where
-                // naming a language is a guess that holds until it does not.
-                dividers.push((1, None));
-                dividers.push((modes, None));
-                for (position, value) in crate::subtitles::MODES.iter().enumerate() {
-                    // The stored value and what it reads as are two different
-                    // things now: one goes in config.yaml, the other on screen.
-                    let label = crate::subtitles::mode_label(value)
+                dividers.push((places, None));
+                for (position, value) in crate::subtitles::PLACES.iter().enumerate() {
+                    let label = crate::subtitles::place_label(value)
                         .map(std::borrow::Cow::into_owned)
                         .unwrap_or_else(|| (*value).to_string());
                     entries.push((label, Some(position)));
                 }
                 for position in crate::languages::display_order() {
                     let code = crate::languages::LANGUAGES[position].0;
-                    entries.push((crate::languages::display_name(code), Some(modes + position)));
+                    entries.push((
+                        crate::languages::display_name(code),
+                        Some(places + position),
+                    ));
                 }
             }
             Setting::SubtitleFont => {
@@ -745,11 +765,17 @@ impl App {
                 }
                 let _ = config.save();
             }
+            Setting::SubtitleKind => {
+                let picked = choice.map(|index| crate::subtitles::KINDS[index].to_string());
+                let mut config = self.config.borrow_mut();
+                config.subtitle_kind = picked;
+                let _ = config.save();
+            }
             Setting::SubtitleLanguage => {
-                let modes = crate::subtitles::MODES.len();
-                let picked = choice.map(|index| match index.checked_sub(modes) {
+                let places = crate::subtitles::PLACES.len();
+                let picked = choice.map(|index| match index.checked_sub(places) {
                     Some(language) => crate::languages::LANGUAGES[language].0.to_string(),
-                    None => crate::subtitles::MODES[index].to_string(),
+                    None => crate::subtitles::PLACES[index].to_string(),
                 });
                 let mut config = self.config.borrow_mut();
                 config.subtitle_language = picked;

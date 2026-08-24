@@ -216,11 +216,12 @@ impl App {
             .unwrap_or_default();
         let mut options = crate::subtitles::options(source.local(), &media.subtitles, &library);
 
-        let (primary_language, secondary_language, subtitle_language, described) = {
+        let (primary_language, secondary_language, subtitle_kind, subtitle_language, described) = {
             let config = self.config.borrow();
             (
                 config.primary_language.clone(),
                 config.secondary_language.clone(),
+                config.subtitle_kind.clone(),
                 config.subtitle_language.clone(),
                 (
                     config.primary_audio_description,
@@ -321,11 +322,14 @@ impl App {
                     })
                 };
                 crate::subtitles::automatic(
-                    &crate::subtitles::Auto::parse(
-                        subtitle_language
+                    &crate::subtitles::Wanted::parse(
+                        subtitle_kind
                             .as_deref()
-                            .unwrap_or(crate::subtitles::DEFAULT_MODE),
+                            .unwrap_or(crate::subtitles::DEFAULT_KIND),
                     ),
+                    subtitle_language
+                        .as_deref()
+                        .unwrap_or(crate::subtitles::DEFAULT_PLACE),
                     &options,
                     language_of(known(primary)),
                     language_of(known(secondary)),
@@ -451,7 +455,7 @@ impl App {
                     "No subtitle matched. Looking for {:?} against primary {:?},                      secondary {:?}. Offered:{}",
                     subtitle_language
                         .as_deref()
-                        .unwrap_or(crate::subtitles::DEFAULT_MODE),
+                        .unwrap_or(crate::subtitles::DEFAULT_KIND),
                     heard(*self.primary_track.borrow()),
                     heard(*self.secondary_track.borrow()),
                     rows,
