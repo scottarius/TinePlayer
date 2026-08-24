@@ -774,10 +774,6 @@ fn use_bundled_fonts() {
 
 fn main() -> std::process::ExitCode {
     attach_parent_console();
-    // Before anything has something to say, and before any thread exists to
-    // say it from. `attach_parent_console` comes first only so that the
-    // standard-error half of this reaches the terminal that started us.
-    logging::start();
     // Before any window is made, which is when the identity is stamped on.
     name_this_process();
     // Before anything reads the environment, and before GStreamer starts.
@@ -787,6 +783,30 @@ fn main() -> std::process::ExitCode {
     use_bundled_fonts();
 
     let args = Args::parse();
+
+    // **After the arguments, and not for every one of them.** `--version`,
+    // `--list-devices`, `--list-tracks` and `--forget` answer a question and
+    // exit: no window, no playback, nothing a log is for. Starting it anyway
+    // put four timestamped lines above the answer - and `list_devices` is
+    // written to open with a blank line precisely so its block reads as an
+    // answer rather than as something going wrong, which four lines of
+    // preamble undo.
+    //
+    // Invisible on Windows, where a release build is GUI-subsystem and has no
+    // console unless one started it, and plainly visible everywhere else. It
+    // shipped through 301 tests, clippy on three platforms and a Pi build,
+    // because none of those run the binary the way a person does; it was found
+    // by installing the package from a release rehearsal on 2026-08-24.
+    //
+    // Nothing above logs - checked rather than assumed - so parsing first
+    // loses nothing. `--version` needs no mention here at all: clap answers it
+    // during `parse` and never returns.
+    let answering = args.list_devices || args.list_tracks || args.forget;
+    if !answering {
+        // Before anything has something to say, and before any thread exists
+        // to say it from.
+        logging::start();
+    }
 
     gstreamer::init().expect("Failed to initialize GStreamer");
     #[cfg(target_os = "windows")]
