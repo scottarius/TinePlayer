@@ -436,7 +436,12 @@ pub fn translate_plural(one: &'static str, many: &'static str, count: u64) -> Co
         Active::Compiled(catalog) => match catalog.plural.binary_search_by_key(&one, |e| e.0) {
             Ok(at) => {
                 let forms = catalog.plural[at].1;
-                let which = (catalog.plural_index)(count).min(catalog.nplurals - 1);
+                // `saturating_sub`, because `nplurals - 1` underflows on a
+                // catalog declaring none. Compiled catalogs come through
+                // `build.rs`, which rejects that - but the same arithmetic is
+                // below for one loaded at runtime, where it is reachable, and
+                // two spellings of one bound is how they come to differ.
+                let which = (catalog.plural_index)(count).min(catalog.nplurals.saturating_sub(1));
                 match forms.get(which) {
                     Some(form) => Cow::Borrowed(*form),
                     None => untranslated(),
@@ -446,7 +451,16 @@ pub fn translate_plural(one: &'static str, many: &'static str, count: u64) -> Co
         },
         Active::Loaded(loaded) => match loaded.plural.get(one) {
             Some(forms) => {
-                let which = (loaded.rule.eval(count) as usize).min(loaded.nplurals - 1);
+                // **`nplurals=0` reaches here.** `TINEPLAYER_PO` loads a
+                // catalog off disk with no build step to vet it, and it exists
+                // so a translator can point a release at the file they are
+                // editing - mid-edit, which is exactly when a header is half
+                // written. `nplurals - 1` underflowed on that: a panic in a
+                // debug build, and in release a wrap to `usize::MAX` that the
+                // `min` and the `get` below happened to absorb into the right
+                // answer. Working by accident is not the same as working.
+                let which =
+                    (loaded.rule.eval(count) as usize).min(loaded.nplurals.saturating_sub(1));
                 match forms.get(which) {
                     Some(form) => Cow::Borrowed(form.as_str()),
                     None => untranslated(),

@@ -136,8 +136,8 @@ msgstr ""
 #: src/app/alignment.rs:102 src/app/alignment.rs:188 src/app/alignment.rs:329
 #: src/app/browsing.rs:168 src/app/browsing.rs:309 src/app/browsing.rs:656
 #: src/app/files.rs:25 src/app/kodi_screens.rs:740 src/app/media_page.rs:824
-#: src/app/pairing.rs:123 src/app/pairing.rs:320 src/app/pairing.rs:594
-#: src/app/pairing.rs:682 src/app/playback.rs:645
+#: src/app/pairing.rs:123 src/app/pairing.rs:320 src/app/pairing.rs:613
+#: src/app/pairing.rs:701 src/app/playback.rs:645
 msgid "Cancel"
 msgstr ""
 
@@ -329,7 +329,7 @@ msgstr ""
 msgid "Configuration Error"
 msgstr ""
 
-#: src/app/kodi_screens.rs:689 src/app/pairing.rs:556
+#: src/app/kodi_screens.rs:689 src/app/pairing.rs:575
 msgid "OK"
 msgstr ""
 
@@ -547,11 +547,11 @@ msgstr ""
 msgid "The server could not be reached. Remove TinePlayer under Devices in the Jellyfin dashboard to revoke access."
 msgstr ""
 
-#: src/app/pairing.rs:633
+#: src/app/pairing.rs:652
 msgid "Clear all saved playback data?"
 msgstr ""
 
-#: src/app/pairing.rs:634
+#: src/app/pairing.rs:653
 msgid "Clear"
 msgstr ""
 
@@ -894,7 +894,7 @@ msgstr ""
 msgid "Volume, all outputs"
 msgstr ""
 
-#: src/i18n.rs:740
+#: src/i18n.rs:754
 msgid "Use the system language"
 msgstr ""
 

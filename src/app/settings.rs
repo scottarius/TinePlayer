@@ -1338,7 +1338,7 @@ impl App {
             return String::new();
         }
         match crate::updates::newer(&self.updates.borrow()) {
-            Some((version, _)) => tr!(
+            Some(version) => tr!(
                 "Update available: v{version}",
                 version = version.trim_start_matches(['v', 'V'])
             )
@@ -1387,10 +1387,14 @@ impl App {
     }
 
     /// Opens the release page in whatever the machine uses for links.
+    ///
+    /// Built from the tag against a constant rather than read from
+    /// `updates.json`, which used to hold a whole URL - see
+    /// `updates::RELEASE_PAGE`. Nothing on disk decides where this goes.
     fn open_release_page(self: &Rc<Self>) {
         let url = {
             let state = self.updates.borrow();
-            crate::updates::newer(&state).map(|(_, url)| url.to_string())
+            crate::updates::newer(&state).map(crate::updates::page_for)
         };
         if let Some(url) = url {
             gtk::gio::AppInfo::launch_default_for_uri(&url, None::<&gtk::gio::AppLaunchContext>)

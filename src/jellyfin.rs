@@ -1407,13 +1407,12 @@ pub fn quick_connect_poll(
             .unwrap_or_default()
             .to_string()
     };
-    // The account, never the token. Who this machine is signed in as is the
-    // thing a reader needs - a library that looks wrong is usually the wrong
-    // user rather than the wrong server.
-    log::info!(
-        "Jellyfin: Quick Connect approved, signed in as {:?}",
-        field("Name")
-    );
+    // That it worked, and nothing about who. The name was logged here at
+    // first, on the grounds that a library which looks wrong is usually the
+    // wrong user rather than the wrong server - which is true and is not worth
+    // an account name in a public issue tracker. Whoever is diagnosing it can
+    // ask, and the person answering can decide.
+    log::info!("Jellyfin: Quick Connect approved, signed in");
     Ok(Some(Account {
         token: token.to_string(),
         user_id: field("Id"),

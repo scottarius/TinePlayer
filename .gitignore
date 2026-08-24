@@ -14,8 +14,11 @@ dist/
 # megabytes, fetched again on demand, and not what we ship - data/fonts is.
 packaging/fonts/.sources/
 
-# Python leaves these beside any script it imports; the extractor gets
-# imported by its own tests.
+# Python leaves these beside any script it imports. Nothing in the repository
+# imports one today - this used to say the extractor was imported by its own
+# tests, and there are none tracked - but running any of them from the top of
+# the tree still produces one, and a rule that costs a line is cheaper than
+# noticing the day somebody adds the tests.
 __pycache__/
 *.pyc
 
