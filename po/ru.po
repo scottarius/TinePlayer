@@ -282,7 +282,11 @@ msgstr "Аудиофайлы"
 msgid "Video files"
 msgstr "Видеофайлы"
 
-#: src/app/files.rs:473
+#: src/app/files.rs:51
+msgid "All files"
+msgstr "Все файлы"
+
+#: src/app/files.rs:524
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -294,7 +298,7 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app/files.rs:483
+#: src/app/files.rs:534
 msgid ""
 "\n"
 "\n"
@@ -303,10 +307,6 @@ msgstr ""
 "\n"
 "\n"
 "Список поддерживаемых путей и ссылок см. на tineplayer.app/docs/."
-
-#: src/app/files.rs:51
-msgid "All files"
-msgstr "Все файлы"
 
 #: src/app/keys.rs:48
 msgid "Keys and Buttons"

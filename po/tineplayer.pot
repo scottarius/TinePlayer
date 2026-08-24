@@ -262,7 +262,11 @@ msgstr ""
 msgid "Video files"
 msgstr ""
 
-#: src/app/files.rs:473
+#: src/app/files.rs:51
+msgid "All files"
+msgstr ""
+
+#: src/app/files.rs:524
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -270,15 +274,11 @@ msgid ""
 "{reason}"
 msgstr ""
 
-#: src/app/files.rs:483
+#: src/app/files.rs:534
 msgid ""
 "\n"
 "\n"
 "See tineplayer.app/docs/ for the paths and URLs that can be played."
-msgstr ""
-
-#: src/app/files.rs:51
-msgid "All files"
 msgstr ""
 
 #: src/app/keys.rs:48
