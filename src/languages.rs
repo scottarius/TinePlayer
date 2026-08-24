@@ -234,19 +234,40 @@ pub fn known(tag: &str) -> bool {
 /// `film.en.hi.srt`, and containers carry anything from `en` to `eng` to
 /// `en-US`, so only the leading letters are compared.
 pub fn matches(tag: &str, code: &str) -> bool {
-    let tag: String = tag
-        .trim()
-        .to_lowercase()
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect();
-    if tag.is_empty() {
+    let leading = |text: &str| -> String {
+        text.trim()
+            .to_lowercase()
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect()
+    };
+    let tag = leading(tag);
+    let code = leading(code);
+    if tag.is_empty() || code.is_empty() {
         return false;
     }
-    LANGUAGES
-        .iter()
-        .find(|(stored, _, _, _)| *stored == code)
-        .is_some_and(|(_, _, _, aliases)| aliases.contains(&tag.as_str()))
+    // The same tag on both sides is the same language, whatever the table has
+    // heard of. A rip labelled with a code nobody standardised still matches
+    // itself, which is the only honest answer available for one.
+    if tag == code {
+        return true;
+    }
+    // **Both sides are resolved through the aliases, not just the tag.** This
+    // used to look `code` up in the stored column alone, so it only ever
+    // worked when the caller already held a canonical code - which the
+    // language *preferences* do, and a track's own language does not. A local
+    // file says `en` and a Jellyfin stream says `eng` for the same soundtrack,
+    // so casting a film matched no subtitle at all while browsing to it
+    // matched the right one. Reported 2026-08-24.
+    let entry = |wanted: &str| {
+        LANGUAGES
+            .iter()
+            .find(|(_, _, _, aliases)| aliases.contains(&wanted))
+    };
+    match (entry(&tag), entry(&code)) {
+        (Some(from_tag), Some(from_code)) => std::ptr::eq(from_tag, from_code),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -484,5 +505,58 @@ mod order_tests {
         expected.sort();
         assert_eq!(folded, expected);
         assert!(latin.contains(&"Čeština") && latin.contains(&"Íslenska"));
+    }
+}
+
+#[cfg(test)]
+mod matching_tests {
+    use super::matches;
+
+    /// A track states its language in whatever form its source uses, and the
+    /// two sides are often not the same form. A local file says `en` where
+    /// Jellyfin says `eng` for the identical soundtrack.
+    #[test]
+    fn the_same_language_matches_in_either_form() {
+        for (tag, code) in [
+            ("en", "en"),
+            ("eng", "en"),
+            ("en", "eng"),
+            ("eng", "eng"),
+            ("rus", "ru"),
+            ("ru", "rus"),
+            ("eng - English (Forced)", "eng"),
+            ("rus - Russian (Forced)", "ru"),
+            ("en-US", "eng"),
+        ] {
+            assert!(matches(tag, code), "{tag:?} should match {code:?}");
+        }
+    }
+
+    #[test]
+    fn different_languages_do_not_match() {
+        for (tag, code) in [
+            ("es", "en"),
+            ("spa", "eng"),
+            ("es - Español (Forced)", "eng"),
+            ("ru", "uk"),
+        ] {
+            assert!(!matches(tag, code), "{tag:?} should not match {code:?}");
+        }
+    }
+
+    /// A code the table never heard of still matches itself, which is the only
+    /// answer available for one.
+    #[test]
+    fn an_unknown_code_matches_itself_and_nothing_else() {
+        assert!(matches("qya", "qya"));
+        assert!(!matches("qya", "en"));
+        assert!(!matches("en", "qya"));
+    }
+
+    #[test]
+    fn nothing_matches_an_empty_side() {
+        assert!(!matches("", "en"));
+        assert!(!matches("en", ""));
+        assert!(!matches("- Forced", "en"));
     }
 }
