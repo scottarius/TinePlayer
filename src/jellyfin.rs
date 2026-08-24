@@ -438,10 +438,16 @@ fn is_refusal(code: u16) -> bool {
     matches!(code, 401 | 403)
 }
 
-fn failed(code: i32, body: &str) -> Error {
-    match u16::try_from(code).map(is_refusal) {
-        Ok(true) => Error::Unauthorized,
-        _ => Error::Failed(format!("Jellyfin answered {code}: {}", body.trim())),
+/// The same question for the REST side, with the body kept for the message.
+///
+/// `u16` throughout since minreq 3, which reports a status the same way
+/// `tungstenite` always did. Before that this took an `i32` and reached
+/// `is_refusal` through a `u16::try_from`, so the two halves of one decision
+/// were written in different types for no reason but the client library.
+fn failed(code: u16, body: &str) -> Error {
+    match is_refusal(code) {
+        true => Error::Unauthorized,
+        false => Error::Failed(format!("Jellyfin answered {code}: {}", body.trim())),
     }
 }
 

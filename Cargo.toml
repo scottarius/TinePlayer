@@ -10,6 +10,11 @@ name = "tineplayer"
 # packaging trims the suffix for the one field Inno insists is numeric.
 version = "1.5.0-dev"
 edition = "2024"
+# What LICENSE has said since the first commit, stated where a tool can read
+# it. `cargo deny` warns without this, and it is the one crate in the graph
+# that could not answer for itself - which is a poor look in the check that
+# exists to make every other crate answer for theirs.
+license = "MIT"
 
 # The crate keeps its lowercase name for crates.io conventions, while the
 # executable is capitalized to match how the application presents itself.
@@ -79,13 +84,31 @@ gstreamer-pbutils = "0.23"
 gstreamer-app = "0.23"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-# One HTTPS GET, for the version check. Deliberately the smallest thing that
-# does that: a full HTTP client would be more code than the feature. rustls
-# rather than the system TLS because it needs no OpenSSL headers to build,
-# which keeps setup-linux.sh and the .deb dependencies exactly as they are.
-# "-probe" reads the machine's own certificate store instead of baking a copy
-# in, so an expired bundle is the operating system's problem rather than ours.
-minreq = { version = "2.14", features = ["https-rustls-probe", "json-using-serde"] }
+# The HTTP client: the version check, and every call to a Jellyfin server.
+# Small on purpose - a full client would be more code than the features that
+# use it - and rustls rather than the system TLS because it needs no OpenSSL
+# headers to build, which keeps setup-linux.sh and the .deb dependencies
+# exactly as they are.
+#
+# **3 rather than 2, and that is a security fix rather than housekeeping.**
+# minreq 2.14 pinned rustls 0.21, a branch upstream no longer issues fixes
+# for, and on 2026-08-24 `cargo deny check advisories` found three
+# vulnerabilities in the `rustls-webpki 0.101.7` underneath it - two name
+# constraint bugs and a reachable panic parsing revocation lists. Every
+# Jellyfin call and the update check went through that, while the WebSocket
+# rode a current stack, so the binary carried two rustls versions and the
+# traffic used the older one. minreq 3 is on rustls 0.23, which is the version
+# tungstenite already had: one TLS stack now, and the advisories are gone.
+# Nothing but the status type changed in the API - it is a `u16` now.
+#
+# "-probe" still means the machine's own certificates rather than a copy baked
+# in, so an expired bundle is the operating system's problem. The mechanism
+# behind it changed with 3: `rustls-platform-verifier` instead of
+# `rustls-native-certs`, which hands verification to SChannel or
+# Security.framework rather than only borrowing their root lists. It pulls an
+# Android path with a bundled root store behind it; checked on 2026-08-24 that
+# `webpki-root-certs` compiles on none of the five targets shipped here.
+minreq = { version = "3", features = ["https-rustls-probe", "json-using-serde"] }
 serde_yaml = "0.9.34"
 gtk = { package = "gtk4", version = "0.9" }
 
