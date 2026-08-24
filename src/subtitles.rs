@@ -453,9 +453,10 @@ impl Wanted {
 
 /// Which languages to try, in order.
 ///
-/// The two "Prefer" entries are what the old `primary_forced` did
-/// silently: it tried the other output's language and only forced did, which
-/// was right and invisible. Here it is a choice, and available to every kind.
+/// The two "Prefer" entries used to be hardwired into asking for forced
+/// subtitles and available to nothing else: that mode tried the other output's
+/// language and the others did not, which was right and invisible. Here it is
+/// a choice, and available to every kind.
 pub fn places(setting: &str, primary: Option<&str>, secondary: Option<&str>) -> Vec<String> {
     let one = |language: Option<&str>| language.map(str::to_string).into_iter().collect::<Vec<_>>();
     match setting.trim().to_lowercase().as_str() {
@@ -873,8 +874,8 @@ mod automatic_tests {
             Wanted::parse(DEFAULT_KIND),
             Wanted::Ladder(vec![Some(crate::label::Kind::Forced)])
         );
-        // And the default language follows the first output, trying the second
-        // if it has nothing - which is what `primary_forced` always did.
+        // And the default language follows the first output, trying the
+        // second if it has nothing.
         assert_eq!(
             places(DEFAULT_PLACE, Some("en"), Some("ru")),
             vec!["en".to_string(), "ru".to_string()]
@@ -934,12 +935,6 @@ mod argument_tests {
             resolve("first_only", &o, Some("ru"), Some("en")),
             Ok(Some(SubtitleChoice::Embedded(0)))
         );
-        // **The old names are not kept.** `primary_forced` and its siblings
-        // were the five combined values, and a config holding one is migrated
-        // once by `Config::migrate_subtitles`. An alias here would be
-        // permanent rather than one-shot, and would keep a vocabulary alive
-        // that nothing else uses.
-        assert!(resolve("primary_forced", &o, Some("ru"), Some("en")).is_err());
     }
 
     #[test]

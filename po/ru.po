@@ -849,7 +849,7 @@ msgstr "Вверх, к списку дисков"
 msgid "Nothing here"
 msgstr "Здесь пусто"
 
-#: src/config.rs:544
+#: src/config.rs:497
 msgid ""
 "Couldn't read your settings from {path}.\n"
 "\n"
@@ -863,7 +863,7 @@ msgstr ""
 "\n"
 "TinePlayer запущен с настройками по умолчанию."
 
-#: src/config.rs:551
+#: src/config.rs:504
 msgid ""
 "\n"
 "\n"
@@ -873,7 +873,7 @@ msgstr ""
 "\n"
 "Файл сохранён как {path}."
 
-#: src/config.rs:557
+#: src/config.rs:510
 msgid ""
 "\n"
 "\n"
@@ -1248,7 +1248,7 @@ msgstr "B"
 msgid "Back, or close menus/controls"
 msgstr "Назад или закрыть меню и панели"
 
-#: src/subtitles.rs:1231
+#: src/subtitles.rs:1226
 msgid "Subtitle {number}"
 msgstr ""
 
