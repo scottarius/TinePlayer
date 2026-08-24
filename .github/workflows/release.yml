@@ -65,7 +65,19 @@ jobs:
       # Keyed on the pinned version alone, with no `restore-keys`: a cache from
       # another version is not a partial answer, it is the wrong GStreamer, and
       # the build would go on to link against it.
-      - uses: actions/cache@v6
+      #
+      # **`restore` rather than `cache`, so this job never writes it.** The key
+      # and path are ci.yml's, deliberately - a cache is scoped by ref rather
+      # than by workflow, so this reads the entry CI already wrote on `main`
+      # (912 MB, checked 2026-08-24). CI runs on every push and pull request,
+      # and a restore refreshes the entry's last-used time, so it keeps itself
+      # warm without this job doing anything.
+      #
+      # Read-only matters because the allowance is already full: 10.76 GB
+      # against a 10 GB limit on 2026-08-24, which means GitHub is evicting as
+      # it goes. A release job uploading another 912 MB would be paying to make
+      # that worse, for a copy of something that is already there.
+      - uses: actions/cache/restore@v6
         with:
           path: ~\AppData\Local\Programs\gstreamer
           key: windows-gstreamer-${{ env.GSTREAMER_VERSION }}
