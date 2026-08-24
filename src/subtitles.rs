@@ -1257,3 +1257,82 @@ mod row_tests {
         assert_eq!(row_native(&library("", "Signs")), "Signs");
     }
 }
+
+#[cfg(test)]
+mod stated_false_tests {
+    use super::*;
+
+    /// The shape a scraped library actually produces, from a report on
+    /// 2026-08-24: seventeen subtitle tracks, three of them titled "Forced",
+    /// and no forced subtitle offered for any of them.
+    ///
+    /// **`forced: Some(false)` is the whole point of this fixture.** The
+    /// container stated nothing - checked with `matroska::flags`, which
+    /// answered `None` for every track - and the `.nfo` written beside it
+    /// stated `<forced>False</forced>` on all seventeen, which is what a
+    /// scraper writes when it did not look rather than when it checked. So the
+    /// tracks arrive here carrying a stated no and a title saying yes.
+    fn stated_false() -> Vec<Subtitle> {
+        let track = |index: u32, language: &str, title: &str| crate::probe::SubtitleTrack {
+            index,
+            language: language.to_string(),
+            title: title.to_string(),
+            format: "SubRip".to_string(),
+            // What the sidecar asserted, and what used to end the search.
+            forced: Some(false),
+            hearing_impaired: None,
+            commentary: None,
+        };
+        let tracks = vec![
+            track(0, "ru", "Russian (Forced)"),
+            track(1, "ru", "Russian (iTunes)"),
+            track(2, "ru", "Russian (Cool Story Blog)"),
+            track(3, "en", "English (Forced)"),
+            track(4, "en", "SDH"),
+            track(5, "uk", "Ukrainian (Forced)"),
+        ];
+        options(None, &tracks, &[])
+    }
+
+    #[test]
+    fn the_forced_tracks_are_recognised_as_forced() {
+        let o = stated_false();
+        for (at, expected) in [(0, true), (1, false), (2, false), (3, true), (5, true)] {
+            assert_eq!(
+                o[at].is_forced(),
+                expected,
+                "option {at} ({:?}) read as forced={}",
+                o[at].label(),
+                o[at].is_forced()
+            );
+        }
+    }
+
+    /// What was reported: English on the first output, Russian on the second,
+    /// preference "Forced (Prefer Second Output Language)". It chose nothing.
+    #[test]
+    fn forced_following_the_second_output_finds_the_russian_one() {
+        assert_eq!(
+            automatic(
+                &Auto::parse("secondary_forced"),
+                &stated_false(),
+                Some("en"),
+                Some("ru")
+            ),
+            Some(SubtitleChoice::Embedded(0))
+        );
+    }
+
+    #[test]
+    fn forced_following_the_first_output_finds_the_english_one() {
+        assert_eq!(
+            automatic(
+                &Auto::parse("primary_forced"),
+                &stated_false(),
+                Some("en"),
+                Some("ru")
+            ),
+            Some(SubtitleChoice::Embedded(3))
+        );
+    }
+}
