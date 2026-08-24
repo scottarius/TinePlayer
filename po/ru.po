@@ -1248,7 +1248,7 @@ msgstr "B"
 msgid "Back, or close menus/controls"
 msgstr "Назад или закрыть меню и панели"
 
-#: src/subtitles.rs:1226
+#: src/subtitles.rs:1294
 msgid "Subtitle {number}"
 msgstr ""
 

@@ -374,13 +374,38 @@ impl App {
                 };
                 let primary = language_of(&app.primary_track, &app.primary_file);
                 let secondary = language_of(&app.secondary_track, &app.secondary_file);
+                // The language rule as configured, which a colon in the spec
+                // may override for this run.
+                let place = app
+                    .config
+                    .borrow()
+                    .subtitle_language
+                    .clone()
+                    .unwrap_or_else(|| crate::subtitles::DEFAULT_PLACE.to_string());
                 match crate::subtitles::resolve(
                     spec,
+                    &place,
                     &app.subtitle_options.borrow(),
                     primary.as_deref(),
                     secondary.as_deref(),
                 ) {
-                    Ok(choice) => *app.subtitle.borrow_mut() = choice,
+                    Ok(choice) => {
+                        // The one place a command-line subtitle is settled,
+                        // and it runs after `apply_media` has already logged
+                        // what the preferences chose - so without this the log
+                        // shows the answer the flags were about to replace.
+                        log::info!(
+                            "--subtitle {spec:?} chose {}",
+                            match &choice {
+                                Some(choice) => format!("{choice:?}"),
+                                None => "nothing".to_string(),
+                            }
+                        );
+                        *app.subtitle.borrow_mut() = choice;
+                        // Named on the command line is asked for, so the
+                        // preference does not overrule it if an output moves.
+                        app.subtitle_by_hand.set(true);
+                    }
                     // Reported rather than obeyed silently: playing with
                     // the wrong subtitles, or none, is not what was asked
                     // for either way.

@@ -1207,7 +1207,7 @@ msgstr ""
 msgid "Back, or close menus/controls"
 msgstr ""
 
-#: src/subtitles.rs:1226
+#: src/subtitles.rs:1294
 msgid "Subtitle {number}"
 msgstr ""
 

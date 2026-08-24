@@ -834,7 +834,9 @@ pub struct Preset {
     /// or `en:ad`. See [`crate::probe::resolve_audio`].
     pub primary: Option<String>,
     pub secondary: Option<String>,
-    /// A number, a language code, or a subtitle file name beside the video.
+    /// One particular subtitle - a number, a language code, a file name - or
+    /// a kind to choose automatically, optionally with a language after a
+    /// colon. See [`crate::subtitles::resolve`].
     pub subtitle: Option<String>,
 }
 

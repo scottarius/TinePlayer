@@ -537,29 +537,46 @@ pub fn automatic(
 /// offered, which is more use than silently playing without them.
 pub fn resolve(
     spec: &str,
+    configured_place: &str,
     options: &[Subtitle],
     primary_language: Option<&str>,
     secondary_language: Option<&str>,
 ) -> Result<Option<SubtitleChoice>, String> {
     let spec = spec.trim();
+
+    // **A colon separates a kind from a language, and only after a kind.**
+    // `--subtitle sdh:fr`, `--subtitle full:first_only`. Everything else this
+    // takes is one particular subtitle rather than a preference, so there is
+    // nothing for a language to qualify - and a language on its own would be
+    // the bare form already, which selects a subtitle rather than choosing
+    // one.
+    //
+    // Requiring a known kind in front is what makes it safe as well as
+    // readable: `C:\subs\film.srt` has a colon in it and `C` is not a kind,
+    // so a Windows path is never mistaken for a pair. The audio flags read
+    // `en:ad` the other way round, language first - the orders differ because
+    // what leads is what decides how the rest is read, and here that is the
+    // kind: it is the whole difference between choosing automatically and
+    // naming one subtitle.
+    let (spec, place) = match spec.split_once(':') {
+        Some((kind, place)) if KINDS.iter().any(|k| k.eq_ignore_ascii_case(kind.trim())) => {
+            (kind.trim(), place.trim())
+        }
+        // Whatever was configured, so naming a kind alone is "just this once,
+        // that kind" rather than "forget the language I set".
+        _ => (spec, configured_place),
+    };
+
     if spec.eq_ignore_ascii_case("none") || spec == "0" {
         return Ok(None);
     }
 
-    // Either half of the setting is accepted here and means the same: one run
-    // set that way, rather than changing the setting itself. Naming one half
-    // leaves the other at its default, since this has no config to read - so
-    // `--subtitle sdh` is "SDH, following the first output" and
-    // `--subtitle second_only` is "the usual kind, second output only".
-    let names_a_kind = KINDS.iter().any(|value| value.eq_ignore_ascii_case(spec));
-    let names_a_place = PLACES.iter().any(|value| value.eq_ignore_ascii_case(spec));
-    if names_a_kind || names_a_place {
-        let (kind, place) = match names_a_kind {
-            true => (spec, DEFAULT_PLACE),
-            false => (DEFAULT_KIND, spec),
-        };
+    // A kind, which is a request to choose automatically rather than a
+    // subtitle in itself. The language half decides where it looks, whether
+    // that came after the colon or from the setting.
+    if KINDS.iter().any(|value| value.eq_ignore_ascii_case(spec)) {
         return Ok(automatic(
-            &Wanted::parse(kind),
+            &Wanted::parse(spec),
             place,
             options,
             primary_language,
@@ -668,39 +685,48 @@ mod tests {
 
     #[test]
     fn none_is_explicit() {
-        assert_eq!(resolve("0", &options(), None, None), Ok(None));
-        assert_eq!(resolve("none", &options(), None, None), Ok(None));
-        assert_eq!(resolve("None", &options(), None, None), Ok(None));
+        assert_eq!(
+            resolve("0", DEFAULT_PLACE, &options(), None, None),
+            Ok(None)
+        );
+        assert_eq!(
+            resolve("none", DEFAULT_PLACE, &options(), None, None),
+            Ok(None)
+        );
+        assert_eq!(
+            resolve("None", DEFAULT_PLACE, &options(), None, None),
+            Ok(None)
+        );
     }
 
     #[test]
     fn a_position_indexes_the_printed_list() {
         assert_eq!(
-            resolve("1", &options(), None, None),
+            resolve("1", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::Embedded(0)))
         );
         assert_eq!(
-            resolve("3", &options(), None, None),
+            resolve("3", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::External(
                 "Film (2019).ru.hi.srt".to_string()
             )))
         );
-        assert!(resolve("9", &options(), None, None).is_err());
-        assert!(resolve("0", &options(), None, None).is_ok());
+        assert!(resolve("9", DEFAULT_PLACE, &options(), None, None).is_err());
+        assert!(resolve("0", DEFAULT_PLACE, &options(), None, None).is_ok());
     }
 
     #[test]
     fn a_language_code_takes_the_first_of_that_language() {
         // "ru" is not a label here; it matches ru.hi on the leading letters.
         assert_eq!(
-            resolve("ru", &options(), None, None),
+            resolve("ru", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::External(
                 "Film (2019).ru.hi.srt".to_string()
             )))
         );
         // "en" is a label exactly, and the embedded track comes first.
         assert_eq!(
-            resolve("en", &options(), None, None),
+            resolve("en", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::Embedded(0)))
         );
     }
@@ -708,7 +734,7 @@ mod tests {
     #[test]
     fn a_label_with_tags_resolves() {
         assert_eq!(
-            resolve("en.hi", &options(), None, None),
+            resolve("en.hi", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::External(
                 "Film (2019).en.hi.srt".to_string()
             )))
@@ -721,7 +747,13 @@ mod tests {
             "Film (2019).ru.hi.srt".to_string(),
         )));
         assert_eq!(
-            resolve("Film (2019).ru.hi.srt", &options(), None, None),
+            resolve(
+                "Film (2019).ru.hi.srt",
+                DEFAULT_PLACE,
+                &options(),
+                None,
+                None
+            ),
             expected
         );
         // A path from anywhere still means the file beside the video, never
@@ -729,6 +761,7 @@ mod tests {
         assert_eq!(
             resolve(
                 "C:\\elsewhere\\Film (2019).ru.hi.srt",
+                DEFAULT_PLACE,
                 &options(),
                 None,
                 None
@@ -736,16 +769,22 @@ mod tests {
             expected
         );
         assert_eq!(
-            resolve("/tmp/Film (2019).ru.hi.srt", &options(), None, None),
+            resolve(
+                "/tmp/Film (2019).ru.hi.srt",
+                DEFAULT_PLACE,
+                &options(),
+                None,
+                None
+            ),
             expected
         );
     }
 
     #[test]
     fn anything_else_is_reported() {
-        assert!(resolve("nonsense", &options(), None, None).is_err());
-        assert!(resolve("../../etc/passwd", &options(), None, None).is_err());
-        assert!(resolve("de", &options(), None, None).is_err());
+        assert!(resolve("nonsense", DEFAULT_PLACE, &options(), None, None).is_err());
+        assert!(resolve("../../etc/passwd", DEFAULT_PLACE, &options(), None, None).is_err());
+        assert!(resolve("de", DEFAULT_PLACE, &options(), None, None).is_err());
     }
 }
 
@@ -917,35 +956,64 @@ mod argument_tests {
     }
 
     #[test]
-    fn the_argument_accepts_either_half_of_the_setting() {
+    fn a_colon_names_the_language_after_the_kind() {
         let o = options();
-        // A kind alone, with the language half left at its default - which
-        // follows the first output and tries the second.
+        // A kind alone takes the configured language rule, which the caller
+        // passes in - here it follows the first output and tries the second.
         assert_eq!(
-            resolve("forced_only", &o, Some("ru"), Some("en")),
+            resolve("forced_only", "first", &o, Some("ru"), Some("en")),
             Ok(Some(SubtitleChoice::Embedded(0)))
         );
-        // A place alone, with the kind left at its default. "Only" is the
-        // point here: the second output is English, this file has no forced
-        // English track, and the forced Russian one is not taken because
-        // nothing was said about falling back.
-        assert_eq!(resolve("second_only", &o, Some("ru"), Some("en")), Ok(None));
-        // The same place against the output that does have one.
+        // The same kind with a rule after the colon, which wins over the
+        // setting. "Only" is the point: the second output is English, this
+        // file has no forced English track, and the forced Russian one is not
+        // taken because nothing was said about falling back.
         assert_eq!(
-            resolve("first_only", &o, Some("ru"), Some("en")),
-            Ok(Some(SubtitleChoice::Embedded(0)))
+            resolve(
+                "forced_only:second_only",
+                "first",
+                &o,
+                Some("ru"),
+                Some("en")
+            ),
+            Ok(None)
         );
+        // **The pair, which is why the colon exists.** No English SDH track
+        // here, so this also shows the ladder: SDH falls to full, in the
+        // language that was asked for and no other.
+        assert_eq!(
+            resolve("sdh:second_only", "first", &o, Some("ru"), Some("en")),
+            Ok(Some(SubtitleChoice::Embedded(2)))
+        );
+        // A language code after the colon, rather than one of the rules.
+        assert_eq!(
+            resolve("full:ru", "first_only", &o, Some("en"), None),
+            Ok(Some(SubtitleChoice::Embedded(1)))
+        );
+    }
+
+    /// **Only a known kind in front makes a colon a separator.** A Windows
+    /// path has one and must survive untouched, which is the reason the kind
+    /// leads rather than the language.
+    #[test]
+    fn a_colon_elsewhere_is_not_a_separator() {
+        let o = options();
+        // `C` is not a kind, so this is a path and is reported as one rather
+        // than being split.
+        assert!(resolve(r"C:\subs\film.srt", "first", &o, None, None).is_err());
+        // Nor is a label with a colon in it treated as a pair.
+        assert!(resolve("nonsense:more", "first", &o, None, None).is_err());
     }
 
     #[test]
     fn modes_do_not_shadow_the_other_forms() {
         let o = options();
         assert_eq!(
-            resolve("2", &o, None, None),
+            resolve("2", DEFAULT_PLACE, &o, None, None),
             Ok(Some(SubtitleChoice::Embedded(1)))
         );
         assert_eq!(
-            resolve("en", &o, None, None),
+            resolve("en", DEFAULT_PLACE, &o, None, None),
             Ok(Some(SubtitleChoice::Embedded(2)))
         );
     }

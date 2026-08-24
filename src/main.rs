@@ -92,8 +92,10 @@ struct Args {
     #[arg(long, value_name = "T")]
     secondary: Option<String>,
 
-    /// Subtitles to show: a track number, a language code, a subtitle file
-    /// name beside the video, or a preference name. 0 for none
+    /// Subtitles to show: one particular subtitle - a track number, a
+    /// language code, or a file name beside the video - or `forced_only`,
+    /// `forced`, `full` or `sdh` to choose automatically. A language may
+    /// follow a colon, as in `sdh:fr` or `full:first_only`. 0 for none
     #[arg(long, value_name = "S")]
     subtitle: Option<String>,
 
