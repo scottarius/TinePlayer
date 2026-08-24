@@ -325,9 +325,33 @@ jobs:
     name: Publish
     needs: [windows, macos, linux]
     runs-on: ubuntu-24.04
-    # Only for a tag. A manual run builds and uploads artifacts, which is what
-    # makes a rehearsal possible without leaving a release behind.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Two conditions, and they guard different mistakes.
+    #
+    # The ref check is what makes a rehearsal possible: a manual run from a
+    # branch builds every package and uploads them as job artifacts without
+    # leaving a release behind.
+    #
+    # **The `dry_run` check is the one that was missing.** The input existed,
+    # defaulted to true, and was read by nothing - so the toggle in the
+    # dispatch dialog did exactly nothing, and a manual run *from a tag* would
+    # have published however it was set. That is the moment somebody would
+    # reach for it: the tag is cut, something looks wrong, and the obvious move
+    # is to re-run with "do not create a release" ticked. Found on 2026-08-24
+    # while rehearsing before 1.5.0.
+    #
+    # `!= true` rather than `== false`, and the difference matters. The input
+    # is declared `type: boolean`, so a dispatch supplies a real boolean - but
+    # a *push* event has no inputs at all, and `inputs.dry_run` is then null.
+    # `null != true` is true, so a tag push still publishes; `null == false`
+    # would be false, and pushing a tag would build everything and release
+    # nothing.
+    #
+    # The four cases, since getting one wrong is silent:
+    #   tag push .................... publishes
+    #   dispatch from a branch ...... skipped by the ref check, whatever is set
+    #   dispatch from a tag, ticked . skipped - the case this was missing
+    #   dispatch from a tag, clear .. publishes, which is a deliberate act
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
     steps:
       # The full history, so the previous tag can be found. A shallow
       # checkout is a single commit, with nothing to compare against.
