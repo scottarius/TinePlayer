@@ -195,6 +195,7 @@ impl App {
                 primary,
                 secondary,
                 subtitle.clone(),
+                self.subtitle_by_hand.get(),
                 self.saved_path(Role::Primary),
                 self.saved_path(Role::Secondary),
             );

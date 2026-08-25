@@ -216,11 +216,12 @@ impl App {
             .unwrap_or_default();
         let mut options = crate::subtitles::options(source.local(), &media.subtitles, &library);
 
-        let (primary_language, secondary_language, subtitle_language, described) = {
+        let (primary_language, secondary_language, subtitle_kind, subtitle_language, described) = {
             let config = self.config.borrow();
             (
                 config.primary_language.clone(),
                 config.secondary_language.clone(),
+                config.subtitle_kind.clone(),
                 config.subtitle_language.clone(),
                 (
                     config.primary_audio_description,
@@ -306,29 +307,59 @@ impl App {
         // Only kept if it still resolves: an embedded stream the file no
         // longer has, or a subtitle file since deleted, quietly reverts to
         // none rather than failing when play is pressed.
-        let subtitle = match saved {
-            Some(choice) => choice.subtitle,
+        let subtitle = match &saved {
+            // **Only a subtitle the viewer picked speaks for itself.** One the
+            // preference worked out is worked out again, because it is written
+            // in terms of what the outputs are playing and that can differ
+            // from one viewing to the next - which is exactly what went wrong
+            // when a video whose preference matched nothing remembered the
+            // nothing and never asked again.
+            Some(choice) if choice.subtitle_by_hand => choice.subtitle.clone(),
             // Follows whichever audio is actually going to each output, not
             // the language preference: the preference may have found nothing,
             // and what is being heard is what subtitles have to match.
-            None => {
-                let language_of = |index: Option<u32>| {
-                    index.and_then(|index| {
-                        tracks
-                            .iter()
-                            .find(|track| track.index == index)
-                            .map(|track| track.language.as_str())
-                    })
-                };
+            _ => {
                 crate::subtitles::automatic(
-                    &crate::subtitles::Auto::parse(
-                        subtitle_language
+                    &crate::subtitles::Wanted::parse(
+                        subtitle_kind
                             .as_deref()
-                            .unwrap_or(crate::subtitles::DEFAULT_MODE),
+                            .unwrap_or(crate::subtitles::DEFAULT_KIND),
                     ),
+                    subtitle_language
+                        .as_deref()
+                        .unwrap_or(crate::subtitles::DEFAULT_PLACE),
                     &options,
-                    language_of(known(primary)),
-                    language_of(known(secondary)),
+                    // **What is actually going to play, not what was
+                    // preferred.** The fields above are the authority: the
+                    // secondary one is forced to `None` when there is no
+                    // second output device, because a track held without
+                    // somewhere to play it only breaks the pipeline. Reading
+                    // the candidate instead meant the subtitle preference
+                    // followed a soundtrack that was never going to be heard -
+                    // so a machine with one output, whose first output is
+                    // English, was offered Spanish forced subtitles because
+                    // Spanish was what the absent second output would have
+                    // had. Reported 2026-08-24 and older than the setting
+                    // split: the forced modes always extended to the other
+                    // output's language, and got the same wrong value.
+                    // What each output is actually playing - see
+                    // `audio::language_on`, which is the one place that knows
+                    // a file beside the video counts as much as a track in it.
+                    crate::audio::language_on(
+                        &offered,
+                        *self.primary_track.borrow(),
+                        self.primary_file.borrow().as_ref().and_then(Source::local),
+                    )
+                    .as_deref(),
+                    crate::audio::language_on(
+                        &offered,
+                        *self.secondary_track.borrow(),
+                        self.secondary_file
+                            .borrow()
+                            .as_ref()
+                            .and_then(Source::local),
+                    )
+                    .as_deref(),
                 )
             }
         };
@@ -344,6 +375,10 @@ impl App {
         }
         *self.subtitle.borrow_mut() =
             subtitle.filter(|choice| options.iter().any(|option| option.choice() == *choice));
+        self.subtitle_by_hand.set(
+            saved.as_ref().is_some_and(|choice| choice.subtitle_by_hand)
+                && self.subtitle.borrow().is_some(),
+        );
         *self.subtitle_options.borrow_mut() = options;
 
         // What was opened and what was decided about it, which between them
@@ -407,6 +442,66 @@ impl App {
             played_by(Role::Secondary),
             chosen_subtitle,
         );
+
+        // **Why nothing was chosen, when something might have been.** A
+        // subtitle preference that finds no match is silent by design - there
+        // is nothing to show and nothing went wrong - which makes it the one
+        // outcome a report cannot explain. Asked for on 2026-08-24 after a
+        // film with three tracks titled "Forced" selected none of them, and
+        // the log said only `subtitle  none`.
+        //
+        // Printed only in that case, and only when the file had subtitles to
+        // offer: what was being looked for, and what was on the list with the
+        // two facts the search actually uses - whether it reads as forced, and
+        // the label the language is matched against.
+        if self.subtitle.borrow().is_none() {
+            // The language actually going to an output, which is what the
+            // preference matches against rather than the setting - and which
+            // has to be asked the same way the preference asked it, or this
+            // says the search was given something it was not.
+            let heard = |track: Option<u32>, file: Option<&Source>| {
+                crate::audio::language_on(&offered, track, file.and_then(Source::local))
+            };
+            let options = self.subtitle_options.borrow();
+            if !options.is_empty() {
+                let rows: String = options
+                    .iter()
+                    .map(|option| {
+                        format!(
+                            "
+    {} forced={}  {}",
+                            match option.is_forced() {
+                                true => "*",
+                                false => " ",
+                            },
+                            option.is_forced(),
+                            option.label(),
+                        )
+                    })
+                    .collect();
+                log::info!(
+                    "No subtitle matched. Looking for {:?} against primary {:?},                      secondary {:?}. Offered:{}",
+                    format!(
+                        "{} / {}",
+                        subtitle_kind
+                            .as_deref()
+                            .unwrap_or(crate::subtitles::DEFAULT_KIND),
+                        subtitle_language
+                            .as_deref()
+                            .unwrap_or(crate::subtitles::DEFAULT_PLACE),
+                    ),
+                    heard(
+                        *self.primary_track.borrow(),
+                        self.primary_file.borrow().as_ref(),
+                    ),
+                    heard(
+                        *self.secondary_track.borrow(),
+                        self.secondary_file.borrow().as_ref(),
+                    ),
+                    rows,
+                );
+            }
+        }
 
         *self.tracks.borrow_mut() = tracks;
         // Separate soundtracks beside the video, found by the same convention

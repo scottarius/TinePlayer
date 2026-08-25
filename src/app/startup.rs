@@ -353,27 +353,59 @@ impl App {
             // Only touched when asked for, so a video's remembered
             // subtitle survives being launched with audio flags alone.
             if let Some(spec) = preset.subtitle.as_deref() {
-                // The languages actually going to the outputs, so a mode
-                // like "primary_forced" means the same on the command line
-                // as it does in the settings.
-                let language_of = |index: Option<u32>| {
-                    index.and_then(|index| {
-                        app.tracks
-                            .borrow()
-                            .iter()
-                            .find(|track| track.index == index)
-                            .map(|track| track.language.clone())
-                    })
+                // The languages actually going to the outputs, so a setting
+                // named on the command line means the same as it does in the
+                // settings - including when `--primary` named a file beside
+                // the video, which the flags above allow and which has no
+                // index to be found by. See `audio::language_on`.
+                let offered = {
+                    let source = app.file.borrow().clone();
+                    crate::audio::options(
+                        source.as_ref().and_then(Source::local),
+                        &app.tracks.borrow(),
+                    )
                 };
-                let primary = language_of(*app.primary_track.borrow());
-                let secondary = language_of(*app.secondary_track.borrow());
+                let language_of = |track: &RefCell<Option<u32>>, file: &RefCell<Option<Source>>| {
+                    let path = file
+                        .borrow()
+                        .as_ref()
+                        .and_then(|file| file.local().map(std::path::Path::to_path_buf));
+                    crate::audio::language_on(&offered, *track.borrow(), path.as_deref())
+                };
+                let primary = language_of(&app.primary_track, &app.primary_file);
+                let secondary = language_of(&app.secondary_track, &app.secondary_file);
+                // The language rule as configured, which a colon in the spec
+                // may override for this run.
+                let place = app
+                    .config
+                    .borrow()
+                    .subtitle_language
+                    .clone()
+                    .unwrap_or_else(|| crate::subtitles::DEFAULT_PLACE.to_string());
                 match crate::subtitles::resolve(
                     spec,
+                    &place,
                     &app.subtitle_options.borrow(),
                     primary.as_deref(),
                     secondary.as_deref(),
                 ) {
-                    Ok(choice) => *app.subtitle.borrow_mut() = choice,
+                    Ok(choice) => {
+                        // The one place a command-line subtitle is settled,
+                        // and it runs after `apply_media` has already logged
+                        // what the preferences chose - so without this the log
+                        // shows the answer the flags were about to replace.
+                        log::info!(
+                            "--subtitle {spec:?} chose {}",
+                            match &choice {
+                                Some(choice) => format!("{choice:?}"),
+                                None => "nothing".to_string(),
+                            }
+                        );
+                        *app.subtitle.borrow_mut() = choice;
+                        // Named on the command line is asked for, so the
+                        // preference does not overrule it if an output moves.
+                        app.subtitle_by_hand.set(true);
+                    }
                     // Reported rather than obeyed silently: playing with
                     // the wrong subtitles, or none, is not what was asked
                     // for either way.

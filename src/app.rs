@@ -46,16 +46,6 @@ mod widgets;
 use style::{install_styles, style_css};
 pub(crate) use widgets::*;
 
-/// Who asked for a subtitle, which decides whether anything may overrule it
-/// later. See [`App::follow_audio_with_subtitle`].
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Chose {
-    /// A person picked it, from the chooser or the media page.
-    ByHand,
-    /// The preference worked it out, and may work it out again.
-    Automatically,
-}
-
 /// Marks the overlay a modal is stacked in, so that opening one over another
 /// can tell it apart from a page that happens to be built out of an overlay
 /// too - which the media page is.
@@ -181,6 +171,7 @@ enum Setting {
     Subtitles,
     PrimaryLanguage,
     SecondaryLanguage,
+    SubtitleKind,
     SubtitleLanguage,
     SubtitleFont,
     /// What language the interface itself is in, which is a different question
@@ -513,6 +504,7 @@ enum Item {
     Volume(Role),
     Sync(Role),
     SubtitlePreference,
+    SubtitleLanguagePreference,
     SubtitleSize,
     SubtitleFont,
     /// The rows one Kodi installation has, by its place in the list the pane
@@ -560,7 +552,8 @@ impl Item {
             Item::Device(Role::Secondary) => Setting::SecondaryDevice,
             Item::Language(Role::Primary) => Setting::PrimaryLanguage,
             Item::Language(Role::Secondary) => Setting::SecondaryLanguage,
-            Item::SubtitlePreference => Setting::SubtitleLanguage,
+            Item::SubtitlePreference => Setting::SubtitleKind,
+            Item::SubtitleLanguagePreference => Setting::SubtitleLanguage,
             Item::SubtitleFont => Setting::SubtitleFont,
             Item::InterfaceLanguage => Setting::InterfaceLanguage,
             Item::KodiType(index) => Setting::KodiType(index),
@@ -727,6 +720,7 @@ impl Category {
             ],
             Category::Subtitles => vec![
                 (None, Item::SubtitlePreference),
+                (None, Item::SubtitleLanguagePreference),
                 (None, Item::SubtitleSize),
                 (None, Item::SubtitleFont),
             ],
@@ -840,7 +834,9 @@ pub struct Preset {
     /// or `en:ad`. See [`crate::probe::resolve_audio`].
     pub primary: Option<String>,
     pub secondary: Option<String>,
-    /// A number, a language code, or a subtitle file name beside the video.
+    /// One particular subtitle - a number, a language code, a file name - or
+    /// a kind to choose automatically, optionally with a language after a
+    /// colon. See [`crate::subtitles::resolve`].
     pub subtitle: Option<String>,
 }
 
@@ -1404,7 +1400,9 @@ mod settings_rows {
             // placed once for each output, and the Kodi category holds a group
             // of rows per Kodi found, plus the one row that belongs to no
             // installation and names another by hand.
-            let elsewhere = 26;
+            // 27 since 2026-08-24: the subtitle preference became two rows,
+            // one for the kind and one for the language.
+            let elsewhere = 27;
             let kodi = ROWS_PER_KODI * kodis().len() + 1;
             // One row either way: the way in, or the way out.
             let paired = 1;

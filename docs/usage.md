@@ -297,17 +297,29 @@ that audio file is applied.
 
 ### Choosing Subtitles on the Command Line
 
-Override the subtitle preference by passing in the `--subtitle` argument can override this behavior with the below
-options.
+`--subtitle` either names one particular subtitle or asks for one to be chosen:
 
-| Given                              | Means                                                                                            |
-|------------------------------------|--------------------------------------------------------------------------------------------------|
-| `primary_forced`, `primary`, `secondary_forced`, `secondary` | the same as the [Subtitle Preference](configuration.md#choosing-subtitles-automatically) setting |
-| `3`                                | the third entry `--list-tracks` prints                                                           |
-| `Film (2019).ru.hi.srt`            | that file, beside the video                                                                      |
-| `en.hi`                            | the entry with that label                                                                        |
-| `ru`                               | the first subtitle matching the [language code](configuration.md#languages)                      |
-| `0` or `none`                      | no subtitles                                                                                     |
+| Given                                    | Means                                                     |
+|------------------------------------------|-----------------------------------------------------------|
+| `3`                                      | the third entry `--list-tracks` prints                    |
+| `Film (2019).ru.hi.srt`                  | that file, beside the video                               |
+| `en.hi`                                  | the entry with that label                                 |
+| `ru`                                     | the first subtitle matching the [language code](configuration.md#languages) |
+| `forced_only`, `forced`, `full`, `sdh`   | choose automatically, as the [Subtitle Type](configuration.md#subtitle_kind---which-type) setting does |
+| `0` or `none`                            | no subtitles                                              |
+
+Where it asks for one to be chosen, a colon may add which language to look in -
+anything the [Subtitle Language](configuration.md#subtitle_language---whose-language)
+setting takes:
+
+    --subtitle sdh:fr             SDH, in French
+    --subtitle full:first_only    full subtitles in the first output's language, and no other
+    --subtitle forced             forced only, in whichever language you have configured
+
+Without a colon the language rule is whatever you have set, so naming a type
+changes the type and nothing else. The colon only separates after one of the
+four type names, so a path such as `C:\subs\film.srt` is never mistaken for a
+pair.
 
 > [!NOTE]
 > Numbers from `--list-tracks` can change. Adding or removing a subtitle file

@@ -27,15 +27,13 @@ pub struct AudioTrack {
 impl AudioTrack {
     /// Whether this track is an audio description.
     ///
-    /// The container first, its title second. The tools that add a described
+    /// **Either source saying yes is yes.** The tools that add a described
     /// soundtrack set the flag - describealign writes
-    /// `disposition:a:0 default+visual_impaired` - so on a file made by one of
-    /// them this is the file's own answer rather than a guess at its wording.
-    /// Only where the file says nothing does the title get read, which is
-    /// every MP4 and every rip made by something that did not bother.
+    /// `disposition:a:0 default+visual_impaired` - and the ones that do not
+    /// say so in the title instead, so both are read and neither can veto the
+    /// other. See `SubtitleTrack::kind` for what a veto cost.
     pub fn is_described(&self) -> bool {
-        self.described
-            .unwrap_or_else(|| is_audio_description(&self.title))
+        self.described.unwrap_or(false) || is_audio_description(&self.title)
     }
 
     /// What this track is for, on the same ladder everything else uses: the
@@ -49,9 +47,8 @@ impl AudioTrack {
         if self.is_described() {
             return Some(crate::label::Kind::Described);
         }
-        let commentary = self
-            .commentary
-            .unwrap_or_else(|| self.title.to_lowercase().contains("commentary"));
+        let commentary =
+            self.commentary.unwrap_or(false) || self.title.to_lowercase().contains("commentary");
         commentary.then_some(crate::label::Kind::Commentary)
     }
 }
@@ -649,9 +646,17 @@ mod described_tests {
     /// the file marks as a description is a description, and the naming rules
     /// would never have found it.
     #[test]
-    fn the_container_is_believed_over_the_title() {
-        assert!(!track("English Audio Description", Some(false)).is_described());
+    fn either_source_saying_yes_is_enough() {
+        // A flag says so and the title does not.
         assert!(track("Commentary with the director", Some(true)).is_described());
+        // The title says so and the flag denies it. **This assertion is the
+        // reverse of what it was.** It read `!...is_described()` until
+        // 2026-08-24, on the reasoning that a container which set the flag had
+        // looked - which is true of the tools that set it, and says nothing
+        // about the far commoner ones that write `false` without looking.
+        assert!(track("English Audio Description", Some(false)).is_described());
+        // Neither says so.
+        assert!(!track("English", Some(false)).is_described());
     }
 
     /// Where the file says nothing - every MP4, and any rip made by something
@@ -695,31 +700,37 @@ fn subtitle_format(media_type: &str) -> String {
 }
 
 impl SubtitleTrack {
-    /// What this subtitle is for: the container's flags, then the sidecar's,
-    /// then the words in its title.
+    /// What this subtitle is for, from the container's flags, the sidecar's,
+    /// and the words in its title.
+    ///
+    /// **Any source saying yes is yes; none of them can say no.** This used to
+    /// stop at the first source that had an opinion, so a stated `false` ended
+    /// the search - and on 2026-08-24 that meant a film whose three subtitle
+    /// tracks were titled "Russian (Forced)", "English (Forced)" and
+    /// "Ukrainian (Forced)" offered no forced subtitle at all. Its container
+    /// stated nothing, and the `movie.nfo` beside it said `<forced>False</forced>`
+    /// on all seventeen streams, which is what a scraper writes when it did not
+    /// look rather than when it checked.
+    ///
+    /// `crate::jellyfin` had already found the same thing from the other side -
+    /// the server "reports `IsForced=False` on a track it titles Forced" - and
+    /// answers it by stating nothing, so the title decides. This is that lesson
+    /// applied to every source at once: a tool writing `false` by default is
+    /// common, and somebody titling a track "Forced" that is not one is not.
     ///
     /// Forced is asked first because it is the one a preference acts on, and
     /// because a track is rarely both - forced subtitles carry signs and
     /// foreign lines, SDH carries everything including the sound.
     pub fn kind(&self) -> Option<crate::label::Kind> {
         let title = self.title.to_lowercase();
-        if self.forced.unwrap_or_else(|| title.contains("forced")) {
+        if self.forced.unwrap_or(false) || crate::label::says_forced(&title) {
             return Some(crate::label::Kind::Forced);
         }
-        let sdh = self.hearing_impaired.unwrap_or_else(|| {
-            title.contains("sdh")
-                || title.contains("hearing impaired")
-                || title.contains("hard of hearing")
-                || title
-                    .split(|c: char| !c.is_ascii_alphanumeric())
-                    .any(|word| word == "hi" || word == "cc")
-        });
+        let sdh = self.hearing_impaired.unwrap_or(false) || crate::label::says_sdh(&title);
         if sdh {
             return Some(crate::label::Kind::Sdh);
         }
-        let commentary = self
-            .commentary
-            .unwrap_or_else(|| title.contains("commentary"));
+        let commentary = self.commentary.unwrap_or(false) || crate::label::says_commentary(&title);
         commentary.then_some(crate::label::Kind::Commentary)
     }
 }
@@ -758,14 +769,24 @@ mod subtitle_kind_tests {
     /// behaviour: a file stating "not forced" is believed over a title that
     /// says otherwise, where before the title always won.
     #[test]
-    fn the_container_outranks_the_title() {
+    fn a_stated_false_does_not_veto_the_title() {
         let mut flagged = track("English");
         flagged.forced = Some(true);
         assert_eq!(flagged.kind(), Some(Kind::Forced));
 
+        // **The reported case, and the reverse of what this asserted.** A
+        // `.nfo` beside a film stated `<forced>False</forced>` on every one of
+        // its seventeen subtitle streams, three of which were titled
+        // "(Forced)", so no forced subtitle was ever offered. A scraper writes
+        // `false` by default; a person titling a track "Forced" meant it.
         let mut denied = track("English (Forced)");
         denied.forced = Some(false);
-        assert_ne!(denied.kind(), Some(Kind::Forced));
+        assert_eq!(denied.kind(), Some(Kind::Forced));
+
+        // A stated false still settles it when nothing else claims otherwise.
+        let mut plain = track("English");
+        plain.forced = Some(false);
+        assert_eq!(plain.kind(), None);
     }
 
     /// Forced is asked first, because it is the one a preference acts on and
@@ -784,5 +805,60 @@ mod subtitle_kind_tests {
     fn short_marks_are_read_as_whole_words() {
         assert_eq!(track("Hindi").kind(), None);
         assert_eq!(track("English hi").kind(), Some(Kind::Sdh));
+    }
+}
+
+#[cfg(test)]
+mod precedence_tests {
+    use super::SubtitleTrack;
+    use crate::label::Kind;
+
+    fn sub(title: &str, forced: Option<bool>, sdh: Option<bool>) -> SubtitleTrack {
+        SubtitleTrack {
+            index: 0,
+            language: "en".to_string(),
+            title: title.to_string(),
+            format: String::new(),
+            forced,
+            hearing_impaired: sdh,
+            commentary: None,
+        }
+    }
+
+    /// The whole rule, in one place: **a stated yes decides, a stated no does
+    /// not.** The container and the sidecar are believed when they claim
+    /// something and disbelieved when they deny it, because the tools that set
+    /// a flag looked and the tools that clear one mostly did not.
+    #[test]
+    fn a_stated_yes_decides_and_a_stated_no_does_not() {
+        // Container says yes, title silent - the container is believed.
+        assert_eq!(sub("English", Some(true), None).kind(), Some(Kind::Forced));
+        // Container says no, title says yes - the title is believed.
+        assert_eq!(
+            sub("English (Forced)", Some(false), None).kind(),
+            Some(Kind::Forced)
+        );
+        // Both silent on it.
+        assert_eq!(sub("English", Some(false), None).kind(), None);
+        assert_eq!(sub("English", None, None).kind(), None);
+        // And the same for the other flags.
+        assert_eq!(sub("English", None, Some(true)).kind(), Some(Kind::Sdh));
+        assert_eq!(
+            sub("English SDH", Some(false), Some(false)).kind(),
+            Some(Kind::Sdh)
+        );
+    }
+
+    /// A separate question from the rule above, and not the same one. "Any
+    /// positive counts" settles what to do with a *negative*; this is what to
+    /// do with two *positives* that disagree - the title claiming forced while
+    /// a flag claims SDH. Fixed precedence answers it, forced first, because
+    /// that is the one a preference acts on and a track is rarely both.
+    #[test]
+    fn forced_is_asked_before_sdh_whatever_said_it() {
+        assert_eq!(
+            sub("English (Forced)", None, Some(true)).kind(),
+            Some(Kind::Forced)
+        );
     }
 }

@@ -306,168 +306,214 @@ impl Subtitle {
     /// on the flag. An explicit *no* from the file is believed over a name,
     /// which is the one case that changed: a track the file says is not forced
     /// but somebody titled "Forced" is not forced.
-    pub fn is_forced(&self) -> bool {
+    /// What this subtitle is for, or `None` for a plain one - which is what
+    /// the preference calls "full".
+    ///
+    /// An embedded track was answered when it was probed, on the full ladder
+    /// with its flags in hand. A file beside the video has no flags at all, so
+    /// its name is the only evidence there is, read with the same words.
+    pub fn kind(&self) -> Option<crate::label::Kind> {
         if let Subtitle::Embedded { kind, .. } = self {
-            // Already answered, on the full ladder, where the track was in
-            // hand: see `SubtitleTrack::kind`.
-            return *kind == Some(crate::label::Kind::Forced);
+            return *kind;
         }
-        self.label().to_lowercase().contains("forced")
+        let label = self.label();
+        if crate::label::says_forced(label) {
+            return Some(crate::label::Kind::Forced);
+        }
+        if crate::label::says_sdh(label) {
+            return Some(crate::label::Kind::Sdh);
+        }
+        crate::label::says_commentary(label).then_some(crate::label::Kind::Commentary)
+    }
+
+    pub fn is_forced(&self) -> bool {
+        self.kind() == Some(crate::label::Kind::Forced)
     }
 }
 
-/// The automatic choices offered above the language list, as stored and as
-/// shown. Following an output is usually better than naming a language: it
-/// tracks whatever is actually being heard, file by file.
+/// What kind of subtitle to prefer, and what is acceptable instead.
+///
 /// **Stored values only.** These go into `config.yaml` and are matched by
-/// `--subtitle`, so they are not language and never change. What each one
-/// reads as on screen is [`mode_label`], which is - the two used to be one
-/// table of pairs, and a translated label in it would have been written to
-/// the config file as the setting.
-pub const MODES: [&str; 5] = [
-    "none",
-    "primary_forced",
-    "secondary_forced",
-    "primary",
-    "secondary",
-];
+/// `--subtitle`, so they are never translated. What each reads as on screen is
+/// [`kind_label`].
+///
+/// The list used to be five entries crossing *kind* with *which output*, which
+/// meant every new kind multiplied it: adding SDH would have made seven, and
+/// commentary nine. Splitting the two apart on 2026-08-24 made SDH reachable
+/// at all - it had no entry before, which is a poor gap in a player that
+/// otherwise takes accessibility seriously.
+pub const KINDS: [&str; 5] = ["none", "forced_only", "forced", "full", "sdh"];
 
-/// How one of [`MODES`] reads on screen, or `None` if that is not a mode.
-pub fn mode_label(value: &str) -> Option<Cow<'static, str>> {
+/// Which language, and whether the other output's will do.
+///
+/// Stored values, as [`KINDS`] are. Anything not in this list is a language
+/// code, which is the rest of what the chooser offers.
+pub const PLACES: [&str; 4] = ["first_only", "second_only", "first", "second"];
+
+/// Forced subtitles for whatever the room is hearing, and nothing if there are
+/// none. A dub usually speaks every sign and foreign line aloud, so the only
+/// gap worth filling is in the original language - which the primary output is
+/// most likely to be carrying.
+pub const DEFAULT_KIND: &str = "forced_only";
+pub const DEFAULT_PLACE: &str = "first";
+
+/// How one of [`KINDS`] reads on screen, or `None` if that is not one.
+pub fn kind_label(value: &str) -> Option<Cow<'static, str>> {
     Some(match value {
         // A third sense of "None" in this interface, after an output device
         // and a list of languages. English spells all three the same way and
         // several languages do not, which is what the context is for.
         "none" => trc!("subtitle preference", "None"),
-        "primary_forced" => tr!("Forced (Prefer First Output Language)"),
-        "secondary_forced" => tr!("Forced (Prefer Second Output Language)"),
-        "primary" => tr!("First Output Language"),
-        "secondary" => tr!("Second Output Language"),
+        // "Only" against two "Prefer"s, deliberately: the word is the whole
+        // difference between them, and making the three read alike would hide
+        // the one thing somebody needs to know before choosing.
+        "forced_only" => tr!("Forced Only"),
+        "forced" => tr!("Prefer Forced"),
+        "full" => tr!("Prefer Full"),
+        "sdh" => tr!("Prefer SDH"),
         _ => return None,
     })
 }
 
-/// How the setting reads on screen: one of [`MODES`] or a language name.
+/// How one of [`PLACES`] reads on screen, or `None` if that is not one.
+pub fn place_label(value: &str) -> Option<Cow<'static, str>> {
+    Some(match value {
+        "first_only" => tr!("First Output Only"),
+        "second_only" => tr!("Second Output Only"),
+        "first" => tr!("Prefer First Output"),
+        "second" => tr!("Prefer Second Output"),
+        _ => return None,
+    })
+}
+
+/// How the language setting reads on screen: one of [`PLACES`] or a language.
 ///
 /// Not `languages::display_name` alone, which hands back whatever it was given
-/// when it recognizes nothing - and it recognizes none of the modes, so the
-/// settings list showed `primary_forced` rather than what it means.
-pub fn describe(setting: Option<&str>) -> String {
-    let setting = setting.unwrap_or(DEFAULT_MODE);
-    mode_label(setting)
+/// when it recognizes nothing - and it recognizes none of these, so the
+/// settings list would show `first_only` rather than what it means.
+pub fn describe_place(setting: Option<&str>) -> String {
+    let setting = setting.unwrap_or(DEFAULT_PLACE);
+    place_label(setting)
         .map(Cow::into_owned)
         .unwrap_or_else(|| crate::languages::display_name(setting))
 }
 
-/// Forced subtitles for whatever the room is hearing. A dub usually speaks
-/// every sign and foreign line aloud, so the only gap worth filling is in the
-/// original language - which the primary output is most likely to be carrying.
-pub const DEFAULT_MODE: &str = "primary_forced";
-
-/// How a subtitle is chosen for a video with no remembered choice.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Auto {
-    /// Show none.
-    None,
-    /// Follow one of the outputs: the language being heard there.
-    Output { secondary: bool, forced: bool },
-    /// A language of its own, whatever is being heard.
-    Language(String),
+/// How the kind setting reads on screen.
+pub fn describe_kind(setting: Option<&str>) -> String {
+    let setting = setting.unwrap_or(DEFAULT_KIND);
+    kind_label(setting)
+        .map(Cow::into_owned)
+        .unwrap_or_else(|| kind_label(DEFAULT_KIND).unwrap().into_owned())
 }
 
-impl Auto {
-    /// Reads the setting. Anything unrecognized is treated as a language code,
-    /// which is what the rest of the list holds.
+/// What to look for, in the order it is acceptable.
+///
+/// **The ladder is derived rather than configured**, from one rule: after the
+/// kind that was asked for, take the nearest on `Forced ⊂ Full ⊂ SDH`. Forced
+/// carries signs alone, full adds the dialogue, SDH adds the sound - so the
+/// nearest is always the one that changes least about what appears on screen.
+///
+/// Only one step is ambiguous. From full, SDH and forced are each one away;
+/// SDH wins, because it keeps the dialogue and forced does not.
+///
+/// `Forced Only` is its own entry rather than a flag on `forced`, because the
+/// two are different intentions. Somebody who understands the audio wants the
+/// signs and nothing else, and a wall of dialogue is worse than silence. But a
+/// film with foreign speech and no forced track leaves that person with
+/// nothing at all - which is the case `Prefer Forced` exists for, and which is
+/// why both are offered rather than one being chosen for everybody.
+///
+/// Commentary is never in a ladder. Nobody wants it selected on every film,
+/// and it is one press away in the chooser.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Wanted {
+    /// Show none.
+    None,
+    /// The kinds to try, in order. `None` in the list means a plain subtitle -
+    /// no flag, no marker in the title - which is what "full" is.
+    Ladder(Vec<Option<crate::label::Kind>>),
+}
+
+impl Wanted {
+    /// Reads the kind setting. Anything unrecognized is the default, since
+    /// this half of the preference has no free-text form the way the language
+    /// half does.
     pub fn parse(setting: &str) -> Self {
+        use crate::label::Kind;
         match setting.trim().to_lowercase().as_str() {
             "" | "none" => Self::None,
-            "primary_forced" => Self::Output {
-                secondary: false,
-                forced: true,
-            },
-            "primary" => Self::Output {
-                secondary: false,
-                forced: false,
-            },
-            "secondary_forced" => Self::Output {
-                secondary: true,
-                forced: true,
-            },
-            "secondary" => Self::Output {
-                secondary: true,
-                forced: false,
-            },
-            _ => Self::Language(setting.trim().to_string()),
+            "forced_only" => Self::Ladder(vec![Some(Kind::Forced)]),
+            "forced" => Self::Ladder(vec![Some(Kind::Forced), None, Some(Kind::Sdh)]),
+            "sdh" => Self::Ladder(vec![Some(Kind::Sdh), None, Some(Kind::Forced)]),
+            // Full, and the fallback for anything unrecognized.
+            _ => Self::Ladder(vec![None, Some(Kind::Sdh), Some(Kind::Forced)]),
         }
     }
 }
 
-/// The subtitle to show for a video nobody has chosen one for.
+/// Which languages to try, in order.
 ///
-/// Forced and unforced are kept strictly apart. Asking for forced subtitles and
-/// getting a full translation would bury a film someone is listening to in
-/// their own language; asking for a full translation and getting only the signs
-/// would look like the subtitles were broken. Neither substitutes for the
-/// other, so no match means none.
+/// The two "Prefer" entries used to be hardwired into asking for forced
+/// subtitles and available to nothing else: that mode tried the other output's
+/// language and the others did not, which was right and invisible. Here it is
+/// a choice, and available to every kind.
+pub fn places(setting: &str, primary: Option<&str>, secondary: Option<&str>) -> Vec<String> {
+    let one = |language: Option<&str>| language.map(str::to_string).into_iter().collect::<Vec<_>>();
+    match setting.trim().to_lowercase().as_str() {
+        "first_only" => one(primary),
+        "second_only" => one(secondary),
+        "first" => [one(primary), one(secondary)].concat(),
+        "second" => [one(secondary), one(primary)].concat(),
+        // A named language, which is the rest of the chooser.
+        other => vec![other.to_string()],
+    }
+}
+
+/// Whether changing an output's soundtrack should re-choose the subtitle.
 ///
-/// The forced modes prefer one output but will take the other: forced
-/// subtitles translate signs and foreign lines, which are worth having in
-/// either language on offer. The full modes do not fall back, because a full
-/// translation in the wrong language is a worse answer than none.
-/// Whether changing one output's soundtrack can change what this preference
-/// answers, and so whether it is worth asking again.
-///
-/// `secondary_output` names which output moved. The three cases:
-///
-/// - **None, and a fixed language**: not about the outputs at all. A
-///   preference for Russian subtitles says the same thing whatever anybody is
-///   listening to.
-/// - **The full modes** name one output and never fall back, because a whole
-///   translation in the wrong language is worse than none - so only the output
-///   they name can change the answer.
-/// - **The forced modes** prefer one output but will take the other, since
-///   forced subtitles translate signs and are worth having in either language
-///   on offer. Either output moving can therefore change the answer, which is
-///   why this cannot be decided from the role alone.
-pub fn follows_output(mode: &Auto, secondary_output: bool) -> bool {
-    match mode {
-        Auto::None | Auto::Language(_) => false,
-        Auto::Output { secondary, forced } => *forced || *secondary == secondary_output,
+/// A question about the *language* half alone now: the kind does not depend on
+/// what anybody is hearing. Both "Prefer" entries follow either output,
+/// because either language can be the one that supplies the answer, and a
+/// named language follows neither.
+pub fn follows_output(place: &str, secondary_output: bool) -> bool {
+    match place.trim().to_lowercase().as_str() {
+        "first_only" => !secondary_output,
+        "second_only" => secondary_output,
+        "first" | "second" => true,
+        _ => false,
     }
 }
 
 pub fn automatic(
-    mode: &Auto,
+    wanted: &Wanted,
+    place: &str,
     options: &[Subtitle],
     primary_language: Option<&str>,
     secondary_language: Option<&str>,
 ) -> Option<SubtitleChoice> {
-    let (languages, forced): (Vec<&str>, bool) = match mode {
-        Auto::None => return None,
-        Auto::Language(code) => (vec![code.as_str()], false),
-        Auto::Output { secondary, forced } => {
-            let (first, second) = if *secondary {
-                (secondary_language, primary_language)
-            } else {
-                (primary_language, secondary_language)
-            };
-            let mut order = Vec::new();
-            order.extend(first);
-            if *forced {
-                order.extend(second);
-            }
-            (order, *forced)
-        }
+    let Wanted::Ladder(ladder) = wanted else {
+        return None;
     };
 
-    languages.into_iter().find_map(|language| {
-        options
-            .iter()
-            .find(|option| {
-                option.is_forced() == forced && crate::languages::matches(option.label(), language)
-            })
-            .map(Subtitle::choice)
-    })
+    // **Language outside, kind inside.** Exhaust what is acceptable in the
+    // first language before moving to the second, rather than the reverse:
+    // dialogue in a language somebody cannot read is no use to them, so a
+    // different *kind* in their own language is nearly always the better
+    // answer. Forced is the exception that proves it - signs carry no dialogue
+    // and are worth having in any language - but its ladder is one entry long,
+    // so both orders give the same answer for it and no special case is
+    // needed.
+    for language in places(place, primary_language, secondary_language) {
+        for kind in ladder {
+            let found = options.iter().find(|option| {
+                option.kind() == *kind && crate::languages::matches(option.label(), &language)
+            });
+            if let Some(option) = found {
+                return Some(option.choice());
+            }
+        }
+    }
+    None
 }
 
 /// What `--subtitle` was given, resolved against what this video offers.
@@ -491,20 +537,47 @@ pub fn automatic(
 /// offered, which is more use than silently playing without them.
 pub fn resolve(
     spec: &str,
+    configured_place: &str,
     options: &[Subtitle],
     primary_language: Option<&str>,
     secondary_language: Option<&str>,
 ) -> Result<Option<SubtitleChoice>, String> {
     let spec = spec.trim();
+
+    // **A colon separates a kind from a language, and only after a kind.**
+    // `--subtitle sdh:fr`, `--subtitle full:first_only`. Everything else this
+    // takes is one particular subtitle rather than a preference, so there is
+    // nothing for a language to qualify - and a language on its own would be
+    // the bare form already, which selects a subtitle rather than choosing
+    // one.
+    //
+    // Requiring a known kind in front is what makes it safe as well as
+    // readable: `C:\subs\film.srt` has a colon in it and `C` is not a kind,
+    // so a Windows path is never mistaken for a pair. The audio flags read
+    // `en:ad` the other way round, language first - the orders differ because
+    // what leads is what decides how the rest is read, and here that is the
+    // kind: it is the whole difference between choosing automatically and
+    // naming one subtitle.
+    let (spec, place) = match spec.split_once(':') {
+        Some((kind, place)) if KINDS.iter().any(|k| k.eq_ignore_ascii_case(kind.trim())) => {
+            (kind.trim(), place.trim())
+        }
+        // Whatever was configured, so naming a kind alone is "just this once,
+        // that kind" rather than "forget the language I set".
+        _ => (spec, configured_place),
+    };
+
     if spec.eq_ignore_ascii_case("none") || spec == "0" {
         return Ok(None);
     }
 
-    // Anything the setting accepts is accepted here too, and means the same:
-    // one run set that way, rather than changing the setting itself.
-    if MODES.iter().any(|value| value.eq_ignore_ascii_case(spec)) {
+    // A kind, which is a request to choose automatically rather than a
+    // subtitle in itself. The language half decides where it looks, whether
+    // that came after the colon or from the setting.
+    if KINDS.iter().any(|value| value.eq_ignore_ascii_case(spec)) {
         return Ok(automatic(
-            &Auto::parse(spec),
+            &Wanted::parse(spec),
+            place,
             options,
             primary_language,
             secondary_language,
@@ -612,39 +685,48 @@ mod tests {
 
     #[test]
     fn none_is_explicit() {
-        assert_eq!(resolve("0", &options(), None, None), Ok(None));
-        assert_eq!(resolve("none", &options(), None, None), Ok(None));
-        assert_eq!(resolve("None", &options(), None, None), Ok(None));
+        assert_eq!(
+            resolve("0", DEFAULT_PLACE, &options(), None, None),
+            Ok(None)
+        );
+        assert_eq!(
+            resolve("none", DEFAULT_PLACE, &options(), None, None),
+            Ok(None)
+        );
+        assert_eq!(
+            resolve("None", DEFAULT_PLACE, &options(), None, None),
+            Ok(None)
+        );
     }
 
     #[test]
     fn a_position_indexes_the_printed_list() {
         assert_eq!(
-            resolve("1", &options(), None, None),
+            resolve("1", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::Embedded(0)))
         );
         assert_eq!(
-            resolve("3", &options(), None, None),
+            resolve("3", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::External(
                 "Film (2019).ru.hi.srt".to_string()
             )))
         );
-        assert!(resolve("9", &options(), None, None).is_err());
-        assert!(resolve("0", &options(), None, None).is_ok());
+        assert!(resolve("9", DEFAULT_PLACE, &options(), None, None).is_err());
+        assert!(resolve("0", DEFAULT_PLACE, &options(), None, None).is_ok());
     }
 
     #[test]
     fn a_language_code_takes_the_first_of_that_language() {
         // "ru" is not a label here; it matches ru.hi on the leading letters.
         assert_eq!(
-            resolve("ru", &options(), None, None),
+            resolve("ru", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::External(
                 "Film (2019).ru.hi.srt".to_string()
             )))
         );
         // "en" is a label exactly, and the embedded track comes first.
         assert_eq!(
-            resolve("en", &options(), None, None),
+            resolve("en", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::Embedded(0)))
         );
     }
@@ -652,7 +734,7 @@ mod tests {
     #[test]
     fn a_label_with_tags_resolves() {
         assert_eq!(
-            resolve("en.hi", &options(), None, None),
+            resolve("en.hi", DEFAULT_PLACE, &options(), None, None),
             Ok(Some(SubtitleChoice::External(
                 "Film (2019).en.hi.srt".to_string()
             )))
@@ -665,7 +747,13 @@ mod tests {
             "Film (2019).ru.hi.srt".to_string(),
         )));
         assert_eq!(
-            resolve("Film (2019).ru.hi.srt", &options(), None, None),
+            resolve(
+                "Film (2019).ru.hi.srt",
+                DEFAULT_PLACE,
+                &options(),
+                None,
+                None
+            ),
             expected
         );
         // A path from anywhere still means the file beside the video, never
@@ -673,6 +761,7 @@ mod tests {
         assert_eq!(
             resolve(
                 "C:\\elsewhere\\Film (2019).ru.hi.srt",
+                DEFAULT_PLACE,
                 &options(),
                 None,
                 None
@@ -680,16 +769,22 @@ mod tests {
             expected
         );
         assert_eq!(
-            resolve("/tmp/Film (2019).ru.hi.srt", &options(), None, None),
+            resolve(
+                "/tmp/Film (2019).ru.hi.srt",
+                DEFAULT_PLACE,
+                &options(),
+                None,
+                None
+            ),
             expected
         );
     }
 
     #[test]
     fn anything_else_is_reported() {
-        assert!(resolve("nonsense", &options(), None, None).is_err());
-        assert!(resolve("../../etc/passwd", &options(), None, None).is_err());
-        assert!(resolve("de", &options(), None, None).is_err());
+        assert!(resolve("nonsense", DEFAULT_PLACE, &options(), None, None).is_err());
+        assert!(resolve("../../etc/passwd", DEFAULT_PLACE, &options(), None, None).is_err());
+        assert!(resolve("de", DEFAULT_PLACE, &options(), None, None).is_err());
     }
 }
 
@@ -745,14 +840,14 @@ mod automatic_tests {
     #[test]
     fn following_an_output_takes_its_language() {
         let o = options();
-        let forced = Auto::parse("primary_forced");
+        let forced = Wanted::parse("forced_only");
         assert_eq!(
-            automatic(&forced, &o, Some("ru"), Some("en")),
+            automatic(&forced, "first", &o, Some("ru"), Some("en")),
             Some(SubtitleChoice::Embedded(0))
         );
-        let full = Auto::parse("secondary");
+        let full = Wanted::parse("full");
         assert_eq!(
-            automatic(&full, &o, Some("ru"), Some("en")),
+            automatic(&full, "second_only", &o, Some("ru"), Some("en")),
             Some(SubtitleChoice::Embedded(2))
         );
     }
@@ -762,17 +857,17 @@ mod automatic_tests {
         let o = options();
         // German is not present at all.
         assert_eq!(
-            automatic(&Auto::parse("primary"), &o, Some("de"), None),
+            automatic(&Wanted::parse("full"), "first_only", &o, Some("de"), None),
             None
         );
         // Only a full English track exists besides the forced file, so asking
         // for forced English gets the file, and asking for full gets the track.
         assert_eq!(
-            automatic(&Auto::parse("primary_forced"), &o, Some("en"), None),
+            automatic(&Wanted::parse("forced_only"), "first", &o, Some("en"), None),
             Some(SubtitleChoice::External("f.en.forced.srt".to_string()))
         );
         assert_eq!(
-            automatic(&Auto::parse("primary"), &o, Some("en"), None),
+            automatic(&Wanted::parse("full"), "first_only", &o, Some("en"), None),
             Some(SubtitleChoice::Embedded(2))
         );
     }
@@ -788,7 +883,13 @@ mod automatic_tests {
             kind: None,
         }];
         assert_eq!(
-            automatic(&Auto::parse("primary_forced"), &only_full, Some("ru"), None),
+            automatic(
+                &Wanted::parse("forced_only"),
+                "first",
+                &only_full,
+                Some("ru"),
+                None
+            ),
             None
         );
     }
@@ -796,21 +897,27 @@ mod automatic_tests {
     #[test]
     fn none_and_a_named_language() {
         let o = options();
-        assert_eq!(automatic(&Auto::parse("none"), &o, Some("ru"), None), None);
         assert_eq!(
-            automatic(&Auto::parse("en"), &o, Some("ru"), None),
+            automatic(&Wanted::parse("none"), "first", &o, Some("ru"), None),
+            None
+        );
+        assert_eq!(
+            automatic(&Wanted::parse("full"), "en", &o, Some("ru"), None),
             Some(SubtitleChoice::Embedded(2))
         );
     }
 
     #[test]
-    fn the_default_follows_the_primary_output_forced() {
+    fn the_default_is_forced_with_no_fallback() {
         assert_eq!(
-            Auto::parse(DEFAULT_MODE),
-            Auto::Output {
-                secondary: false,
-                forced: true
-            }
+            Wanted::parse(DEFAULT_KIND),
+            Wanted::Ladder(vec![Some(crate::label::Kind::Forced)])
+        );
+        // And the default language follows the first output, trying the
+        // second if it has nothing.
+        assert_eq!(
+            places(DEFAULT_PLACE, Some("en"), Some("ru")),
+            vec!["en".to_string(), "ru".to_string()]
         );
     }
 }
@@ -849,33 +956,64 @@ mod argument_tests {
     }
 
     #[test]
-    fn the_argument_accepts_what_the_setting_accepts() {
+    fn a_colon_names_the_language_after_the_kind() {
         let o = options();
+        // A kind alone takes the configured language rule, which the caller
+        // passes in - here it follows the first output and tries the second.
         assert_eq!(
-            resolve("primary_forced", &o, Some("ru"), Some("en")),
+            resolve("forced_only", "first", &o, Some("ru"), Some("en")),
             Ok(Some(SubtitleChoice::Embedded(0)))
         );
+        // The same kind with a rule after the colon, which wins over the
+        // setting. "Only" is the point: the second output is English, this
+        // file has no forced English track, and the forced Russian one is not
+        // taken because nothing was said about falling back.
         assert_eq!(
-            resolve("secondary", &o, Some("ru"), Some("en")),
+            resolve(
+                "forced_only:second_only",
+                "first",
+                &o,
+                Some("ru"),
+                Some("en")
+            ),
+            Ok(None)
+        );
+        // **The pair, which is why the colon exists.** No English SDH track
+        // here, so this also shows the ladder: SDH falls to full, in the
+        // language that was asked for and no other.
+        assert_eq!(
+            resolve("sdh:second_only", "first", &o, Some("ru"), Some("en")),
             Ok(Some(SubtitleChoice::Embedded(2)))
         );
-        // English has no forced track here, so preferring the secondary
-        // output falls back to the forced Russian one.
+        // A language code after the colon, rather than one of the rules.
         assert_eq!(
-            resolve("secondary_forced", &o, Some("ru"), Some("en")),
-            Ok(Some(SubtitleChoice::Embedded(0)))
+            resolve("full:ru", "first_only", &o, Some("en"), None),
+            Ok(Some(SubtitleChoice::Embedded(1)))
         );
+    }
+
+    /// **Only a known kind in front makes a colon a separator.** A Windows
+    /// path has one and must survive untouched, which is the reason the kind
+    /// leads rather than the language.
+    #[test]
+    fn a_colon_elsewhere_is_not_a_separator() {
+        let o = options();
+        // `C` is not a kind, so this is a path and is reported as one rather
+        // than being split.
+        assert!(resolve(r"C:\subs\film.srt", "first", &o, None, None).is_err());
+        // Nor is a label with a colon in it treated as a pair.
+        assert!(resolve("nonsense:more", "first", &o, None, None).is_err());
     }
 
     #[test]
     fn modes_do_not_shadow_the_other_forms() {
         let o = options();
         assert_eq!(
-            resolve("2", &o, None, None),
+            resolve("2", DEFAULT_PLACE, &o, None, None),
             Ok(Some(SubtitleChoice::Embedded(1)))
         );
         assert_eq!(
-            resolve("en", &o, None, None),
+            resolve("en", DEFAULT_PLACE, &o, None, None),
             Ok(Some(SubtitleChoice::Embedded(2)))
         );
     }
@@ -907,7 +1045,13 @@ mod fallback_tests {
             },
         ];
         assert_eq!(
-            automatic(&Auto::parse("primary_forced"), &o, Some("ru"), Some("en")),
+            automatic(
+                &Wanted::parse("forced_only"),
+                "first",
+                &o,
+                Some("ru"),
+                Some("en")
+            ),
             Some(SubtitleChoice::Embedded(1))
         );
     }
@@ -933,11 +1077,23 @@ mod fallback_tests {
             },
         ];
         assert_eq!(
-            automatic(&Auto::parse("primary_forced"), &o, Some("ru"), Some("en")),
+            automatic(
+                &Wanted::parse("forced_only"),
+                "first",
+                &o,
+                Some("ru"),
+                Some("en")
+            ),
             Some(SubtitleChoice::Embedded(1))
         );
         assert_eq!(
-            automatic(&Auto::parse("secondary_forced"), &o, Some("ru"), Some("en")),
+            automatic(
+                &Wanted::parse("forced_only"),
+                "second",
+                &o,
+                Some("ru"),
+                Some("en")
+            ),
             Some(SubtitleChoice::Embedded(0))
         );
     }
@@ -953,7 +1109,13 @@ mod fallback_tests {
             kind: None,
         }];
         assert_eq!(
-            automatic(&Auto::parse("primary"), &o, Some("ru"), Some("en")),
+            automatic(
+                &Wanted::parse("full"),
+                "first_only",
+                &o,
+                Some("ru"),
+                Some("en")
+            ),
             None
         );
     }
@@ -969,7 +1131,13 @@ mod fallback_tests {
             kind: None,
         }];
         assert_eq!(
-            automatic(&Auto::parse("primary_forced"), &o, Some("ru"), Some("en")),
+            automatic(
+                &Wanted::parse("forced_only"),
+                "first",
+                &o,
+                Some("ru"),
+                Some("en")
+            ),
             None
         );
     }
@@ -1061,37 +1229,27 @@ mod follows_tests {
     use super::*;
 
     #[test]
-    fn a_preference_about_nothing_follows_nothing() {
-        for mode in [Auto::parse("none"), Auto::parse("ru")] {
-            assert!(!follows_output(&mode, false));
-            assert!(!follows_output(&mode, true));
-        }
+    fn a_named_language_follows_nothing() {
+        assert!(!follows_output("ru", false));
+        assert!(!follows_output("ru", true));
     }
 
-    /// A whole translation never falls back to the other output, so only the
-    /// output it names can change its answer.
+    /// **Which outputs matter is now a property of the language setting, not
+    /// of the kind.** Two tests here used to say that a full mode followed
+    /// only its own output while a forced one followed both - true at the
+    /// time, because falling back to the other output was hardwired into
+    /// forced and unavailable to anything else. Splitting the preference in
+    /// two on 2026-08-24 made it a choice, so the same rule now reads off one
+    /// setting and applies to every kind.
     #[test]
-    fn a_full_mode_follows_only_its_own_output() {
-        let primary = Auto::parse("primary");
-        assert!(follows_output(&primary, false));
-        assert!(!follows_output(&primary, true));
-
-        let secondary = Auto::parse("secondary");
-        assert!(!follows_output(&secondary, false));
-        assert!(follows_output(&secondary, true));
-    }
-
-    /// Forced subtitles are worth having in either language on offer, so the
-    /// forced modes take the other output when the preferred one has nothing -
-    /// which means either output moving can change the answer.
-    #[test]
-    fn a_forced_mode_follows_both_outputs() {
-        for mode in [
-            Auto::parse("primary_forced"),
-            Auto::parse("secondary_forced"),
-        ] {
-            assert!(follows_output(&mode, false));
-            assert!(follows_output(&mode, true));
+    fn only_follows_its_own_output_and_fallback_follows_both() {
+        assert!(follows_output("first_only", false));
+        assert!(!follows_output("first_only", true));
+        assert!(!follows_output("second_only", false));
+        assert!(follows_output("second_only", true));
+        for place in ["first", "second"] {
+            assert!(follows_output(place, false), "{place}");
+            assert!(follows_output(place, true), "{place}");
         }
     }
 }
@@ -1255,5 +1413,195 @@ mod row_tests {
         // Nothing but a title, which is then the row rather than being said
         // twice.
         assert_eq!(row_native(&library("", "Signs")), "Signs");
+    }
+}
+
+#[cfg(test)]
+mod stated_false_tests {
+    use super::*;
+
+    /// The shape a scraped library actually produces, from a report on
+    /// 2026-08-24: seventeen subtitle tracks, three of them titled "Forced",
+    /// and no forced subtitle offered for any of them.
+    ///
+    /// **`forced: Some(false)` is the whole point of this fixture.** The
+    /// container stated nothing - checked with `matroska::flags`, which
+    /// answered `None` for every track - and the `.nfo` written beside it
+    /// stated `<forced>False</forced>` on all seventeen, which is what a
+    /// scraper writes when it did not look rather than when it checked. So the
+    /// tracks arrive here carrying a stated no and a title saying yes.
+    fn stated_false() -> Vec<Subtitle> {
+        let track = |index: u32, language: &str, title: &str| crate::probe::SubtitleTrack {
+            index,
+            language: language.to_string(),
+            title: title.to_string(),
+            format: "SubRip".to_string(),
+            // What the sidecar asserted, and what used to end the search.
+            forced: Some(false),
+            hearing_impaired: None,
+            commentary: None,
+        };
+        let tracks = vec![
+            track(0, "ru", "Russian (Forced)"),
+            track(1, "ru", "Russian (iTunes)"),
+            track(2, "ru", "Russian (Cool Story Blog)"),
+            track(3, "en", "English (Forced)"),
+            track(4, "en", "SDH"),
+            track(5, "uk", "Ukrainian (Forced)"),
+        ];
+        options(None, &tracks, &[])
+    }
+
+    #[test]
+    fn the_forced_tracks_are_recognised_as_forced() {
+        let o = stated_false();
+        for (at, expected) in [(0, true), (1, false), (2, false), (3, true), (5, true)] {
+            assert_eq!(
+                o[at].is_forced(),
+                expected,
+                "option {at} ({:?}) read as forced={}",
+                o[at].label(),
+                o[at].is_forced()
+            );
+        }
+    }
+
+    /// What was reported: English on the first output, Russian on the second,
+    /// preference "Forced (Prefer Second Output Language)". It chose nothing.
+    #[test]
+    fn forced_following_the_second_output_finds_the_russian_one() {
+        assert_eq!(
+            automatic(
+                &Wanted::parse("forced_only"),
+                "second",
+                &stated_false(),
+                Some("en"),
+                Some("ru")
+            ),
+            Some(SubtitleChoice::Embedded(0))
+        );
+    }
+
+    #[test]
+    fn forced_following_the_first_output_finds_the_english_one() {
+        assert_eq!(
+            automatic(
+                &Wanted::parse("forced_only"),
+                "first",
+                &stated_false(),
+                Some("en"),
+                Some("ru")
+            ),
+            Some(SubtitleChoice::Embedded(3))
+        );
+    }
+}
+
+#[cfg(test)]
+mod ladder_tests {
+    use super::*;
+    use crate::label::Kind;
+
+    fn track(index: u32, language: &str, kind: Option<Kind>) -> Subtitle {
+        Subtitle::Embedded {
+            index,
+            label: language.to_string(),
+            language: language.to_string(),
+            title: String::new(),
+            format: String::new(),
+            kind,
+        }
+    }
+
+    /// The rule the whole design rests on: after the kind asked for, take the
+    /// nearest on `Forced ⊂ Full ⊂ SDH`.
+    #[test]
+    fn each_kind_falls_back_to_the_nearest() {
+        let ladder = |setting: &str| match Wanted::parse(setting) {
+            Wanted::Ladder(rungs) => rungs,
+            Wanted::None => Vec::new(),
+        };
+        assert_eq!(ladder("none"), Vec::new());
+        // Forced Only never accepts anything else: everything else adds the
+        // dialogue somebody chose to be spared.
+        assert_eq!(ladder("forced_only"), vec![Some(Kind::Forced)]);
+        assert_eq!(
+            ladder("forced"),
+            vec![Some(Kind::Forced), None, Some(Kind::Sdh)]
+        );
+        // From full, SDH and forced are each one step away and SDH wins,
+        // because it keeps the dialogue and forced does not.
+        assert_eq!(
+            ladder("full"),
+            vec![None, Some(Kind::Sdh), Some(Kind::Forced)]
+        );
+        assert_eq!(
+            ladder("sdh"),
+            vec![Some(Kind::Sdh), None, Some(Kind::Forced)]
+        );
+    }
+
+    /// Language outside, kind inside: everything acceptable is tried in the
+    /// first language before the second is considered at all.
+    #[test]
+    fn the_first_language_is_exhausted_before_the_second() {
+        let options = vec![
+            track(0, "en", Some(Kind::Sdh)),
+            track(1, "ru", Some(Kind::Forced)),
+            track(2, "ru", None),
+        ];
+        // Wanting full in English: no full English, but SDH English is one
+        // step away and in the right language, so it beats anything Russian.
+        assert_eq!(
+            automatic(
+                &Wanted::parse("full"),
+                "first",
+                &options,
+                Some("en"),
+                Some("ru")
+            ),
+            Some(SubtitleChoice::Embedded(0))
+        );
+    }
+
+    /// The reported case, end to end: no forced track in either language, and
+    /// the two settings that differ over what to do about it.
+    #[test]
+    fn forced_only_shows_nothing_where_prefer_forced_falls_back() {
+        let options = vec![track(0, "en", None), track(1, "ru", None)];
+        assert_eq!(
+            automatic(
+                &Wanted::parse("forced_only"),
+                "first",
+                &options,
+                Some("en"),
+                Some("ru")
+            ),
+            None
+        );
+        assert_eq!(
+            automatic(
+                &Wanted::parse("forced"),
+                "first",
+                &options,
+                Some("en"),
+                Some("ru")
+            ),
+            Some(SubtitleChoice::Embedded(0))
+        );
+    }
+
+    /// Commentary is never reached by any ladder. It is one press away in the
+    /// chooser, and nobody wants it selected on every film.
+    #[test]
+    fn commentary_is_never_chosen_automatically() {
+        let options = vec![track(0, "en", Some(Kind::Commentary))];
+        for setting in KINDS {
+            assert_eq!(
+                automatic(&Wanted::parse(setting), "first", &options, Some("en"), None),
+                None,
+                "{setting} chose the commentary track"
+            );
+        }
     }
 }

@@ -25,7 +25,8 @@ impl App {
             Item::Description(_) => tr!("Prefer Audio Description").into_owned(),
             Item::Volume(_) => tr!("Volume").into_owned(),
             Item::Sync(_) => tr!("Audio Sync").into_owned(),
-            Item::SubtitlePreference => tr!("Subtitle Preference").into_owned(),
+            Item::SubtitlePreference => tr!("Subtitle Type").into_owned(),
+            Item::SubtitleLanguagePreference => tr!("Subtitle Language").into_owned(),
             Item::SubtitleSize => tr!("Subtitle Size").into_owned(),
             Item::SubtitleFont => tr!("Subtitle Font").into_owned(),
             Item::KodiType(_) => tr!("Configure As").into_owned(),
@@ -96,7 +97,10 @@ impl App {
                     .unwrap_or_default()
             }
             Item::SubtitlePreference => {
-                crate::subtitles::describe(config.subtitle_language.as_deref())
+                crate::subtitles::describe_kind(config.subtitle_kind.as_deref())
+            }
+            Item::SubtitleLanguagePreference => {
+                crate::subtitles::describe_place(config.subtitle_language.as_deref())
             }
             Item::SubtitleFont => config
                 .subtitle_font
@@ -197,7 +201,16 @@ impl App {
                     "Adjust the audio sync for the output. Useful for countering latency with bluetooth speakers and headphones."
                 )
             }
-            Item::SubtitlePreference => tr!("Attempt to auto-select subtitles when available."),
+            Item::SubtitlePreference => {
+                tr!(
+                    "Subtitle auto-select choice when available. Preferred choices will fall back to any other available type."
+                )
+            }
+            Item::SubtitleLanguagePreference => {
+                tr!(
+                    "Language choice when auto-selecting, or match the audio track's language on an output."
+                )
+            }
             Item::ClearData => {
                 tr!("Delete saved watch progress and track choices.")
             }

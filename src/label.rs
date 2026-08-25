@@ -36,6 +36,38 @@ use std::borrow::Cow;
 use crate::languages;
 use crate::{tr, trc};
 
+/// Whether a track's own words claim a kind, for each kind separately.
+///
+/// One place deciding what the words mean, because two places would drift.
+/// `probe` asks these of a track's title alongside the container's flags -
+/// **a stated yes from either decides** - and `subtitles` asks them of a
+/// subtitle file's whole name, which is all such a file has.
+///
+/// Separate predicates rather than one function returning a `Kind`, because
+/// the caller in `probe` has a flag per kind to combine with each answer, and
+/// a single verdict could not be combined with three flags.
+pub fn says_forced(text: &str) -> bool {
+    text.to_lowercase().contains("forced")
+}
+
+/// `hi` and `cc` are matched as whole words, split on anything that is not a
+/// letter or a digit. As substrings they appear inside "Hindi", "Chinese" and
+/// a great many titles, and a subtitle wrongly read as SDH is one offered to
+/// somebody who did not ask for it.
+pub fn says_sdh(text: &str) -> bool {
+    let text = text.to_lowercase();
+    text.contains("sdh")
+        || text.contains("hearing impaired")
+        || text.contains("hard of hearing")
+        || text
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| word == "hi" || word == "cc")
+}
+
+pub fn says_commentary(text: &str) -> bool {
+    text.to_lowercase().contains("commentary")
+}
+
 /// What a track is *for*, as opposed to what it is.
 ///
 /// Worked out once, from the container's flags first and the track's title
