@@ -200,7 +200,7 @@ jobs:
 
       - name: Cache the AccessKit GTK
         id: gtk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/gtk-a11y
           key: gtk-accesskit-${{ runner.os }}-${{ runner.arch }}-${{ steps.gtk.outputs.version }}-${{ hashFiles('packaging/macos/gtk-accesskit.sh') }}
@@ -295,7 +295,7 @@ jobs:
       # Only that subdirectory, not `target`: the build artifacts beside it are
       # rebuilt every run and are most of the size.
       - name: Cache the GStreamer package
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/packaging-cache
           key: gst-pkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.gst.outputs.version }}
