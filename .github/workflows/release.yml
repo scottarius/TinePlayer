@@ -48,6 +48,40 @@ jobs:
           rustup toolchain install $env:RUST_VERSION --profile minimal
           rustup default $env:RUST_VERSION
 
+      # **The cache ci.yml has and this workflow did not.** winget pulls an
+      # 840 MB installer from gstreamer.freedesktop.org, outside GitHub's
+      # network and outside its cache, and it has no download timeout - so a
+      # slow afternoon at that end is indistinguishable from a hang, and the
+      # job sits there until the ceiling kills it. That was written up in
+      # ci.yml on 2026-08-23 and fixed there; the release workflow, which is
+      # the run you can least afford to have hang, kept downloading it fresh
+      # every time. Noticed on 2026-08-24 when a rehearsal stalled here.
+      #
+      # Restored before the install below, which then finds GStreamer already
+      # in place and skips it: `Resolve-GstRoot` looks for `gtk4.pc` under this
+      # path and needs no registry entry, so a directory the cache put back is
+      # indistinguishable from one the installer wrote.
+      #
+      # Keyed on the pinned version alone, with no `restore-keys`: a cache from
+      # another version is not a partial answer, it is the wrong GStreamer, and
+      # the build would go on to link against it.
+      #
+      # **`restore` rather than `cache`, so this job never writes it.** The key
+      # and path are ci.yml's, deliberately - a cache is scoped by ref rather
+      # than by workflow, so this reads the entry CI already wrote on `main`
+      # (912 MB, checked 2026-08-24). CI runs on every push and pull request,
+      # and a restore refreshes the entry's last-used time, so it keeps itself
+      # warm without this job doing anything.
+      #
+      # Read-only matters because the allowance is already full: 10.76 GB
+      # against a 10 GB limit on 2026-08-24, which means GitHub is evicting as
+      # it goes. A release job uploading another 912 MB would be paying to make
+      # that worse, for a copy of something that is already there.
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~\AppData\Local\Programs\gstreamer
+          key: windows-gstreamer-${{ env.GSTREAMER_VERSION }}
+
       - name: Install dependencies
         shell: pwsh
         run: .\setup-windows.ps1 -GStreamerVersion $env:GSTREAMER_VERSION
@@ -239,6 +273,33 @@ jobs:
       # are empty and harmless until the secrets exist.
       #
       # The three GTK variables are what point the build at the AccessKit GTK
+      # Which GStreamer the packaging will fetch, so the cache below can be
+      # keyed on it. Read from Homebrew rather than from GSTREAMER_VERSION
+      # above, because `contents.sh` asks Homebrew too and a key that named a
+      # different version would restore the wrong package or none.
+      - name: Which GStreamer to match
+        id: gst
+        run: |
+          version="$(brew list --versions gstreamer | awk '{print $2}')"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "Homebrew has GStreamer $version"
+
+      # **The download that failed the rehearsal on 2026-08-24.**
+      # `packaging/macos/contents.sh` fetches GStreamer's own macOS package for
+      # its LGPL FFmpeg, and keeps it under `target/packaging-cache` so a
+      # second run on a developer's machine costs nothing. On a runner that
+      # directory starts empty every time, so the release job downloaded it
+      # fresh on every run - from a host outside GitHub's network, with no
+      # retry - and one HTTP/2 error took the whole macOS package with it.
+      #
+      # Only that subdirectory, not `target`: the build artifacts beside it are
+      # rebuilt every run and are most of the size.
+      - name: Cache the GStreamer package
+        uses: actions/cache@v4
+        with:
+          path: target/packaging-cache
+          key: gst-pkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.gst.outputs.version }}
+
       # rather than Homebrew's. All three are needed: PKG_CONFIG_PATH decides
       # which headers are compiled against, RUSTFLAGS decides which library is
       # actually linked - they can disagree, and when they do the build
@@ -325,9 +386,33 @@ jobs:
     name: Publish
     needs: [windows, macos, linux]
     runs-on: ubuntu-24.04
-    # Only for a tag. A manual run builds and uploads artifacts, which is what
-    # makes a rehearsal possible without leaving a release behind.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Two conditions, and they guard different mistakes.
+    #
+    # The ref check is what makes a rehearsal possible: a manual run from a
+    # branch builds every package and uploads them as job artifacts without
+    # leaving a release behind.
+    #
+    # **The `dry_run` check is the one that was missing.** The input existed,
+    # defaulted to true, and was read by nothing - so the toggle in the
+    # dispatch dialog did exactly nothing, and a manual run *from a tag* would
+    # have published however it was set. That is the moment somebody would
+    # reach for it: the tag is cut, something looks wrong, and the obvious move
+    # is to re-run with "do not create a release" ticked. Found on 2026-08-24
+    # while rehearsing before 1.5.0.
+    #
+    # `!= true` rather than `== false`, and the difference matters. The input
+    # is declared `type: boolean`, so a dispatch supplies a real boolean - but
+    # a *push* event has no inputs at all, and `inputs.dry_run` is then null.
+    # `null != true` is true, so a tag push still publishes; `null == false`
+    # would be false, and pushing a tag would build everything and release
+    # nothing.
+    #
+    # The four cases, since getting one wrong is silent:
+    #   tag push .................... publishes
+    #   dispatch from a branch ...... skipped by the ref check, whatever is set
+    #   dispatch from a tag, ticked . skipped - the case this was missing
+    #   dispatch from a tag, clear .. publishes, which is a deliberate act
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
     steps:
       # The full history, so the previous tag can be found. A shallow
       # checkout is a single commit, with nothing to compare against.

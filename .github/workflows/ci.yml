@@ -108,6 +108,24 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
         with:
           prefix-key: linux-${{ matrix.arch }}
+          # **Restored on a pull request, saved only on `main`.** A pull
+          # request reads the entry `main` already has - a cache is scoped by
+          # ref, and a run may read its own ref or the default branch - so it
+          # gets the whole compiled dependency set without writing anything.
+          #
+          # Saving on pull requests is what filled the allowance. Each one
+          # wrote its own copy against `refs/pull/N/merge`, nothing reclaimed
+          # them when the pull request merged, and on 2026-08-24 thirteen such
+          # entries held 4.64 GB of a 10 GB limit - with the total at 10.76 GB,
+          # which means GitHub was evicting live entries to make room. Deleting
+          # them is a one-off; this is what stops it happening again, and it
+          # needs no cleanup workflow because there is nothing left to clean.
+          #
+          # The cost is a pull request that changes `Cargo.lock` missing the
+          # exact key. It still restores through `rust-cache`'s own prefix
+          # fallback and recompiles only what moved, which is the ordinary case
+          # for a lockfile bump anyway.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: cargo build --release --locked
@@ -292,6 +310,24 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
         with:
           prefix-key: windows
+          # **Restored on a pull request, saved only on `main`.** A pull
+          # request reads the entry `main` already has - a cache is scoped by
+          # ref, and a run may read its own ref or the default branch - so it
+          # gets the whole compiled dependency set without writing anything.
+          #
+          # Saving on pull requests is what filled the allowance. Each one
+          # wrote its own copy against `refs/pull/N/merge`, nothing reclaimed
+          # them when the pull request merged, and on 2026-08-24 thirteen such
+          # entries held 4.64 GB of a 10 GB limit - with the total at 10.76 GB,
+          # which means GitHub was evicting live entries to make room. Deleting
+          # them is a one-off; this is what stops it happening again, and it
+          # needs no cleanup workflow because there is nothing left to clean.
+          #
+          # The cost is a pull request that changes `Cargo.lock` missing the
+          # exact key. It still restores through `rust-cache`'s own prefix
+          # fallback and recompiles only what moved, which is the ordinary case
+          # for a lockfile bump anyway.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Verify GTK 4 comes from GStreamer
         shell: pwsh
@@ -378,6 +414,24 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
         with:
           prefix-key: macos-${{ matrix.arch }}
+          # **Restored on a pull request, saved only on `main`.** A pull
+          # request reads the entry `main` already has - a cache is scoped by
+          # ref, and a run may read its own ref or the default branch - so it
+          # gets the whole compiled dependency set without writing anything.
+          #
+          # Saving on pull requests is what filled the allowance. Each one
+          # wrote its own copy against `refs/pull/N/merge`, nothing reclaimed
+          # them when the pull request merged, and on 2026-08-24 thirteen such
+          # entries held 4.64 GB of a 10 GB limit - with the total at 10.76 GB,
+          # which means GitHub was evicting live entries to make room. Deleting
+          # them is a one-off; this is what stops it happening again, and it
+          # needs no cleanup workflow because there is nothing left to clean.
+          #
+          # The cost is a pull request that changes `Cargo.lock` missing the
+          # exact key. It still restores through `rust-cache`'s own prefix
+          # fallback and recompiles only what moved, which is the ordinary case
+          # for a lockfile bump anyway.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Verify GTK 4 and GStreamer share one prefix
         run: |
