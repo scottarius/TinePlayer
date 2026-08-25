@@ -105,7 +105,7 @@ jobs:
       # incremental is lost: release builds are non-incremental by default and
       # `target/release/incremental` is empty, so what was ever worth keeping
       # is the compiled dependency rlibs, which is exactly what this keeps.
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           prefix-key: linux-${{ matrix.arch }}
           # **Restored on a pull request, saved only on `main`.** A pull
@@ -307,7 +307,7 @@ jobs:
           "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       # See the Linux job for why this is `rust-cache` and not `actions/cache`.
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           prefix-key: windows
           # **Restored on a pull request, saved only on `main`.** A pull
@@ -411,7 +411,7 @@ jobs:
       # See the Linux job for why this is `rust-cache` and not `actions/cache`.
       # Keyed on the architecture as well: the artifacts are for one of them,
       # and a cache shared between the two would restore the wrong ones.
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           prefix-key: macos-${{ matrix.arch }}
           # **Restored on a pull request, saved only on `main`.** A pull
