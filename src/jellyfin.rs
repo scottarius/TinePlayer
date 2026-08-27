@@ -1779,7 +1779,7 @@ mod tests {
         // everyone's phone until it was next started.
         for code in [500, 502, 503, 404, 400] {
             assert!(!is_refusal(code), "{code} is worth retrying");
-            assert!(matches!(failed(code.into(), "trouble"), Error::Failed(_)));
+            assert!(matches!(failed(code, "trouble"), Error::Failed(_)));
         }
     }
 
