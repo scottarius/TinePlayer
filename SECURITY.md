@@ -14,7 +14,7 @@ Useful to include, roughly in order:
   a file
 - The platform and the TinePlayer version, from **Settings → About**
 - The log, if it is relevant: see
-  [Send the log](docs/troubleshooting.md#send-the-log). Tokens, your account
+  [Log file](https://tineplayer.app/docs/settings/where-data-is-saved/#log). Tokens, your account
   name, the folders videos sit in and any server address outside your own
   network are removed before it is written; file names are kept
 

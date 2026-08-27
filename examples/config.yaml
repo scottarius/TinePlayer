@@ -64,9 +64,10 @@ secondary_sink: Sennheiser USB Headset Analogue Stereo
 # before. Once you have chosen tracks for a video by hand, those are what it
 # comes back to.
 #
-# Two-letter codes; the full list is in docs/configuration.md. Only the leading
-# letters are compared, so "en" matches a track tagged eng or en-US, and a
-# subtitle file named film.en.hi.srt.
+# Two-letter codes; the full list is at
+# tineplayer.app/docs/settings/config-file/. Only the leading letters are
+# compared, so "en" matches a track tagged eng or en-US, and a subtitle file
+# named film.en.hi.srt.
 
 # Falls back to the first audio track when unset.
 primary_language: en

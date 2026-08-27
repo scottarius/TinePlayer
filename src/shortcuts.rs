@@ -8,8 +8,8 @@
 //!
 //! The cost is that this file has to be kept true by hand. Anything added to
 //! the key handler belongs here in the same change - which is the same rule
-//! `docs/usage.md` already lives under, and this list is the one people
-//! actually read, being the only one on the television.
+//! the documentation on the site already lives under, and this list is the
+//! one people actually read, being the only one on the television.
 
 use std::borrow::Cow;
 

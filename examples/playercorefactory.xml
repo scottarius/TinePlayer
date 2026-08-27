@@ -30,7 +30,7 @@
            If Kodi itself is a Flatpak, none of the above is reachable from
            inside its sandbox. Use /usr/bin/flatpak-spawn here, and begin the
            args below with --host and then the path. Kodi also needs
-           permission for that; see docs/integrations.md. -->
+           permission for that; see tineplayer.app/docs/integrations/kodi/. -->
       <filename>/path/to/TinePlayer</filename>
 
       <!-- {1} is the video Kodi wants played, and is the only substitution

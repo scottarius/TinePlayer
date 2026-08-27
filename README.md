@@ -4,7 +4,14 @@
 </h1>
 
 <p align="center">
-  Watch together, in different languages.
+  Watch together, hear your own soundtrack.
+</p>
+
+<p align="center">
+  <a href="https://tineplayer.app">tineplayer.app</a> &middot;
+  <a href="https://tineplayer.app/download/">Download</a> &middot;
+  <a href="https://tineplayer.app/docs/">Documentation</a> &middot;
+  <a href="https://tineplayer.app/screenshots/">Screenshots</a>
 </p>
 
 <p align="center">
@@ -15,142 +22,41 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
-Play one video with two audio tracks at the same time, each sent to a different
-audio device, so people who speak different languages, or who need audio
-description, can watch it together. The room hears one track through the
-speakers; whoever is on headphones hears the other. Any two connected devices
-will do.
-
-That matters because people experience a film differently - in different
-languages, described, subtitled, louder, quieter - and watching the way that
-works for you means the performances land, the jokes time correctly, and you
-don't have to work at it. Usually those differences mean watching apart, or one
-person making a concession. This is an attempt to let everyone have the film
-the way it works for them, at the same time, on the same screen, while still
-sharing the experience together.
+Play any video and send two soundtracks to two different audio devices at the
+same time. A second language on headphones, the original on speakers, audio
+description for whoever needs it. Many people experience films differently;
+TinePlayer lets you experience them together.
 
 <p align="center">
-  <img src="docs/screenshots/main-menu.png" width="820" alt="TinePlayer's playback options: English to the speakers, Russian to the headphones, and Spanish subtitles.">
+  <img src="docs/screenshots/media-page.webp" width="820" alt="A media page, with the film's soundtrack going to the speakers and its audio description to the headphones.">
 </p>
 
-## Why another video player
-
-Plenty of people have tried to rig this up themselves: the film on the
-television, the same film started again on a laptop or a phone with headphones
-in, and a count of three to start them together. It works for about a minute.
-Then one drifts, someone nudges it back, it drifts again, and every pause for
-the door or the kettle means lining both up by hand all over again. You end up
-watching the sync instead of the film.
-
-More often nobody rigs anything up at all, and it comes down to one question:
-who goes without? Someone reads subtitles they would rather not need, misses
-the description, or listens in a language they have to work at. It is the
-option that needs no managing, so it is the one people settle on. TinePlayer
-removes the question. Everyone has the film the way it works for them, at the
-same time, on the same screen.
-
-Ordinary players cannot fix this, because choosing a track and choosing a
-speaker are two separate settings rather than a pair, and one copy of a player
-only ever plays one of them. This does it in one place: one film, playing
-once, with both soundtracks kept together because they never came apart.
+**This README is for people working on TinePlayer.** If you are here to use it,
+everything is on [tineplayer.app](https://tineplayer.app): what it does,
+[downloads](https://tineplayer.app/download/) for Windows, macOS and Linux, and
+the [documentation](https://tineplayer.app/docs/).
 
 ## How it works
 
-TinePlayer is built on [GStreamer](https://gstreamer.freedesktop.org/). A video
-file's audio tracks are already separate streams inside the container, so the
-file is demuxed once and each chosen track is piped to its own output device
-from a single pipeline, staying in sync because it is all one clock.
+TinePlayer is written in Rust, draws its interface with
+[GTK 4](https://www.gtk.org/), and plays everything through
+[GStreamer](https://gstreamer.freedesktop.org/). A video file's audio tracks
+are already separate streams inside the container, so the file is demuxed once
+and each chosen track is sent to its own output device from a single pipeline.
+Staying in step is not something that has to be maintained - it is all one
+clock.
+
+The same split serves an audio description track, or a separate audio file
+sitting beside the video, which can be aligned to the picture automatically.
 
 <p align="center">
-  <img src="docs/screenshots/player-controls.png" width="820" alt="A film playing with subtitles, and the playback controls along the bottom.">
+  <img src="docs/screenshots/player-controls.webp" width="820" alt="A film playing, with the playback controls along the bottom.">
 </p>
 
 <p align="center">
-  <sub><i>Sintel</i> © <a href="https://studio.blender.org/films/sintel/">Blender Foundation</a>,
-  <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a></sub>
+  <sub><i>Charge</i> &copy; <a href="https://studio.blender.org/videos/charge/">Blender Studio</a>,
+  <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></sub>
 </p>
-
-## Features
-
-- Plays a video and two simultaneous audio tracks to separate output devices in
-  sync
-- Targets HTPC and TV use, with a large interface and full gamepad support
-- Works with standard video containers: MKV, MP4, MPEG-TS (anything GStreamer
-  supports)
-- Plays from network sources as well as local files: `http://`, `smb://` and
-  network shares
-- Resumes videos with remembered playback time and language/track selections
-- Displays subtitles from embedded tracks and external files, including forced-only support
-- Selects tracks and subtitles automatically from your preferred languages
-- Splits any pair of tracks a file carries, including audio description
-  alongside the ordinary soundtrack
-- Plays a separate audio file on an output instead of one embedded in the video,
-  and can sync it up with the picture automatically
-- Independent volume for each output, so a described or second-language track
-  can sit at a different level from the room's soundtrack
-- Screen reader support throughout, with every menu, list and playback control
-  named and announced
-- Integrates with Kodi and reports playback progress, including libraries from
-  add-ons like Jellyfin and Plex
-- Connects to a Jellyfin server as a cast target, so anyone in the room can send
-  a video to the television from their own phone
-- Launches straight into playback from command-line arguments, for custom
-  integrations
-
-## Requirements
-
-- A display and two or more connected audio output devices. Any combination
-  works: speakers and headphones, a USB headset, an external DAC, and so on.
-- A video file containing two or more audio tracks, or one video plus a
-  [separate audio file](docs/usage.md#separate-audio-files) for the second
-  output.
-
-> [!NOTE]
-> Bluetooth audio devices may add 100-200ms of latency and result in the audio
-> being slightly out of sync. See [The sound is not in sync with the
-> video](docs/troubleshooting.md#the-sound-is-not-in-sync-with-the-video) in
-> troubleshooting.
-
-## Documentation
-
-- **[Building from source](docs/building.md)** - setup scripts and dependencies
-  for each platform
-- **[Using TinePlayer](docs/usage.md)** - controls, keyboard and gamepad,
-  command-line options
-- **[Getting Multi-track Videos](docs/multi-track-video.md)** - finding
-  or creating multi-track video files
-- **[Configuration](docs/configuration.md)** - `config.yaml`, language
-  preferences, saved playback resume data
-- **[Integrations](docs/integrations.md)** - integrating with other media
-  players and libraries
-- **[Troubleshooting](docs/troubleshooting.md)** - when something does not
-  start, play, or hand over
-- **[Translating](docs/translating.md)** - adding a language, and seeing your
-  work in the application without building it
-
-## Install
-
-Downloads for each platform are on the
-[releases page](https://github.com/scottarius/TinePlayer/releases).
-
-**Windows** - Run the installer, or unpack the portable ZIP anywhere you like
-and run `TinePlayer.exe`. The installer upgrades an existing copy in place.
-If upgrading the portable ZIP, be sure to delete the previous version rather
-than just copy over it.
-
-**macOS** - Open the disk image and drag TinePlayer to Applications.
-
-**Linux** - Use apt to install the `.deb` package for Debian, Ubuntu and
-Raspberry Pi OS, in `amd64` and `arm64`:
-
-```sh
-sudo apt install ./tineplayer_1.0.0_linux_arm64.deb
-```
-
-The filename may be different depending on version and architecture.
-Ensure to include the leading `./`. It installs on Debian 12, Ubuntu 22.04 and
-anything newer. On Fedora, Arch and others you'll need to
-[build from source](docs/building.md).
 
 ## Build from source
 
@@ -160,49 +66,53 @@ cargo build --release
 ./target/release/tineplayer
 ```
 
-`main` is the development branch, and a build from it will usually report a
-version ending in `-dev`. To build a release instead, check out its tag:
+Each setup script installs only what is needed to build, and is safe to re-run.
+`main` is the development branch and a build from it reports a version ending
+in `-dev`; to build a release, check out its tag:
 
 ```sh
 git clone --branch v1.0.0 https://github.com/scottarius/TinePlayer
 ```
 
-See [Building from source](docs/building.md) for more information.
+See **[docs/building.md](docs/building.md)** for what each script installs, what
+to do on distributions without `apt`, and the traps around taking GTK and
+GStreamer from different places.
 
-## Accessibility
+Packaging - the Windows installer, the macOS disk images and the Debian
+packages - is under [`packaging/`](packaging).
 
-The interface is built to be driven without a mouse or a screen: everything is
-reachable by keyboard or gamepad, the type is large and scalable, and the
-selection mark is meant to be read from across a room. Audio description track
-support is a first-class feature rather than an afterthought, and can be sent
-o one output while the room hears the ordinary soundtrack.
+> [!NOTE]
+> **On macOS, build the packaged application rather than a local one** if a
+> screen reader matters to you. A build against Homebrew's GTK is silent to
+> VoiceOver, because that build has no AccessKit backend compiled in. See
+> [Accessibility](https://tineplayer.app/docs/getting-started/accessibility/).
 
-Subtitles are treated as an access feature rather than a translation one.
-Embedded tracks and files sitting beside the video appear in a single list, so
-an SDH or hard-of-hearing track is chosen the same way as any other, and a
-preference can pick one automatically for every video. Size and font are both
-configurable, sized against the video rather than the screen so they stay
-legible on a television.
+## The source
 
-Screen readers are supported throughout: menus, lists, buttons, and the playback
-controls are all named, and each one is announced as you reach it.
+The Rust source is located in `src/`. The parts worth knowing about:
 
-## Feedback
+| | |
+| --- | --- |
+| `app/` | The interface, a module per screen or panel - the media page, settings, the choosers, the file browser, input handling |
+| `pipeline.rs`, `player.rs` | The GStreamer pipeline, and playback state |
+| `audio.rs`, `subtitles.rs` | What each output and the subtitle layer can play, and what gets chosen automatically. One list and one selector each, so a preference and a command-line flag cannot disagree about what `en` means |
+| `beside.rs` | Audio and subtitle files sitting next to the video, found by one convention read from both sides |
+| `jellyfin.rs`, `kodi.rs` | Casting from Jellyfin, and handing playback back and forth with Kodi |
+| `i18n.rs` | How the `po/` catalogs are compiled into the binary |
+| `config.rs`, `logging.rs` | `config.yaml`, `positions.json` and `tineplayer.log` |
 
-If TinePlayer doesn't let everyone in your room watch the way each of them
-needs to, I want to hear about it: what gets in the way, whose experience it
-falls short for, what's missing or simply wrong.
-[Open an issue](https://github.com/scottarius/TinePlayer/issues) or
-[start a discussion](https://github.com/scottarius/TinePlayer/discussions).
-This only works if it suits everyone watching at once, and I genuinely want
-your feedback in order to make it better.
+Everything goes through `cargo clippy --all-targets -- -D warnings` and
+`cargo test` before it lands. CI runs both on all three platforms, along with
+`cargo fmt`, `cargo deny`, and checks that the translation template and the
+bundled fonts still cover every interface string.
 
-If something has gone wrong, the log is the most useful thing to attach - see
-[Send the log](docs/troubleshooting.md#send-the-log) for where it is and what
-is in it. **Security problems go
-[privately](https://github.com/scottarius/TinePlayer/security/advisories/new)**
-rather than into an issue; [SECURITY.md](SECURITY.md) says what is already
-known and deliberate.
+## Translating
+
+TinePlayer's interface is translated in `.po` files under `po/`. You do not
+need to build anything and you do not need to know Rust - see
+**[docs/translating.md](docs/translating.md)** for adding a language, and for
+pointing a release build at your file with `TINEPLAYER_PO` so you can see your
+work without compiling.
 
 ## Compatibility
 
@@ -231,6 +141,21 @@ One consequence of that baseline: the GTK 4.14+ `dmabuf` zero-copy rendering
 path is not used, so newer systems do not gain that particular optimization.
 The OpenGL path used instead handles 1080p comfortably, including on a Pi 5.
 
+## Reporting problems
+
+[Open an issue](https://github.com/scottarius/TinePlayer/issues) for anything
+broken, or [start a
+discussion](https://github.com/scottarius/TinePlayer/discussions) for anything
+else. Reports from people who use a screen reader or rely on audio description
+are especially useful.
+
+The log is the most useful thing to attach - see [Log
+file](https://tineplayer.app/docs/settings/where-data-is-saved/#log) for where
+it is and what is in it. **Security problems go
+[privately](https://github.com/scottarius/TinePlayer/security/advisories/new)**
+rather than into an issue; [SECURITY.md](SECURITY.md) says what is already
+known and deliberate.
+
 ## How this was built
 
 Written collaboratively with an AI assistant (Claude). While Claude wrote the
@@ -239,7 +164,9 @@ verification, was done by hand.
 
 ## License
 
-TinePlayer's own code is MIT. See [LICENSE](./LICENSE).
+TinePlayer's own code is MIT. See [LICENSE](./LICENSE). The logo and the
+artwork under `data/branding/` are CC BY 4.0, with their own license file
+beside them.
 
 It builds on the following, none of which are vendored into this repository:
 
