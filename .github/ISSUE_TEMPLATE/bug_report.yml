@@ -70,7 +70,7 @@ body:
       label: The log
       description: >
         Where to find it, and what is in it, is in
-        [Send the log](https://github.com/scottarius/TinePlayer/blob/main/docs/troubleshooting.md#send-the-log).
+        [Log file](https://tineplayer.app/docs/settings/where-data-is-saved/#log).
         Its first lines carry the versions of GStreamer and GTK, which is most
         of what is otherwise guesswork.
 

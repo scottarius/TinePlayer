@@ -41,7 +41,8 @@
 //!
 //! **The command line.** Its help lives in clap's `///` doc comments, which no
 //! extractor can see and which clap wants as `&'static str` anyway. It is read
-//! by people already at a terminal, and `docs/` is English regardless.
+//! by people already at a terminal, and the documentation is English
+//! regardless.
 //!
 //! **The language list in `languages.rs`.** Those fifty entries already carry
 //! each language's own name beside the English one, which is what somebody

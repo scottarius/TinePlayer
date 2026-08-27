@@ -134,7 +134,7 @@ struct Args {
     #[arg(long, conflicts_with = "fullscreen")]
     windowed: bool,
 
-    /// Used for launching from another application. See docs/integrations.md
+    /// Used for launching from another application. See tineplayer.app/docs/
     // Something else chose the video and is waiting for this playback of it to
     // finish, so only that video is played: no file browser, no confirmation
     // on the way out, and it exits when the video ends. Implied by --kodi.
