@@ -1,0 +1,43 @@
+name: Rebuild the site
+
+# tineplayer.app writes the current version, the direct download links and
+# their file sizes into its pages when it builds, rather than asking GitHub
+# from the visitor's browser. That makes the download page correct without any
+# JavaScript, and stale the moment a new release exists. This tells Cloudflare
+# Pages to build it again.
+#
+# **On publish rather than at the end of the release build.** The release
+# workflow leaves a draft, which is deliberate - the notes get finished and the
+# packages get tried before anyone can download them. A draft is not
+# `releases/latest`, so a rebuild triggered when the packages finish would
+# publish a site pointing at the *previous* version, and look like it worked.
+# The publish button is the moment the new release becomes the current one.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Nothing is checked out and nothing is written back: this posts to a URL and
+# stops. The other three workflows take `contents: read` because they clone.
+permissions: {}
+
+jobs:
+  rebuild:
+    name: Ask Cloudflare Pages to rebuild
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Trigger the deploy hook
+        env:
+          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+        run: |
+          set -euo pipefail
+          # Harmless until the secret exists, the same way signing is: a fork,
+          # or this repository before the hook is created, should not fail a
+          # release over a site it cannot deploy.
+          if [ -z "${HOOK:-}" ]; then
+            echo "No SITE_DEPLOY_HOOK secret set, so there is nothing to trigger."
+            echo "Create a deploy hook on the Pages project and add it as that secret."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" >/dev/null
+          echo "Triggered a rebuild of tineplayer.app"
