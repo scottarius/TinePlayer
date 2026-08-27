@@ -8,7 +8,7 @@ name = "tineplayer"
 # The update check parses the three leading numbers and ignores the rest, so a
 # dev build is never told to downgrade to the release behind it. Windows
 # packaging trims the suffix for the one field Inno insists is numeric.
-version = "1.5.0-dev"
+version = "2.0.0"
 edition = "2024"
 # What LICENSE has said since the first commit, stated where a tool can read
 # it. `cargo deny` warns without this, and it is the one crate in the graph
