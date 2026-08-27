@@ -165,7 +165,15 @@ fi
 # Homebrew has here, so it drops straight in.
 #
 # The download is large and rarely changes, so it is kept under target/.
-gst_version="$(brew list --versions gstreamer | awk '{print $2}')"
+# **Homebrew's revision is stripped, and everything below depends on that.**
+# Homebrew appends a revision of its own - 1.28.6_1 - when it rebuilds a
+# formula without the upstream version moving. That revision exists nowhere
+# but Homebrew: not in the download URL, not in the name of the libav package
+# inside it. A rehearsal on 2026-08-27 asked for 1.28.6_1, got five 404s and
+# took the x86_64 package with it, while arm64 passed the same run because its
+# Homebrew had no revision that day. A difference between the two runners is
+# exactly how this hides.
+gst_version="$(brew list --versions gstreamer | awk '{print $2}' | cut -d_ -f1)"
 cache="target/packaging-cache"
 pkg="$cache/gstreamer-$gst_version-universal.pkg"
 expanded="$cache/gstreamer-$gst_version"
