@@ -11,8 +11,8 @@ on:
 
 # Everything version-like is pinned here on purpose. This workflow gates
 # merges, so a red build has to mean "this commit is broken" and nothing else.
-# Whether the project still works against current upstream is a different
-# question, asked on a schedule by upstream.yml instead.
+# Upgrades are a deliberate decision made when we choose to make one, not
+# something a new upstream release forces.
 env:
   CARGO_TERM_COLOR: always
   # Floating the toolchain would let a new Rust release fail an unrelated
@@ -205,12 +205,12 @@ jobs:
   # anything arrived from somewhere other than crates.io. `deny.toml` says
   # which, and why each entry is there.
   #
-  # Here rather than in upstream.yml because it is deterministic - the same
-  # tree gives the same answer forever, so a red means this commit added
-  # something. The *advisories* half is the opposite kind of question and runs
-  # weekly there instead: a new advisory appears against a crate we shipped
-  # months ago, and failing somebody's unrelated pull request for it would be
-  # blaming the wrong commit.
+  # Here because it is deterministic - the same tree gives the same answer
+  # forever, so a red means this commit added something. The *advisories* half
+  # is the opposite kind of question and is deliberately not run here: a new
+  # advisory appears against a crate we shipped months ago, and failing
+  # somebody's unrelated pull request for it would be blaming the wrong
+  # commit. Dependabot alerts watch for those instead.
   #
   # This exists because the claim it replaces was wrong. Cargo.toml said
   # nothing in the tree was copyleft, checked by hand, and MPL-2.0 had been
