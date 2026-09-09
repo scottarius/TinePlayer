@@ -1,19 +1,18 @@
 # What the dependency tree is allowed to contain.
 #
-# Two checks run from this file and they run in different places, because they
-# answer different questions - the same split ci.yml and upstream.yml already
-# draw between "this commit is broken" and "the world moved".
+# Two checks are configured from this file. Only one of them runs in CI,
+# because they answer different questions.
 #
 #   licences and bans -> ci.yml, on every pull request. Deterministic: the
 #                        same tree gives the same answer forever, so a red
 #                        here means this commit added something.
-#   advisories        -> upstream.yml, weekly. A new advisory appears against
-#                        a crate we shipped months ago, with no commit
-#                        involved, so gating merges on it would fail
-#                        somebody's unrelated change for something they did
-#                        not do.
+#   advisories        -> not run in CI. A new advisory appears against a crate
+#                        we shipped months ago, with no commit involved, so
+#                        gating merges on it would fail somebody's unrelated
+#                        change for something they did not do. Dependabot
+#                        alerts report those instead.
 #
-# `cargo deny check bans licenses` and `cargo audit` respectively.
+# `cargo deny check bans licenses` is the half CI runs.
 
 [graph]
 # Every target the project actually ships, so a crate pulled in only on one
@@ -121,7 +120,9 @@ unknown-git = "deny"
 # Advisories
 # ---------------------------------------------------------------------------
 #
-# Read weekly by upstream.yml via `cargo audit`, not on pull requests.
+# Not run in CI. Dependabot alerts report advisories against the dependency
+# tree instead; these settings apply to `cargo deny check advisories` when it
+# is run by hand.
 #
 # **When something turns up with no fix available, add it here with a date and
 # a reason rather than switching the check off.** A permanently red job is a
