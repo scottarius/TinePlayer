@@ -2,8 +2,7 @@
 name = "tineplayer"
 # Development versions carry `-dev` so a build from main never claims to be
 # the release it follows - "About TinePlayer v1.1.0-dev" says at a glance that
-# a bug report is not from a released build. Dropped when a release is cut,
-# then set to the next `-dev` immediately after.
+# a bug report is not from a released build. Dropped when a release is cut.
 #
 # The update check parses the three leading numbers and ignores the rest, so a
 # dev build is never told to downgrade to the release behind it. Windows

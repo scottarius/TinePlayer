@@ -521,8 +521,8 @@ jobs:
           draft: true
           # The notes start filled in, so that writing them is editing rather
           # than starting from an empty box on the day. Everything that does
-          # not change between releases - which file to download, how to
-          # install, what Windows will say about it - is already here and
+          # not change between releases - which file to download, where the
+          # install guide is, where to send feedback - is already here and
           # correct. What is left is saying what changed.
           #
           # Not generate_release_notes: a list of commit subjects is a poor
@@ -533,10 +533,6 @@ jobs:
             ## What's new
 
             New release!
-
-            ## If you are upgrading
-
-            - What to do.
 
             ## Which files to download
 
@@ -551,42 +547,10 @@ jobs:
 
             ## Installing
 
-            ### Windows
-
-            Download and run the installer, or download and extract the .zip file.
-
-            Windows may warn you that it does not recognize the publisher, because the download is not signed with a certificate. Click **More info**, then **Run anyway**.
-
-            ### Mac
-
-            Download and open the .dmg file and drag TinePlayer.app into your Applications folder.
-
-            If you are not sure which of the two you need, open the Apple menu and choose **About This Mac**. A line reading **Chip** means Apple silicon; one reading **Processor** means Intel.
-
-            ### Linux
-
-            Download the .deb file for your architecture and install it with apt:
-
-            ```sh
-            sudo apt install ./${{ steps.files.outputs.arm64 }}
-            ```
-
-            The leading `./` matters: without it apt looks for a package by that name in its own sources and reports that it cannot find one. Using apt rather than `dpkg -i` is what pulls in the GTK and GStreamer pieces TinePlayer needs.
-
-            Then run `tineplayer`, or find TinePlayer in your applications menu.
-
-            If unsure which package to download, run:
-
-            ```sh
-            dpkg --print-architecture
-            ```
-
-            ## Known issues
-
-            - :(
+            See [Installing TinePlayer](https://tineplayer.app/docs/getting-started/).
 
             ## Feedback
 
-            [Issues](https://github.com/scottarius/TinePlayer/issues) for bugs, [Discussions](https://github.com/scottarius/TinePlayer/discussions) for everything else. I especially want to hear from you if you use a screen reader or rely on audio description: support for both is thin, and I would rather fix it against what people actually need than guess.
+            Found a bug? Please [open an issue](https://github.com/scottarius/TinePlayer/issues) and describe what happened, along with your platform and TinePlayer version. For questions, ideas, or anything else, join the conversation in [Discussions](https://github.com/scottarius/TinePlayer/discussions).
 
             **Full Changelog**: ${{ steps.changelog.outputs.link }}
