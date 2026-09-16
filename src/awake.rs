@@ -15,8 +15,12 @@ use std::cell::Cell;
 /// Holds the display awake, and lets go when asked or when dropped.
 pub struct KeepAwake {
     app: gtk::Application,
-    /// What GTK gave us in return for the last inhibit, or 0 for "not
-    /// currently holding". GTK uses the same value to release it.
+    /// Whether we are currently holding. Kept apart from `cookie` because a
+    /// session that refuses the inhibit hands back 0, and a zero cookie would
+    /// otherwise read as "not holding" and strand the platform hold below.
+    holding: Cell<bool>,
+    /// What GTK gave us in return for the last inhibit, or 0 for "GTK is not
+    /// holding one". GTK uses the same value to release it.
     cookie: Cell<u32>,
 }
 
@@ -24,6 +28,7 @@ impl KeepAwake {
     pub fn new(app: &gtk::Application) -> Self {
         Self {
             app: app.clone(),
+            holding: Cell::new(false),
             cookie: Cell::new(0),
         }
     }
@@ -34,9 +39,10 @@ impl KeepAwake {
     /// thing does nothing, which means callers can simply say what should be
     /// true rather than track what they last asked for.
     pub fn set(&self, awake: bool) {
-        if awake == (self.cookie.get() != 0) {
+        if awake == self.holding.get() {
             return;
         }
+        self.holding.set(awake);
 
         if awake {
             // IDLE only. Inhibiting suspend as well would stop the machine
@@ -77,10 +83,10 @@ impl Drop for KeepAwake {
 
 /// What GTK's own inhibit does not reach.
 ///
-/// On Windows, GTK has no implementation of this, so the only thing holding
-/// the display awake is the call below. Left in place alongside the GTK one
-/// rather than instead of it: they are independent, and on a platform where
-/// both work, releasing both is what matters.
+/// On Windows and macOS, GTK has no implementation of this, so the only thing
+/// holding the display awake is the call below. Left in place alongside the
+/// GTK one rather than instead of it: they are independent, and on a platform
+/// where both work, releasing both is what matters.
 #[cfg(target_os = "windows")]
 fn hold_platform(awake: bool) {
     use windows_sys::Win32::System::Power::{
@@ -102,5 +108,69 @@ fn hold_platform(awake: bool) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// macOS, where the hold is an IOKit power assertion.
+///
+/// `PreventUserIdleDisplaySleep` is the narrow one: the display stays on while
+/// nobody touches anything, and the machine is still free to sleep for any
+/// other reason. Same scope as the IDLE flag handed to GTK above.
+///
+/// The assertion id has to survive until the release, and the only caller is
+/// `KeepAwake` on the GTK main thread, so it lives here rather than widening
+/// the struct with a field that exists on one platform.
+#[cfg(target_os = "macos")]
+fn hold_platform(awake: bool) {
+    use objc2_foundation::NSString;
+    use std::cell::Cell;
+    use std::ffi::c_void;
+
+    const ASSERTION_LEVEL_ON: u32 = 255;
+    const SUCCESS: i32 = 0;
+
+    // SAFETY of the block: the two calls below are the documented C interface,
+    // taking toll-free-bridged CFStringRefs and an out parameter we own.
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOPMAssertionCreateWithName(
+            assertion_type: *const c_void,
+            level: u32,
+            name: *const c_void,
+            id: *mut u32,
+        ) -> i32;
+        fn IOPMAssertionRelease(id: u32) -> i32;
+    }
+
+    thread_local! {
+        static ASSERTION: Cell<u32> = const { Cell::new(0) };
+    }
+
+    ASSERTION.with(|assertion| {
+        if awake {
+            // NSString is toll-free bridged to CFString, so these pointers are
+            // the CFStringRefs IOKit is asking for. Both outlive the call.
+            let kind = NSString::from_str("PreventUserIdleDisplaySleep");
+            let name = NSString::from_str("Playing a video");
+            let mut id = 0u32;
+            let status = unsafe {
+                IOPMAssertionCreateWithName(
+                    (&*kind as *const NSString).cast(),
+                    ASSERTION_LEVEL_ON,
+                    (&*name as *const NSString).cast(),
+                    &mut id,
+                )
+            };
+            // Nothing to tell the viewer, who can do nothing about it; a zero
+            // id simply means the release below has nothing to do.
+            if status == SUCCESS {
+                assertion.set(id);
+            }
+        } else {
+            let id = assertion.replace(0);
+            if id != 0 {
+                unsafe { IOPMAssertionRelease(id) };
+            }
+        }
+    });
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn hold_platform(_awake: bool) {}
