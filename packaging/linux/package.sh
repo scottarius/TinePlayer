@@ -141,6 +141,28 @@ install -Dm644 THIRD-PARTY.md "$docs/THIRD-PARTY.md"
 # to travel with them.
 install -Dm644 data/fonts/OFL.txt "$docs/NotoFonts-OFL.txt"
 
+# dav1d is linked into the executable when the system it is built on has no
+# copy new enough for the crate to bind - which is the Debian 12 image the
+# release is built in, and the reason the package needs no libdav1d at all.
+# Where that happened its text travels with the binary that contains it, and
+# where it did not (a newer system, linking its own) there is nothing to ship.
+dav1d_licenses=/usr/local/share/licenses/dav1d
+dav1d_comment=""
+dav1d_block=""
+if [[ -d "$dav1d_licenses" ]]; then
+    install -Dm644 "$dav1d_licenses/COPYING" "$docs/dav1d-COPYING"
+    install -Dm644 "$dav1d_licenses/PATENTS" "$docs/dav1d-PATENTS"
+    dav1d_comment=" .
+ dav1d, the AV1 decoder, is the one library compiled in rather than depended
+ on: Debian 12 ships a copy older than the binding requires, so it is built
+ from source and linked statically. It is BSD-2-Clause, whose text is in
+ dav1d-COPYING beside this file, with the AV1 patent license it carries in
+ dav1d-PATENTS."
+    dav1d_block="
+License: BSD-2-clause
+$(sed 's/^$/./; s/^/ /' "$dav1d_licenses/COPYING")"
+fi
+
 # Machine-readable copyright, which is the format Debian tooling and license
 # scanners read. TinePlayer's own terms; the libraries it depends on carry
 # their own, in their own packages, which is what depending rather than
@@ -163,7 +185,7 @@ Comment:
  .
  GTK, GStreamer and FFmpeg are the exception. Those are loaded at runtime and
  are not part of this package at all: they are declared as dependencies and
- installed by apt from your distribution, under its terms.
+ installed by apt from your distribution, under its terms.$dav1d_comment
 
 Files: usr/share/fonts/*
 Copyright: The Noto Project Authors
@@ -178,6 +200,7 @@ $(sed 's/^$/./; s/^/ /' LICENSE)
 
 License: OFL-1.1
 $(sed 's/^$/./; s/^/ /' data/fonts/OFL.txt)
+$dav1d_block
 COPYRIGHT
 chmod 644 "$docs/copyright"
 

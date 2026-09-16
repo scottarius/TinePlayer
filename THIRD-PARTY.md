@@ -28,14 +28,23 @@ Loaded at runtime rather than compiled in.
 | GLib | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/glib |
 | FFmpeg | LGPL-2.1-or-later | https://ffmpeg.org |
 | AccessKit | Apache-2.0 OR MIT | https://github.com/AccessKit/accesskit |
+| dav1d | BSD-2-Clause | https://code.videolan.org/videolan/dav1d |
 
 - The Windows and macOS packages include them, with their license texts.
 - The Linux package includes none of them. It declares them as dependencies,
   and apt installs your distribution's own copies under its terms.
 - A build from source uses the copies already installed on the machine.
+- dav1d is the exception to both, and is Linux only. The Linux package is
+  built on Debian 12, whose copy of it is older than the Rust binding can
+  use, so it is compiled into the executable and linked statically rather
+  than declared as a dependency. Its BSD-2-Clause text ships in the package
+  as `dav1d-COPYING`, with the AV1 patent license it carries beside it as
+  `dav1d-PATENTS`. The Windows and macOS packages neither ship nor declare
+  it, and a build on a system with dav1d 1.3 or newer links that instead.
 
 Where included they are unmodified, and being separate shared libraries they
-can be replaced with your own build of the same version.
+can be replaced with your own build of the same version. Statically linked
+dav1d is the exception: replacing it means rebuilding TinePlayer.
 
 > [!NOTE]
 > AccessKit is what lets a screen reader read TinePlayer on Windows and macOS.
@@ -73,12 +82,14 @@ crate is offered under either license, at your choice.
 | async-channel | 2.5.0 | Apache-2.0 OR MIT |
 | atomic_refcell | 0.1.14 | Apache-2.0 OR MIT |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
+| av-data | 0.4.4 | MIT |
 | aws-lc-rs | 1.18.0 | ISC AND (Apache-2.0 OR ISC) |
 | aws-lc-sys | 0.44.0 | ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0) |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 |
 | block2 | 0.6.2 | MIT |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 |
+| byte-slice-cast | 1.2.3 | MIT |
 | bytes | 1.12.1 | MIT |
 | cairo-rs | 0.20.12 | MIT |
 | cairo-sys-rs | 0.20.10 | MIT |
@@ -105,6 +116,8 @@ crate is offered under either license, at your choice.
 | crossbeam-utils | 0.8.22 | MIT OR Apache-2.0 |
 | crypto-common | 0.2.2 | MIT OR Apache-2.0 |
 | data-encoding | 2.11.1 | MIT |
+| dav1d | 0.10.4 | MIT |
+| dav1d-sys | 0.8.3 | MIT |
 | digest | 0.11.3 | MIT OR Apache-2.0 |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT |
 | dunce | 1.0.5 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
@@ -149,6 +162,7 @@ crate is offered under either license, at your choice.
 | graphene-sys | 0.20.10 | MIT |
 | gsk4 | 0.9.6 | MIT |
 | gsk4-sys | 0.9.6 | MIT |
+| gst-plugin-dav1d | 0.13.7 | MIT OR Apache-2.0 |
 | gst-plugin-gtk4 | 0.13.7 | MPL-2.0 |
 | gst-plugin-version-helper | 0.8.4 | MIT |
 | gstreamer | 0.23.7 | MIT OR Apache-2.0 |
@@ -176,6 +190,7 @@ crate is offered under either license, at your choice.
 | gtk4-sys | 0.9.6 | MIT |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
+| hermit-abi | 0.5.3 | MIT OR Apache-2.0 |
 | http | 1.5.0 | MIT OR Apache-2.0 |
 | httparse | 1.10.1 | MIT OR Apache-2.0 |
 | hybrid-array | 0.4.14 | MIT OR Apache-2.0 |
@@ -204,10 +219,13 @@ crate is offered under either license, at your choice.
 | minreq | 3.0.0 | ISC |
 | muldiv | 1.0.1 | MIT |
 | nix | 0.31.3 | MIT |
+| num-bigint | 0.4.8 | MIT OR Apache-2.0 |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 |
+| num-derive | 0.4.2 | MIT OR Apache-2.0 |
 | num-integer | 0.1.46 | MIT OR Apache-2.0 |
 | num-rational | 0.4.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
+| num_cpus | 1.17.0 | MIT OR Apache-2.0 |
 | objc2 | 0.6.4 | MIT |
 | objc2-app-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-av-foundation | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
@@ -269,6 +287,7 @@ crate is offered under either license, at your choice.
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | slab | 0.4.12 | MIT |
 | smallvec | 1.15.2 | MIT OR Apache-2.0 |
+| static_assertions | 1.1.0 | MIT OR Apache-2.0 |
 | strength_reduce | 0.2.4 | MIT OR Apache-2.0 |
 | strsim | 0.11.1 | MIT |
 | subtle | 2.6.1 | BSD-3-Clause |

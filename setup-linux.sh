@@ -30,6 +30,7 @@ sudo apt install -y \
     gstreamer1.0-plugins-bad \
     gstreamer1.0-plugins-ugly \
     gstreamer1.0-libav \
+    libdav1d-dev \
     alsa-utils
 
 echo "Done. Next: cargo build --release && ./target/release/tineplayer"

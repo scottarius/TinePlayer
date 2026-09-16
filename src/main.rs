@@ -200,6 +200,49 @@ fn disable_deadlocking_av1_decoder() {
     }
 }
 
+/// Raspberry Pi stateless HEVC decode is quick to decode and impossible to
+/// display. `v4l2slh265dec` there only ever emits Broadcom SAND tiled frames,
+/// and nothing on that stack turns them into a picture: converting them costs
+/// more than the hardware decode saves - measured on a Pi 5 under Raspberry Pi
+/// OS trixie, 365 dropped frames in thirty seconds of 1080p - and the
+/// zero-copy dmabuf route renders green at every bit depth. `avdec_h265` plays
+/// the same file without dropping one, so software is simply better here.
+///
+/// Keyed on the board because nothing else answers the question: the decoder
+/// reports its *template* formats until a stream is negotiated, so at startup
+/// it claims `NV12` and `I420` on a device that offers neither. Other hardware
+/// with a stateless HEVC decoder is left alone, since none of it was measured.
+///
+/// `GST_PLUGIN_FEATURE_RANK` wins if it names this element, so a user on a
+/// stack where the tiled path does work can have it back without a rebuild.
+///
+/// This stands until those frames can be displayed, which needs two fixes
+/// below this application: the decoder's dmabuf export (upstream, landed in
+/// 1.26.11) and correct sampling of the SAND modifier (still broken).
+#[cfg(target_os = "linux")]
+fn disable_undisplayable_hevc_decoder() {
+    let asked_for = std::env::var("GST_PLUGIN_FEATURE_RANK").unwrap_or_default();
+    if asked_for.contains("v4l2slh265dec") {
+        return;
+    }
+
+    // The trailing NUL the device tree leaves on the string is why this is a
+    // `contains` rather than an equality test.
+    let raspberry_pi = std::fs::read_to_string("/proc/device-tree/model")
+        .is_ok_and(|model| model.contains("Raspberry Pi"));
+    if !raspberry_pi {
+        return;
+    }
+
+    if let Some(factory) = gstreamer::ElementFactory::find("v4l2slh265dec") {
+        use gstreamer::prelude::PluginFeatureExtManual;
+        factory.set_rank(gstreamer::Rank::NONE);
+        log::info!(
+            "Hardware HEVC decoding disabled: its frames cannot be displayed on this hardware"
+        );
+    }
+}
+
 /// A GUI-subsystem binary has no console of its own, so output vanishes
 /// even when the user ran it from a terminal. Reattaching to the parent's
 /// console restores it for that case, and fails harmlessly when there
@@ -815,6 +858,8 @@ fn main() -> std::process::ExitCode {
     disable_broken_dtsdec();
     #[cfg(target_os = "windows")]
     disable_deadlocking_av1_decoder();
+    #[cfg(target_os = "linux")]
+    disable_undisplayable_hevc_decoder();
     silence_upstream_unref_spam();
 
     // gtk4paintablesink is statically linked into this binary rather than
@@ -822,6 +867,12 @@ fn main() -> std::process::ExitCode {
     // or shipped with the GStreamer Windows installer), so it has to be
     // registered explicitly - GStreamer's normal plugin scan won't find it.
     gstgtk4::plugin_register_static().expect("Failed to register gtk4paintablesink");
+
+    // Same reasoning for dav1d: Debian has no dav1d plugin and no
+    // `avdec_av1`, so without this the only AV1 decoder on a Pi is libaom's
+    // reference `av1dec`. See Cargo.toml.
+    #[cfg(target_os = "linux")]
+    gstdav1d::plugin_register_static().expect("Failed to register dav1ddec");
 
     // Now that both will answer. See `log::environment`.
     logging::environment();
