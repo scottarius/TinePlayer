@@ -172,6 +172,14 @@ polib = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# The AV1 decoder, statically linked for the same reason the sink above is:
+# Debian packages no dav1d GStreamer plugin, and its gst-libav is built
+# without `avdec_av1`. That leaves libaom's `av1dec` as the only AV1 decoder
+# present, and it is the reference implementation - measured on a Pi 5, a
+# 1080p10 film is a slideshow. `dav1ddec` registers at rank primary against
+# av1dec's secondary, so decodebin3 prefers it with nothing else to change.
+# Links against system libdav1d (`libdav1d-dev`), which setup-linux.sh installs.
+gst-plugin-dav1d = "0.13.7"
 # Both backends are built in so a single binary works whether the session
 # is Wayland or X11; the sink picks the right one at runtime.
 gst-plugin-gtk4 = { version = "0.13.7", features = ["wayland", "x11egl", "x11glx"] }

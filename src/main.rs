@@ -823,6 +823,12 @@ fn main() -> std::process::ExitCode {
     // registered explicitly - GStreamer's normal plugin scan won't find it.
     gstgtk4::plugin_register_static().expect("Failed to register gtk4paintablesink");
 
+    // Same reasoning for dav1d: Debian has no dav1d plugin and no
+    // `avdec_av1`, so without this the only AV1 decoder on a Pi is libaom's
+    // reference `av1dec`. See Cargo.toml.
+    #[cfg(target_os = "linux")]
+    gstdav1d::plugin_register_static().expect("Failed to register dav1ddec");
+
     // Now that both will answer. See `log::environment`.
     logging::environment();
 
