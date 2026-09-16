@@ -45,14 +45,23 @@ Loaded at runtime rather than compiled in.
 | GLib | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/glib |
 | FFmpeg | LGPL-2.1-or-later | https://ffmpeg.org |
 | AccessKit | Apache-2.0 OR MIT | https://github.com/AccessKit/accesskit |
+| dav1d | BSD-2-Clause | https://code.videolan.org/videolan/dav1d |
 
 - The Windows and macOS packages include them, with their license texts.
 - The Linux package includes none of them. It declares them as dependencies,
   and apt installs your distribution's own copies under its terms.
 - A build from source uses the copies already installed on the machine.
+- dav1d is the exception to both, and is Linux only. The Linux package is
+  built on Debian 12, whose copy of it is older than the Rust binding can
+  use, so it is compiled into the executable and linked statically rather
+  than declared as a dependency. Its BSD-2-Clause text ships in the package
+  as `dav1d-COPYING`, with the AV1 patent license it carries beside it as
+  `dav1d-PATENTS`. The Windows and macOS packages neither ship nor declare
+  it, and a build on a system with dav1d 1.3 or newer links that instead.
 
 Where included they are unmodified, and being separate shared libraries they
-can be replaced with your own build of the same version.
+can be replaced with your own build of the same version. Statically linked
+dav1d is the exception: replacing it means rebuilding TinePlayer.
 
 > [!NOTE]
 > AccessKit is what lets a screen reader read TinePlayer on Windows and macOS.

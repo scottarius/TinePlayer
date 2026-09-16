@@ -39,7 +39,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
     libgstreamer-plugins-bad1.0-dev \
+    meson \
+    ninja-build \
+    nasm \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# dav1d, built here rather than taken from Debian 12. The AV1 decoder is not
+# optional on this baseline: without it the only decoder GStreamer finds is
+# libaom's `av1dec`, measured at 0.21 fps on a 1080p10 film against 82 fps
+# through dav1d. Debian 12 ships dav1d 1.0.0, and the `dav1d-sys` crate binds
+# an API that arrived in 1.3.0, so the system copy cannot be used.
+#
+# Static, so the finished package carries no libdav1d dependency and still
+# installs on a system whose own copy is too old - which is the reason this
+# image is Debian 12 in the first place.
+#
+# Fetched as a pinned tarball with its published checksum rather than letting
+# `dav1d-sys` build it: that fallback git-clones a moving tag during `cargo
+# build`, and a signed release should not reach the network in the middle of
+# a compile, for source nothing verifies.
+#
+# --libdir=lib keeps dav1d.pc out of the multiarch directory, which
+# pkg-config's default search path does not cover under /usr/local.
+ARG DAV1D_VERSION=1.5.1
+ARG DAV1D_SHA256=401813f1f89fa8fd4295805aa5284d9aed9bc7fc1fdbe554af4292f64cbabe21
+RUN cd /tmp \
+    && curl -fsSLO "https://downloads.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz" \
+    && echo "${DAV1D_SHA256}  dav1d-${DAV1D_VERSION}.tar.xz" | sha256sum -c - \
+    && tar xf "dav1d-${DAV1D_VERSION}.tar.xz" \
+    && meson setup "dav1d-${DAV1D_VERSION}/build" "dav1d-${DAV1D_VERSION}" \
+        --prefix=/usr/local --libdir=lib --buildtype=release \
+        -Ddefault_library=static -Denable_tools=false -Denable_tests=false \
+    && ninja -C "dav1d-${DAV1D_VERSION}/build" \
+    && ninja -C "dav1d-${DAV1D_VERSION}/build" install \
+    && install -Dm644 "dav1d-${DAV1D_VERSION}/COPYING" /usr/local/share/licenses/dav1d/COPYING \
+    && install -Dm644 "dav1d-${DAV1D_VERSION}/doc/PATENTS" /usr/local/share/licenses/dav1d/PATENTS \
+    && rm -rf /tmp/dav1d-*
 
 # Pinned to match what CI and the other platforms build with, so a package
 # differs from a developer's build only in where it was made.
