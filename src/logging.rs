@@ -22,7 +22,7 @@
 //! said them; ours are not, so an unlabelled line is always TinePlayer's.
 //!
 //! **The token is why this is a boundary and not a tee.** A Jellyfin stream
-//! URI carries `?api_key=` and that is a bearer credential: anything holding
+//! URI carries `?ApiKey=` and that is a bearer credential: anything holding
 //! it can read and stream the library as that viewer. Three call sites print a
 //! source URI when it will not open, which was harmless while the destination
 //! was a console nobody reads, and is not harmless at all once the
@@ -445,7 +445,7 @@ fn to_file(line: &str) {
 
 /// Cuts the query string off any URL in a line.
 ///
-/// A Jellyfin stream, subtitle and image URL all carry `?api_key=<token>`, and
+/// A Jellyfin stream, subtitle and image URL all carry `?ApiKey=<token>`, and
 /// the WebSocket address carries it too. Everything after the `?` goes rather
 /// than the token alone: `mediaSourceId` and the item id are no use in a
 /// diagnostic, and a rule that removes one named parameter is a rule that

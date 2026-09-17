@@ -947,7 +947,7 @@ msgstr "Громкость, все выходы"
 msgid "Use the system language"
 msgstr "Использовать язык системы"
 
-#: src/jellyfin.rs:1197
+#: src/jellyfin.rs:1199
 msgctxt "subtitle track"
 msgid "Subtitles"
 msgstr "Субтитры"
