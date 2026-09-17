@@ -313,14 +313,15 @@ impl App {
                     let offered = crate::audio::options(
                         app.file.borrow().as_ref().and_then(|source| source.local()),
                         &app.tracks.borrow(),
+                        &app.library_audio(),
                     );
                     match crate::audio::resolve(spec, &offered) {
                         Ok(crate::audio::AudioChoice::Silent) => *track.borrow_mut() = None,
                         Ok(crate::audio::AudioChoice::Track(index)) => {
                             *track.borrow_mut() = Some(index)
                         }
-                        Ok(crate::audio::AudioChoice::File(path)) => {
-                            *file.borrow_mut() = Some(Source::File(path))
+                        Ok(crate::audio::AudioChoice::File(source)) => {
+                            *file.borrow_mut() = Some(source)
                         }
                         // Reported rather than obeyed silently, the same way a
                         // subtitle that cannot be resolved is: playing the
@@ -363,14 +364,11 @@ impl App {
                     crate::audio::options(
                         source.as_ref().and_then(Source::local),
                         &app.tracks.borrow(),
+                        &app.library_audio(),
                     )
                 };
                 let language_of = |track: &RefCell<Option<u32>>, file: &RefCell<Option<Source>>| {
-                    let path = file
-                        .borrow()
-                        .as_ref()
-                        .and_then(|file| file.local().map(std::path::Path::to_path_buf));
-                    crate::audio::language_on(&offered, *track.borrow(), path.as_deref())
+                    crate::audio::language_on(&offered, *track.borrow(), file.borrow().as_ref())
                 };
                 let primary = language_of(&app.primary_track, &app.primary_file);
                 let secondary = language_of(&app.secondary_track, &app.secondary_file);

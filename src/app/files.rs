@@ -233,7 +233,7 @@ impl App {
         // the order the chooser draws and `--list-tracks` prints - see
         // `crate::audio`. The preferences below and `--primary` go through the
         // same call on the same list, so they cannot answer differently.
-        let offered = crate::audio::options(source.local(), &tracks);
+        let offered = crate::audio::options(source.local(), &tracks, &self.library_audio());
         let pool = crate::audio::ordinary(&offered);
 
         // Keyed on the video being loaded rather than the one still current,
@@ -252,7 +252,7 @@ impl App {
         let preferred = |language: &Option<String>,
                          described: bool,
                          at: usize|
-         -> (Option<u32>, Option<std::path::PathBuf>) {
+         -> (Option<u32>, Option<Source>) {
             match crate::audio::automatic(&offered, language.as_deref(), described)
                 .or_else(|| pool.get(at).map(|entry| entry.choice()))
             {
@@ -266,9 +266,9 @@ impl App {
             // saved pair is taken as it stands rather than filled in.
             Some(choice) => (
                 choice.primary,
-                choice.primary_file,
+                choice.primary_file.map(Source::File),
                 choice.secondary,
-                choice.secondary_file,
+                choice.secondary_file.map(Source::File),
             ),
             // Otherwise the preferred languages decide, falling back to the
             // old behavior of the first entry and a different one.
@@ -293,10 +293,7 @@ impl App {
         // that has been deleted, renamed, or is on a drive not mounted today
         // falls back to the track underneath it rather than failing when play
         // is pressed - the same rule the subtitle below follows.
-        let still_there = |path: Option<&std::path::PathBuf>| {
-            path.filter(|path| path.exists())
-                .map(|path| Source::File(path.clone()))
-        };
+        let still_there = |file: Option<&Source>| file.filter(|file| file.is_available()).cloned();
         *self.primary_file.borrow_mut() = still_there(primary_path.as_ref());
         *self.secondary_file.borrow_mut() = if self.config.borrow().secondary_sink.is_some() {
             still_there(secondary_path.as_ref())
@@ -348,16 +345,13 @@ impl App {
                     crate::audio::language_on(
                         &offered,
                         *self.primary_track.borrow(),
-                        self.primary_file.borrow().as_ref().and_then(Source::local),
+                        self.primary_file.borrow().as_ref(),
                     )
                     .as_deref(),
                     crate::audio::language_on(
                         &offered,
                         *self.secondary_track.borrow(),
-                        self.secondary_file
-                            .borrow()
-                            .as_ref()
-                            .and_then(Source::local),
+                        self.secondary_file.borrow().as_ref(),
                     )
                     .as_deref(),
                 )
@@ -460,7 +454,7 @@ impl App {
             // has to be asked the same way the preference asked it, or this
             // says the search was given something it was not.
             let heard = |track: Option<u32>, file: Option<&Source>| {
-                crate::audio::language_on(&offered, track, file.and_then(Source::local))
+                crate::audio::language_on(&offered, track, file)
             };
             let options = self.subtitle_options.borrow();
             if !options.is_empty() {
@@ -505,11 +499,12 @@ impl App {
 
         *self.tracks.borrow_mut() = tracks;
         // Separate soundtracks beside the video, found by the same convention
-        // and the same code as the subtitle files above. Only for a local
-        // file, for the reason subtitles are: there is no folder to look in
-        // otherwise, and a media server hands over what it holds in the stream.
-        *self.audio_files.borrow_mut() =
-            source.local().map(crate::beside::audio).unwrap_or_default();
+        // and the same code as the subtitle files above - or, for a cast
+        // video, the ones its library found beside it on the server.
+        *self.audio_files.borrow_mut() = source
+            .local()
+            .map(crate::beside::audio)
+            .unwrap_or_else(|| self.library_audio());
         *self.file.borrow_mut() = Some(source.clone());
         self.duration_s.set(duration_ns as f64 / 1e9);
         // Now that the video and its audio files are both settled, whatever

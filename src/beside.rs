@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::source::Source;
+
 /// A file found beside a video and named after it.
 pub struct Found {
     pub path: PathBuf,
@@ -84,7 +86,9 @@ pub fn files(video: &Path, extensions: &[&str]) -> Vec<Found> {
 /// or a restored track, downloaded next to it and named after it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioFile {
-    pub path: PathBuf,
+    /// A file on disk, or one a media server streams from beside a video it
+    /// holds.
+    pub source: Source,
     /// Whatever the convention left between the film's name and the
     /// extension, where a library named this file after the film. Empty where
     /// it is named *exactly* after the film, which says nothing about itself,
@@ -172,7 +176,7 @@ pub fn audio(video: &Path) -> Vec<AudioFile> {
         .map(|file| AudioFile {
             tag: Some(file.tag),
             name: file.name,
-            path: file.path,
+            source: Source::File(file.path),
         })
         .collect();
     found.sort_by_key(AudioFile::label);
@@ -195,7 +199,11 @@ pub fn audio(video: &Path) -> Vec<AudioFile> {
     // readily, which is the same problem wearing a different extension.
     let mut loose: Vec<AudioFile> = in_a_lone_film_folder(video, crate::browser::is_audio)
         .into_iter()
-        .filter(|path| !found.iter().any(|file| file.path == *path))
+        .filter(|path| {
+            !found
+                .iter()
+                .any(|file| file.source.local() == Some(path.as_path()))
+        })
         .map(|path| AudioFile {
             // Named after nothing, so there is no tag - and its own name is
             // both what it is shown as and what is read for what it says,
@@ -205,7 +213,7 @@ pub fn audio(video: &Path) -> Vec<AudioFile> {
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_default(),
-            path,
+            source: Source::File(path),
         })
         .collect();
     loose.sort_by_key(AudioFile::label);
@@ -296,7 +304,7 @@ mod tests {
 
         let claimed: Vec<String> = audio(&video)
             .into_iter()
-            .map(|file| file.path.file_name().unwrap().to_string_lossy().to_string())
+            .map(|file| file.source.label())
             .collect();
         assert!(
             !claimed
@@ -421,7 +429,7 @@ mod tests {
     #[test]
     fn a_tag_is_read_where_it_says_something() {
         let file = |tag: &str| AudioFile {
-            path: PathBuf::new(),
+            source: Source::File(PathBuf::new()),
             tag: Some(tag.to_string()),
             name: "Film (2019).mp3".to_string(),
         };

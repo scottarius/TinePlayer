@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     File(PathBuf),
     Remote(String),
@@ -177,5 +177,47 @@ impl Source {
             Self::File(path) => path.to_string_lossy().to_string(),
             Self::Remote(uri) => uri.clone(),
         }
+    }
+
+    /// What something measured about this source is written down under.
+    ///
+    /// A remote address loses its access token, which must not reach disk and
+    /// would orphan the entry when regenerated. The rest of the query stays:
+    /// it is what tells one of a library's soundtrack files from the next.
+    pub fn remembered_as(&self) -> String {
+        match self {
+            Self::File(_) => self.key(),
+            Self::Remote(uri) => match uri.split_once('?') {
+                None => uri.clone(),
+                Some((address, query)) => {
+                    let kept: Vec<&str> = query
+                        .split('&')
+                        .filter(|pair| {
+                            let name = pair.split('=').next().unwrap_or_default();
+                            !name.eq_ignore_ascii_case("apikey")
+                                && !name.eq_ignore_ascii_case("api_key")
+                        })
+                        .collect();
+                    format!("{address}?{}", kept.join("&"))
+                }
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_remembered_address_keeps_no_token() {
+        let source = Source::Remote(
+            "http://hoth:8096/Audio/abc/stream?static=true&audioStreamIndex=2&ApiKey=SECRET"
+                .to_string(),
+        );
+        assert_eq!(
+            source.remembered_as(),
+            "http://hoth:8096/Audio/abc/stream?static=true&audioStreamIndex=2"
+        );
     }
 }

@@ -83,6 +83,15 @@ impl App {
     /// something is better than nothing and the library is not always fuller
     /// than the file. The title is not among them - that already comes through
     /// `launcher_title` at the head of the same chain everything else uses.
+    /// The soundtracks the library holds beside a cast video, as entries for
+    /// the chooser. Empty for anything that was not cast.
+    pub(super) fn library_audio(&self) -> Vec<crate::beside::AudioFile> {
+        match (&*self.jellyfin.borrow(), &*self.jellyfin_item.borrow()) {
+            (Some(client), Some(item)) => client.audio_files(item),
+            _ => Vec::new(),
+        }
+    }
+
     pub(super) fn overlay_jellyfin_details(self: &Rc<Self>) {
         let Some(item) = self.jellyfin_item.borrow().clone() else {
             return;

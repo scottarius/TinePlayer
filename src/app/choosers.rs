@@ -146,8 +146,7 @@ impl App {
                 // bottom instead, so nothing is ever listed twice.
                 let beside = file
                     .as_ref()
-                    .and_then(|file| file.local())
-                    .and_then(|path| found.iter().position(|audio| audio.path == path));
+                    .and_then(|file| found.iter().position(|audio| audio.source == *file));
                 for (position, track) in self.tracks.borrow().iter().enumerate() {
                     if file.is_none() && chosen == Some(track.index) {
                         current = Some(position);
@@ -861,13 +860,13 @@ impl App {
                 // chosen by hand is - because that is what it is, with the
                 // looking already done.
                 if let Some(position) = choice.filter(|choice| *choice >= count) {
-                    let path = self
+                    let source = self
                         .audio_files
                         .borrow()
                         .get(position - count)
-                        .map(|audio| audio.path.clone());
-                    if let Some(path) = path {
-                        self.use_audio_file(role, &path);
+                        .map(|audio| audio.source.clone());
+                    if let Some(source) = source {
+                        self.use_audio_file(role, source);
                     }
                     return false;
                 }

@@ -432,7 +432,7 @@ fn list_tracks(source: &source::Source) -> Result<(), String> {
 
     // The same list the chooser draws and `--primary` counts through - see
     // `crate::audio`. Tracks inside the video, then the soundtracks beside it.
-    let offered = audio::options(source.local(), &media.audio);
+    let offered = audio::options(source.local(), &media.audio, &[]);
 
     // Indices right-aligned to the widest of them, so a video with ten or more
     // entries keeps its numbers in a column instead of stepping sideways. Both

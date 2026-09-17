@@ -755,6 +755,45 @@ impl Client {
         )
     }
 
+    /// Where to fetch one of the server's own soundtrack files, untouched.
+    ///
+    /// **Needs a server that honors `audioStreamIndex` on a static stream.**
+    /// Jellyfin up to 12.1 ignores it and sends the whole video, which would
+    /// play its default soundtrack under the name of the one chosen.
+    pub fn audio_url(&self, item: &Item, index: u32) -> String {
+        format!(
+            "{}/Audio/{}/stream?static=true&mediaSourceId={}&audioStreamIndex={index}&ApiKey={}",
+            self.server, item.id, item.media_source_id, self.token
+        )
+    }
+
+    /// The server's own soundtrack files for `item`, as entries for the
+    /// chooser.
+    ///
+    /// The tag is built the way a file named after the film carries one -
+    /// language, then what the library called it - so a row reads the same
+    /// whether the file is beside a local video or beside a cast one.
+    pub fn audio_files(&self, item: &Item) -> Vec<crate::beside::AudioFile> {
+        item.streams
+            .external_audio()
+            .map(|stream| {
+                let tag = [stream.language.as_str(), stream.title.as_str()]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                crate::beside::AudioFile {
+                    source: crate::source::Source::Remote(self.audio_url(item, stream.index)),
+                    tag: Some(tag),
+                    name: match stream.title.is_empty() {
+                        true => stream.codec.clone(),
+                        false => stream.title.clone(),
+                    },
+                }
+            })
+            .collect()
+    }
+
     /// The token rides in the query string because GStreamer opens this URL
     /// itself and carries no headers of ours.
     ///
@@ -1151,30 +1190,9 @@ impl Streams {
         index_at(&self.subtitles, position)
     }
 
-    // There is deliberately no `external_audio` counterpart to the subtitles
-    // below, and it is worth saying why rather than leaving the asymmetry to
-    // look like an oversight.
-    //
-    // **Jellyfin will not serve an external audio track to a client.** Proved
-    // against 10.11.11 on 2026-08-15, from both ends. Every `/Audio/` endpoint
-    // - `main.m3u8`, `stream.mp3`, `universal` - accepts `audioStreamIndex`,
-    // answers 200, plays perfectly, and returns the item's *default embedded*
-    // audio whatever is asked for: indices 2, 4, 0 (a subtitle) and 99 (which
-    // does not exist) all gave byte-identical output. The server's own source
-    // says why - `GetInputArgument` adds the external file as a second ffmpeg
-    // input on every path, and the audio-only command builders emit no `-map`
-    // at all (`mapArgs` is `state.IsOutputVideo ? ... : string.Empty`), so
-    // ffmpeg's default stream selection takes the embedded track instead.
-    //
-    // The one route that does work is `/Videos/{id}/main.m3u8`, which maps the
-    // external input explicitly - at the price of transcoding the entire film
-    // to extract one soundtrack, while the video is already direct-playing.
-    // **Ruled out by Scott on 2026-08-15**, and not a direction to revisit.
-    //
-    // So an external soundtrack in a library is unreachable, and offering one
-    // in the chooser would be offering a described track that silently plays a
-    // different one. When the upstream `-map` lands this becomes three lines
-    // and a URL; until then there is nothing honest to build.
+    pub fn external_audio(&self) -> impl Iterator<Item = &Stream> {
+        self.audio.iter().filter(|stream| stream.external)
+    }
 
     pub fn external_subtitles(&self) -> impl Iterator<Item = &Stream> {
         self.subtitles.iter().filter(|stream| stream.external)
@@ -1998,6 +2016,33 @@ mod tests {
             url.starts_with("http://hoth:8096/Videos/abc123/stream.mkv"),
             "{url}"
         );
+    }
+
+    /// Only the files beside the video, each fetched by its own stream number,
+    /// and labelled as the same file beside a local video would be.
+    #[test]
+    fn external_soundtracks_are_offered_by_their_own_number() {
+        let mut pairing = Pairing::new("http://hoth:8096");
+        pairing.account = Some(account());
+        let client = Client::new(&pairing).unwrap();
+        let mut film = item("mkv");
+        film.streams.audio = vec![
+            Stream {
+                language: "eng".to_string(),
+                title: "ad".to_string(),
+                ..stream(0, true)
+            },
+            stream(3, false),
+        ];
+
+        let files = client.audio_files(&film);
+        assert_eq!(files.len(), 1, "the embedded track is not a file");
+        let crate::source::Source::Remote(url) = &files[0].source else {
+            panic!("a library file is fetched, not opened");
+        };
+        assert!(url.contains("/Audio/abc123/stream?static=true"), "{url}");
+        assert!(url.contains("audioStreamIndex=0"), "{url}");
+        assert!(files[0].is_described());
     }
 
     #[test]

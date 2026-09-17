@@ -389,15 +389,15 @@ impl App {
             crate::audio::options(
                 source.as_ref().and_then(Source::local),
                 &self.tracks.borrow(),
+                &self.library_audio(),
             )
         };
         let language_of = |role: Role| {
-            let file = self
-                .file_for(role)
-                .borrow()
-                .as_ref()
-                .and_then(|file| file.local().map(std::path::Path::to_path_buf));
-            crate::audio::language_on(&offered, *self.track_for(role).borrow(), file.as_deref())
+            crate::audio::language_on(
+                &offered,
+                *self.track_for(role).borrow(),
+                self.file_for(role).borrow().as_ref(),
+            )
         };
         let primary = language_of(Role::Primary);
         let secondary = language_of(Role::Secondary);

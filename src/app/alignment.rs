@@ -375,19 +375,18 @@ impl App {
 
     /// Writes an alignment down and puts it into force.
     ///
-    /// Stored against the two paths together, so the same pairing never pays
+    /// Stored against the pairing, so the same one never pays
     /// for the measuring twice, and read straight back rather than set here -
     /// `load_baselines` owns the sign convention, and two places deciding it
     /// would eventually disagree.
     fn apply_alignment(&self, role: Role, millis: f64) {
-        let stored = {
-            let file = self.file_for(role).borrow();
-            file.as_ref()
-                .and_then(Source::local)
-                .map(|path| path.to_path_buf())
-        };
-        if let Some((key, path)) = self.storage_key().zip(stored) {
-            crate::config::save_alignment(&key, &path, Some(millis));
+        let stored = self
+            .file_for(role)
+            .borrow()
+            .as_ref()
+            .map(Source::remembered_as);
+        if let Some((key, audio)) = self.storage_key().zip(stored) {
+            crate::config::save_alignment(&key, &audio, Some(millis));
         }
         self.load_baselines();
     }

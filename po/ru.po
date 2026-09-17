@@ -225,13 +225,13 @@ msgstr "Открыть системный диалог"
 msgid "Searching for outputs..."
 msgstr "Поиск устройств вывода..."
 
-#: src/app/choosers.rs:110 src/app/choosers.rs:685 src/app/choosers.rs:692
+#: src/app/choosers.rs:110 src/app/choosers.rs:684 src/app/choosers.rs:691
 #: src/app/outputs.rs:22
 msgctxt "subtitle track"
 msgid "None"
 msgstr "Нет"
 
-#: src/app/choosers.rs:128 src/app/choosers.rs:190 src/app/media_page.rs:750
+#: src/app/choosers.rs:128 src/app/choosers.rs:189 src/app/media_page.rs:750
 #: src/app/media_page.rs:754
 msgid "Browse..."
 msgstr "Обзор..."
@@ -241,15 +241,15 @@ msgctxt "audio track"
 msgid "None"
 msgstr "Нет"
 
-#: src/app/choosers.rs:166 src/controls.rs:2018
+#: src/app/choosers.rs:165 src/controls.rs:2018
 msgid "AUDIO FILES"
 msgstr ""
 
-#: src/app/choosers.rs:212 src/app/settings.rs:74
+#: src/app/choosers.rs:211 src/app/settings.rs:74
 msgid "First track"
 msgstr "Первая дорожка"
 
-#: src/app/choosers.rs:214 src/app/settings.rs:75
+#: src/app/choosers.rs:213 src/app/settings.rs:75
 msgid "Second track"
 msgstr "Вторая дорожка"
 
@@ -286,7 +286,7 @@ msgstr "Видеофайлы"
 msgid "All files"
 msgstr "Все файлы"
 
-#: src/app/files.rs:568
+#: src/app/files.rs:563
 msgid ""
 "Couldn't open:\n"
 "{source}\n"
@@ -298,7 +298,7 @@ msgstr ""
 "\n"
 "{reason}"
 
-#: src/app/files.rs:578
+#: src/app/files.rs:573
 msgid ""
 "\n"
 "\n"
@@ -947,7 +947,7 @@ msgstr "Громкость, все выходы"
 msgid "Use the system language"
 msgstr "Использовать язык системы"
 
-#: src/jellyfin.rs:1199
+#: src/jellyfin.rs:1217
 msgctxt "subtitle track"
 msgid "Subtitles"
 msgstr "Субтитры"

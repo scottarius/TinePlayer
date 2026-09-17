@@ -1115,16 +1115,13 @@ pub fn clear_all_resume() -> Result<(), String> {
 }
 
 /// What was worked out about this video and that audio file, if anything.
-pub fn load_alignment(key: &str, audio: &Path) -> Option<f64> {
-    load_resume(key)?
-        .alignments
-        .get(&audio.to_string_lossy().to_string())
-        .copied()
+pub fn load_alignment(key: &str, audio: &str) -> Option<f64> {
+    load_resume(key)?.alignments.get(audio).copied()
 }
 
 /// Remembers an alignment, or forgets it when asked to align again.
-pub fn save_alignment(key: &str, audio: &Path, millis: Option<f64>) {
-    let audio = audio.to_string_lossy().to_string();
+pub fn save_alignment(key: &str, audio: &str, millis: Option<f64>) {
+    let audio = audio.to_string();
     update(key, |entry| match millis {
         Some(millis) => {
             entry.alignments.insert(audio.clone(), millis);

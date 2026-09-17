@@ -29,16 +29,16 @@ impl App {
     /// shares the video's timeline and cannot be out of step with it. The rest
     /// are the things measuring needs and cannot do without - a track inside
     /// the video to line the file up against, a running time to place the
-    /// three windows across, and a path on disk to file the answer under.
+    /// three windows across, and a place to file the answer under.
     pub(super) fn alignment_row(&self, role: Role) -> Option<(String, String, bool, MenuAction)> {
         let file = self.file_for(role).borrow();
-        let path = file.as_ref()?.local()?;
+        let audio = file.as_ref()?.remembered_as();
         if self.tracks.borrow().is_empty() || self.duration_s.get() <= 0.0 {
             return None;
         }
         let stored = self
             .storage_key()
-            .and_then(|key| crate::config::load_alignment(&key, path));
+            .and_then(|key| crate::config::load_alignment(&key, &audio));
         Some((
             // One name whether or not there is a stored answer. It used to say
             // "Auto-align" or "Re-align" to name what pressing it would do,
@@ -65,8 +65,7 @@ impl App {
         for role in [Role::Primary, Role::Secondary] {
             let stored = key.as_deref().and_then(|key| {
                 let file = self.file_for(role).borrow();
-                let path = file.as_ref()?.local()?;
-                crate::config::load_alignment(key, path)
+                crate::config::load_alignment(key, &file.as_ref()?.remembered_as())
             });
             // Negated on the way in: alignment says how late the audio runs,
             // and a sink is held back by a negative offset.
@@ -225,14 +224,14 @@ impl App {
             return;
         };
         self.errand.set(Errand::Video);
-        self.use_audio_file(role, path);
+        self.use_audio_file(role, Source::File(path.to_path_buf()));
     }
 
     /// Puts a separate audio file on one output, whether it was picked out of
     /// the list of files beside the video or found by hand from somewhere
     /// else. The two are the same choice once the file is known.
-    pub(super) fn use_audio_file(self: &Rc<Self>, role: Role, path: &std::path::Path) {
-        *self.file_for(role).borrow_mut() = Some(Source::File(path.to_path_buf()));
+    pub(super) fn use_audio_file(self: &Rc<Self>, role: Role, source: Source) {
+        *self.file_for(role).borrow_mut() = Some(source);
         // Written down here, not left to playback to save: choosing a
         // soundtrack and then quitting without pressing play is choosing it,
         // and every other chooser on this screen remembers itself the same way.
@@ -248,14 +247,11 @@ impl App {
     /// anywhere else - which is all there is to say about a file nothing
     /// named to a convention.
     pub(super) fn label_for_file(&self, file: &Source) -> String {
-        file.local()
-            .and_then(|path| {
-                self.audio_files
-                    .borrow()
-                    .iter()
-                    .find(|found| found.path == path)
-                    .map(crate::beside::AudioFile::label)
-            })
+        self.audio_files
+            .borrow()
+            .iter()
+            .find(|found| found.source == *file)
+            .map(crate::beside::AudioFile::label)
             .unwrap_or_else(|| {
                 // Named to no convention, so its own name stands - through the
                 // same formatter every other row goes through, which reads it

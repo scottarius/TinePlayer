@@ -13,11 +13,12 @@
 //! menu listed could not be asked for by language, by `ad`, or at all from the
 //! command line, while the subtitle beside it could be asked for every way.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::beside::AudioFile;
 use crate::label::Naming;
 use crate::probe::AudioTrack;
+use crate::source::Source;
 
 /// One entry in the soundtrack list: a track inside the video, or a file
 /// sitting beside it.
@@ -35,7 +36,7 @@ pub enum AudioChoice {
     /// A track inside the video, by the stream index the pipeline wants.
     Track(u32),
     /// A separate soundtrack beside the video.
-    File(PathBuf),
+    File(Source),
 }
 
 impl Audio {
@@ -63,7 +64,7 @@ impl Audio {
     pub fn choice(&self) -> AudioChoice {
         match self {
             Audio::Track(track) => AudioChoice::Track(track.index),
-            Audio::File(file) => AudioChoice::File(file.path.clone()),
+            Audio::File(file) => AudioChoice::File(file.source.clone()),
         }
     }
 
@@ -103,10 +104,10 @@ impl Audio {
 /// `None` where the output is silent, where the file was named after nothing,
 /// or where the track states no language. All three mean the same to a caller:
 /// there is no language here to match against.
-pub fn language_on(offered: &[Audio], track: Option<u32>, file: Option<&Path>) -> Option<String> {
-    if let Some(path) = file {
+pub fn language_on(offered: &[Audio], track: Option<u32>, file: Option<&Source>) -> Option<String> {
+    if let Some(file) = file {
         return offered.iter().find_map(|entry| match entry {
-            Audio::File(found) if found.path == path => found.tag.clone(),
+            Audio::File(found) if found.source == *file => found.tag.clone(),
             _ => None,
         });
     }
@@ -118,12 +119,13 @@ pub fn language_on(offered: &[Audio], track: Option<u32>, file: Option<&Path>) -
 }
 
 /// Everything an output could be put onto, in the order every list shows it:
-/// the tracks inside the video, then the soundtracks beside it.
+/// the tracks inside the video, then the soundtracks beside it - on disk, or
+/// in the library a cast video came from.
 ///
 /// The order is the whole of the numbering. `--list-tracks` prints it, the
 /// chooser draws it, and `--primary 9` counts through it - so a number means
 /// the same thing wherever it is read.
-pub fn options(video: Option<&Path>, tracks: &[AudioTrack]) -> Vec<Audio> {
+pub fn options(video: Option<&Path>, tracks: &[AudioTrack], library: &[AudioFile]) -> Vec<Audio> {
     let mut options: Vec<Audio> = tracks.iter().cloned().map(Audio::Track).collect();
     options.extend(
         video
@@ -132,6 +134,7 @@ pub fn options(video: Option<&Path>, tracks: &[AudioTrack]) -> Vec<Audio> {
             .into_iter()
             .map(Audio::File),
     );
+    options.extend(library.iter().cloned().map(Audio::File));
     options
 }
 
@@ -275,6 +278,7 @@ pub fn resolve(spec: &str, options: &[Audio]) -> Result<AudioChoice, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn track(index: u32, language: &str, title: &str) -> Audio {
         Audio::Track(AudioTrack {
@@ -290,7 +294,7 @@ mod tests {
 
     fn beside(tag: Option<&str>, name: &str) -> Audio {
         Audio::File(AudioFile {
-            path: PathBuf::from(format!("D:/films/{name}")),
+            source: Source::File(PathBuf::from(format!("D:/films/{name}"))),
             tag: tag.map(str::to_string),
             name: name.to_string(),
         })
@@ -314,11 +318,13 @@ mod tests {
         assert_eq!(resolve("2", &o), Ok(AudioChoice::Track(1)));
         assert_eq!(
             resolve("5", &o),
-            Ok(AudioChoice::File("D:/films/film.fr.m4a".into()))
+            Ok(AudioChoice::File(Source::File(
+                "D:/films/film.fr.m4a".into()
+            )))
         );
         assert_eq!(
             resolve("6", &o),
-            Ok(AudioChoice::File("D:/films/AD.mp3".into()))
+            Ok(AudioChoice::File(Source::File("D:/films/AD.mp3".into())))
         );
     }
 
@@ -339,7 +345,9 @@ mod tests {
     fn a_language_reaches_a_file_beside_the_video() {
         assert_eq!(
             resolve("fr", &offered()),
-            Ok(AudioChoice::File("D:/films/film.fr.m4a".into()))
+            Ok(AudioChoice::File(Source::File(
+                "D:/films/film.fr.m4a".into()
+            )))
         );
     }
 
@@ -371,7 +379,7 @@ mod tests {
         let beside_only = vec![track(0, "fr", "French"), beside(None, "AD.mp3")];
         assert_eq!(
             resolve("fr:ad", &beside_only),
-            Ok(AudioChoice::File("D:/films/AD.mp3".into()))
+            Ok(AudioChoice::File(Source::File("D:/films/AD.mp3".into())))
         );
     }
 
@@ -424,6 +432,7 @@ mod tests {
 #[cfg(test)]
 mod language_on_tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn offered() -> Vec<Audio> {
         vec![
@@ -446,12 +455,12 @@ mod language_on_tests {
                 commentary: None,
             }),
             Audio::File(AudioFile {
-                path: PathBuf::from("D:/films/Film.fr.m4a"),
+                source: Source::File(PathBuf::from("D:/films/Film.fr.m4a")),
                 tag: Some("fr".to_string()),
                 name: "Film.fr.m4a".to_string(),
             }),
             Audio::File(AudioFile {
-                path: PathBuf::from("D:/films/Film.m4a"),
+                source: Source::File(PathBuf::from("D:/films/Film.m4a")),
                 tag: Some(String::new()),
                 name: "Film.m4a".to_string(),
             }),
@@ -471,8 +480,8 @@ mod language_on_tests {
     #[test]
     fn a_file_beside_the_video_states_its_tag() {
         let o = offered();
-        let path = std::path::Path::new("D:/films/Film.fr.m4a");
-        assert_eq!(language_on(&o, None, Some(path)).as_deref(), Some("fr"));
+        let path = Source::File("D:/films/Film.fr.m4a".into());
+        assert_eq!(language_on(&o, None, Some(&path)).as_deref(), Some("fr"));
     }
 
     /// And it wins over the track it displaced, which is still remembered so
@@ -480,8 +489,8 @@ mod language_on_tests {
     #[test]
     fn the_file_wins_over_the_track_underneath_it() {
         let o = offered();
-        let path = std::path::Path::new("D:/films/Film.fr.m4a");
-        assert_eq!(language_on(&o, Some(0), Some(path)).as_deref(), Some("fr"));
+        let path = Source::File("D:/films/Film.fr.m4a".into());
+        assert_eq!(language_on(&o, Some(0), Some(&path)).as_deref(), Some("fr"));
     }
 
     /// A silent output, a file named after nothing, an index no longer in the
@@ -492,9 +501,9 @@ mod language_on_tests {
         let o = offered();
         assert_eq!(language_on(&o, None, None), None);
         assert_eq!(language_on(&o, Some(99), None), None);
-        let unnamed = std::path::Path::new("D:/films/Film.m4a");
-        assert_eq!(language_on(&o, None, Some(unnamed)).as_deref(), Some(""));
-        let gone = std::path::Path::new("D:/films/Gone.m4a");
-        assert_eq!(language_on(&o, None, Some(gone)), None);
+        let unnamed = Source::File("D:/films/Film.m4a".into());
+        assert_eq!(language_on(&o, None, Some(&unnamed)).as_deref(), Some(""));
+        let gone = Source::File("D:/films/Gone.m4a".into());
+        assert_eq!(language_on(&o, None, Some(&gone)), None);
     }
 }
