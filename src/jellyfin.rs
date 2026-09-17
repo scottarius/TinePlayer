@@ -582,7 +582,9 @@ impl Client {
 
     /// What is known about one item, in the units TinePlayer counts in.
     pub fn item(&self, id: &str) -> Result<Item, Error> {
-        let body = self.get(&format!("/Users/{}/Items/{id}", self.user_id))?;
+        // Not `/Users/{user}/Items/{id}`: obsolete and hidden from the API spec,
+        // which Jellyfin 12 says may go in any major release without warning.
+        let body = self.get(&format!("/Items/{id}?userId={}", self.user_id))?;
         let text = |name: &str| {
             body.get(name)
                 .and_then(|value| value.as_str())
@@ -707,7 +709,7 @@ impl Client {
     /// artwork was changed.
     pub fn image(&self, id: &str, kind: &str, tag: &str, width: u32) -> Result<Vec<u8>, Error> {
         let response = minreq::get(format!(
-            "{}/Items/{id}/Images/{kind}?{}maxWidth={width}&api_key={}",
+            "{}/Items/{id}/Images/{kind}?{}maxWidth={width}&ApiKey={}",
             self.server,
             // Quoted only when there is one. A tag makes the answer cacheable
             // and names a particular version; without one the server hands
@@ -748,7 +750,7 @@ impl Client {
     /// the library holds, and `subparse` needs no help identifying it.
     pub fn subtitle_url(&self, item: &Item, index: u32) -> String {
         format!(
-            "{}/Videos/{}/{}/Subtitles/{index}/Stream.srt?api_key={}",
+            "{}/Videos/{}/{}/Subtitles/{index}/Stream.srt?ApiKey={}",
             self.server, item.id, item.media_source_id, self.token
         )
     }
@@ -772,7 +774,7 @@ impl Client {
             false => format!(".{}", item.container),
         };
         format!(
-            "{}/Videos/{id}/stream{extension}?static=true&mediaSourceId={}&api_key={}",
+            "{}/Videos/{id}/stream{extension}?static=true&mediaSourceId={}&ApiKey={}",
             self.server, item.media_source_id, self.token
         )
     }
@@ -1573,7 +1575,7 @@ fn socket_url(server: &str, token: &str, device_id: &str) -> String {
             None => format!("ws://{server}"),
         },
     };
-    format!("{base}/socket?api_key={token}&deviceId={device_id}")
+    format!("{base}/socket?ApiKey={token}&deviceId={device_id}")
 }
 
 /// One connection, held until it closes or is told to stop.
@@ -1608,7 +1610,18 @@ fn hold(url: &str, alive: &std::sync::atomic::AtomicBool) -> Result<(), Error> {
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(1)));
     }
 
+    // Jellyfin 12 disposes a socket that has sent no `KeepAlive` for 60s; the
+    // connection is not closed, so without these casts stop arriving silently.
+    let mut kept_alive = std::time::Instant::now();
     while alive.load(std::sync::atomic::Ordering::Relaxed) {
+        if kept_alive.elapsed() >= std::time::Duration::from_secs(20) {
+            kept_alive = std::time::Instant::now();
+            if let Err(e) = socket.send(tungstenite::Message::Text(
+                r#"{"MessageType":"KeepAlive"}"#.into(),
+            )) {
+                return Err(Error::Failed(e.to_string()));
+            }
+        }
         match socket.read() {
             Ok(tungstenite::Message::Text(text)) => {
                 if let Some(command) = interpret(&text) {
