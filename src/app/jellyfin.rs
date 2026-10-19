@@ -510,6 +510,9 @@ impl App {
         let Some(client) = self.jellyfin.borrow().clone() else {
             return;
         };
+        // Before `jellyfin_item` is replaced, so the stopped report is filed
+        // against the video that was playing rather than the one cast.
+        self.stop_playback();
         let source = Source::parse(&client.stream_url(&item));
         // Set before the source is opened, because everything that reads a
         // title or a resume position during opening looks here for it. Kodi's

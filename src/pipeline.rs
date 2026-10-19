@@ -708,6 +708,9 @@ fn build_video_branch(
         .build()
         .map_err(|_| "Missing GStreamer element \"subtitleoverlay\". Check the install.")?;
     overlay.set_property("font-desc", font);
+    if let Some(pad) = overlay.static_pad("subtitle_sink") {
+        strip_overrides_from_text(&pad);
+    }
     // Converted again afterwards: the overlay may hand on a different format
     // from the one it was given.
     let after = make("videoconvert")?;
@@ -811,6 +814,63 @@ fn attach_external_audio(
         });
     }
     Ok(())
+}
+
+/// Removes ASS override blocks such as `{\an8}` from plain-text subtitles.
+///
+/// SRT files made from ASS keep them in the text, and neither the SRT parser
+/// nor the text overlay understands them, so they are drawn as written. Only
+/// `text/x-raw` is touched: ASS proper reaches the renderer as
+/// `application/x-ass`, which reads the same blocks as positioning. One probe
+/// on the overlay's input covers embedded tracks and external files alike.
+/// shortcut: the position is dropped, so top-placed lines draw at the bottom;
+/// honor it if that proves to overlap on-screen text.
+fn strip_overrides_from_text(pad: &gst::Pad) {
+    pad.add_probe(gst::PadProbeType::BUFFER, |pad, info| {
+        let is_text = pad
+            .current_caps()
+            .and_then(|caps| caps.structure(0).map(|s| s.name() == "text/x-raw"))
+            .unwrap_or(false);
+        if !is_text {
+            return gst::PadProbeReturn::Ok;
+        }
+        let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_ref() else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let Ok(map) = buffer.map_readable() else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let Ok(text) = std::str::from_utf8(map.as_slice()) else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let stripped = without_override_blocks(text);
+        if stripped.len() == text.len() {
+            return gst::PadProbeReturn::Ok;
+        }
+        let mut replacement = gst::Buffer::from_slice(stripped.into_bytes());
+        {
+            let target = replacement.get_mut().expect("a new buffer is writable");
+            target.set_pts(buffer.pts());
+            target.set_duration(buffer.duration());
+        }
+        drop(map);
+        info.data = Some(gst::PadProbeData::Buffer(replacement));
+        gst::PadProbeReturn::Ok
+    });
+}
+
+fn without_override_blocks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{\\") {
+        let Some(end) = rest[start..].find('}') else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 pub fn attach_external_subtitle(
@@ -1863,6 +1923,62 @@ mod tests {
             routing.carrying.insert((*pad).into(), playing.clone());
         }
         routing
+    }
+
+    #[test]
+    fn override_blocks_are_removed_and_the_text_kept() {
+        assert_eq!(
+            without_override_blocks("{\\an8}Ты больше\nникогда"),
+            "Ты больше\nникогда"
+        );
+        assert_eq!(without_override_blocks("a {\\i1}b{\\i0} c"), "a b c");
+        assert_eq!(
+            without_override_blocks("plain {braces} and /01"),
+            "plain {braces} and /01"
+        );
+        assert_eq!(
+            without_override_blocks("unclosed {\\an8"),
+            "unclosed {\\an8"
+        );
+    }
+
+    #[test]
+    fn text_subtitles_lose_their_override_blocks_in_the_pipeline() {
+        gst::init().expect("GStreamer initialises");
+        let pipeline =
+            gst::parse::launch("appsrc name=src caps=text/x-raw,format=utf8 ! fakesink name=sink")
+                .expect("a test pipeline");
+        let pipeline = pipeline.downcast::<gst::Pipeline>().expect("a pipeline");
+        let pad = pipeline
+            .by_name("sink")
+            .and_then(|sink| sink.static_pad("sink"))
+            .expect("a sink pad");
+        strip_overrides_from_text(&pad);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_ref() {
+                let text = buffer.map_readable().map(|m| m.as_slice().to_vec());
+                let _ = sender.send((text.unwrap_or_default(), buffer.pts()));
+            }
+            gst::PadProbeReturn::Ok
+        });
+        pipeline.set_state(gst::State::Playing).expect("playing");
+        let mut buffer = gst::Buffer::from_slice(b"{\\an8}Hello".to_vec());
+        buffer
+            .get_mut()
+            .unwrap()
+            .set_pts(gst::ClockTime::from_seconds(3));
+        let src = pipeline
+            .by_name("src")
+            .and_downcast::<gstreamer_app::AppSrc>()
+            .expect("an appsrc");
+        src.push_buffer(buffer).expect("pushed");
+        let (text, pts) = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the buffer arrived");
+        pipeline.set_state(gst::State::Null).expect("stopped");
+        assert_eq!(text, b"Hello");
+        assert_eq!(pts, Some(gst::ClockTime::from_seconds(3)));
     }
 
     #[test]

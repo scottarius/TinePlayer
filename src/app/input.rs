@@ -246,6 +246,12 @@ impl App {
     /// than a second press does.
     pub(super) fn back_out(self: &Rc<Self>) {
         use crate::controls::Row;
+        // A selector open over a page is the outermost thing; `go_back` knows
+        // nothing of it and would leave the page underneath.
+        if let Some(popover) = self.open_popover() {
+            popover.popdown();
+            return;
+        }
         // The key list first, wherever it is: it is laid over everything else
         // and has to be got rid of before "back" can mean anything else.
         let controls = self.controls.borrow().clone();
