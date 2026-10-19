@@ -448,6 +448,21 @@ impl App {
         self.window.add_controller(capture);
     }
 
+    /// The selector open over the page, found by looking up from whatever has
+    /// the focus: there is no register of the open one.
+    pub(super) fn open_popover(&self) -> Option<gtk::Popover> {
+        // Spelled out because `focus` is on two traits the window implements
+        // and neither is the obvious one.
+        let mut widget = gtk::prelude::GtkWindowExt::focus(&self.window);
+        while let Some(current) = widget {
+            if let Ok(popover) = current.clone().downcast::<gtk::Popover>() {
+                return Some(popover);
+            }
+            widget = current.parent();
+        }
+        None
+    }
+
     /// Play or resume from the media page, for the two shortcuts that stand
     /// in for its Play button: `P` and the pad's Start.
     ///
@@ -470,14 +485,8 @@ impl App {
         if *self.screen.borrow() != Screen::Menu || self.playback.borrow().is_some() {
             return false;
         }
-        // Spelled out because `focus` is on two traits the window implements
-        // and neither is the obvious one.
-        let mut widget = gtk::prelude::GtkWindowExt::focus(&self.window);
-        while let Some(current) = widget {
-            if current.is::<gtk::Popover>() {
-                return false;
-            }
-            widget = current.parent();
+        if self.open_popover().is_some() {
+            return false;
         }
         // The same readiness the media key asks about, through the same path:
         // there is one answer to "can this play now" and one place that gives
